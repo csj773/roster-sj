@@ -1,31 +1,11 @@
 import puppeteer from "puppeteer";
 import fs from "fs";
 import path from "path";
-<<<<<<< HEAD
-import { GoogleSpreadsheet } from "google-spreadsheet";
-
-// JSON → CSV 변환 함수
-function jsonToCsv(items, headers) {
-  const csvRows = [];
-  csvRows.push(headers.join(","));
-  for (const row of items) {
-    const values = headers.map(h => `"${String(row[h] ?? "").replace(/"/g, '""')}"`);
-    csvRows.push(values.join(","));
-  }
-  return csvRows.join("\n");
-}
-=======
->>>>>>> 8e01d04 (Create npm-publish.yml)
 
 (async () => {
   const browser = await puppeteer.launch({ headless: false, slowMo: 50 });
   const page = await browser.newPage();
 
-<<<<<<< HEAD
-  await page.goto("https://pdc-web.premia.kr/CrewConnex/default.aspx", { waitUntil: "networkidle0" });
-  console.log("👉 로그인 후 Roster 메뉴 클릭하세요.");
-  await new Promise(r => setTimeout(r, 30000));
-=======
   // 로그인 페이지 접속
   await page.goto("https://pdc-web.premia.kr/CrewConnex/default.aspx", {
     waitUntil: "networkidle0",
@@ -33,7 +13,6 @@ function jsonToCsv(items, headers) {
 
   console.log("👉 브라우저가 열렸습니다. 아이디/비밀번호 입력 후 Roster 메뉴를 클릭하세요.");
   await new Promise(resolve => setTimeout(resolve, 30000)); // 로그인 대기
->>>>>>> 8e01d04 (Create npm-publish.yml)
 
   // ------------------- Roster 메뉴 클릭 -------------------
   const rosterLink = await page.evaluateHandle(() => {
@@ -100,31 +79,6 @@ function jsonToCsv(items, headers) {
     row[22] || ""    // Crew
   ])];
 
-<<<<<<< HEAD
-  // --- public 폴더 생성 ---
-  const publicDir = path.join(process.cwd(), "public");
-  if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir);
-
-  // --- JSON 저장 ---
-  fs.writeFileSync(path.join(publicDir, "roster.json"), JSON.stringify({ items: rosterData }, null, 2), "utf-8");
-  console.log("✅ roster.json 저장 완료");
-
-  // --- CSV 저장 ---
-  fs.writeFileSync(path.join(publicDir, "roster.csv"), jsonToCsv(rosterData, headers), "utf-8");
-  console.log("✅ roster.csv 저장 완료");
-
-  // --- Google Spreadsheet 저장 ---
-  const doc = new GoogleSpreadsheet(process.env.GOOGLE_SHEET_ID);
-  await doc.useServiceAccountAuth({
-    client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-    private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n"),
-  });
-  await doc.loadInfo();
-  const sheet = doc.sheetsByIndex[0];
-  await sheet.addRows(rosterData);
-  console.log("✅ Google Sheets 저장 완료");
-
-=======
   // ------------------- 저장 경로 -------------------
   const publicDir = path.join(process.cwd(), "public");
   if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir);
@@ -142,6 +96,5 @@ function jsonToCsv(items, headers) {
   fs.writeFileSync(csvFilePath, csvContent, "utf-8");
   console.log("✅ roster.csv 저장 완료:", csvFilePath);
 
->>>>>>> 8e01d04 (Create npm-publish.yml)
   await browser.close();
 })();
