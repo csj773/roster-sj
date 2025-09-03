@@ -41,7 +41,7 @@ import path from "path";
     );
   });
 
-// 헤더 정의 (요청 순서)
+  // 헤더 정의
   const headers = [
     "Date",
     "DC",
@@ -63,30 +63,53 @@ import path from "path";
   // AcReg 패턴 (예: HL1234, N123AB)
   const acRegPattern = /^[A-Z]{1,2}\d{1,4}[A-Z]{0,2}$/i;
 
-  // JSON 변환 (헤더 순서대로, 누락된 값은 "")
-  const values = [headers, ...rosterRaw.slice(1).map(row => [
-    row[0]  || "",   // Date
-    row[1]  || "",   // DC
-    row[3]  || "",   // C/I(L)
-    row[4]  || "",   // C/O(L)
-    row[5]  || "",   // Activity
-    row[6]  || "",   // F
-    row[7]  || "",   // From
-    row[8]  || "",   // STD(L)
-    row[9]  || "",   // STD(Z)
-    row[10] || "",   // To
-    row[11] || "",   // STA(L)
-    row[12] || "",   // STA(Z)
-    row[13] || "",   // BLH
-    row[14] || "",   // AcReg
-    row[22] || ""    // Crew
-  ])];
+  // JSON 변환
+  let values = rosterRaw.slice(1).map(row => {
+    // row에서 AcReg 탐색
+    let acReg = "";
+    for (const cell of row) {
+      if (acRegPattern.test(cell)) {
+        acReg = cell;
+        break;
+      }
+    }
+
+    return [
+      row[0]  || "",   // Date
+      row[1]  || "",   // DC
+      row[3]  || "",   // C/I(L)
+      row[4]  || "",   // C/O(L)
+      row[5]  || "",   // Activity
+      row[6]  || "",   // F
+      row[7]  || "",   // From
+      row[8]  || "",   // STD(L)
+      row[9]  || "",   // STD(Z)
+      row[10] || "",   // To
+      row[11] || "",   // STA(L)
+      row[12] || "",   // STA(Z)
+      row[13] || "",   // BLH
+      row[18] || "",   // AcReg 
+      row[22] || ""    // Crew
+    ];
+  });
+
+  // ------------------- 중복 제거 -------------------
+  const seen = new Set();
+  values = values.filter(row => {
+    const key = row.join("||");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  // 헤더 추가
+  values.unshift(headers);
 
   // ------------------- 저장 경로 -------------------
   const publicDir = path.join(process.cwd(), "public");
   if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir);
 
-  // JSON 저장
+  // 기존 JSON/CSV 삭제
   const jsonFilePath = path.join(publicDir, "roster.json");
   if (fs.existsSync(jsonFilePath)) fs.unlinkSync(jsonFilePath);
 
@@ -97,13 +120,12 @@ import path from "path";
   fs.writeFileSync(jsonFilePath, JSON.stringify({ values }, null, 2), "utf-8");
   console.log("✅ roster.json 저장 완료 (중복 제거 후 작성)");
 
-  // CSV 저장 (헤더 순서 그대로)
-  const csvFilePath = path.join(publicDir, "roster.csv");
+  // ------------------- CSV 저장 -------------------
   const csvContent = values
     .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
     .join("\n");
   fs.writeFileSync(csvFilePath, csvContent, "utf-8");
-  console.log("✅ roster.csv 저장 완료:", csvFilePath);
+  console.log("✅ roster.csv 저장 완료 (중복 제거 후 작성)");
 
   await browser.close();
 })();
