@@ -2,9 +2,12 @@
   "name": "roster-sj",
   "version": "1.0.0",
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
   "description": "",
 >>>>>>> a5c9210 (Add Node dependencies)
+=======
+>>>>>>> 684af6f (Add Node dependencies)
   "main": "roster.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -15,9 +18,14 @@
   "dependencies": {
     "puppeteer": "^24.18.0"
 <<<<<<< HEAD
+<<<<<<< HEAD
   },
   "description": ""
 =======
   }
 >>>>>>> a5c9210 (Add Node dependencies)
+=======
+  },
+  "description": ""
+>>>>>>> 684af6f (Add Node dependencies)
 }
