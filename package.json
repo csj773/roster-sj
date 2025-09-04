@@ -1,7 +1,8 @@
 {
   "name": "roster-sj",
   "version": "1.0.0",
-<<<<<<< HEAD
+  "description": "Air Premia Roster crawler with Puppeteer",
+  "main": "roster.js",
   "type": "module",
   "scripts": {
     "start": "node roster.js"
@@ -10,19 +11,5 @@
     "dotenv": "^16.6.1",
     "puppeteer": "^22.6.5"
   }
-=======
-  "description": "Air Premia Roster crawler with Puppeteer",
-  "main": "roster.js",
-  "type": "module",
-  "scripts": {
-    "start": "node roster.js",
-    "dev": "node --watch roster.js"
-  },
-  "dependencies": {
-    "puppeteer": "^23.0.0"
-  },
-  "author": "SJ",
-  "license": "MIT"
 }
 
->>>>>>> 4b14122 (Add package-lock.json)
