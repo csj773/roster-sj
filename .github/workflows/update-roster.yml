@@ -43,7 +43,7 @@ jobs:
           git add roster.json roster.csv
           git commit -m "Update Roster" || echo "No changes to commit"
           git push
-EOF
+
 
 
       # 4️⃣ roster.js 실행
