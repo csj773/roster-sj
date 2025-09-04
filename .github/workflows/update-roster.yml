@@ -2,13 +2,6 @@ name: Update Roster
 
 on:
   workflow_dispatch:
-    inputs:
-      username:
-        description: "PDC Username"
-        required: true
-      password:
-        description: "PDC Password"
-        required: true
   schedule:
     - cron: "0 0 * * *" # 매일 00:00 UTC 실행 (한국시간 오전 9시)
 
@@ -17,44 +10,27 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ 레포지토리 체크아웃
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2️⃣ Node.js 환경 설정
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      # 3️⃣ 의존성 설치
       - name: Install dependencies
         run: npm install
 
-      # 4️⃣ roster.js 실행
       - name: Run roster.js
+        env:
+          PDC_USERNAME: ${{ secrets.PDC_USERNAME }}
+          PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}
         run: node roster.js
 
-      # 5️⃣ 변경된 roster.json, roster.csv 커밋 및 푸시
       - name: Commit and Push roster.json & roster.csv
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add roster.json roster.csv
-          git commit -m "Update Roster" || echo "No changes to commit"
-          git push
-
-
-
-      # 4️⃣ roster.js 실행
-      - name: Run roster.js
-        run: node roster.js
-
-      # 5️⃣ 변경된 roster.json, roster.csv 커밋 및 푸시
-      - name: Commit and Push roster.json & roster.csv
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add roster.json roster.csv
+          git add public/roster.json public/roster.csv
           git commit -m "Update Roster" || echo "No changes to commit"
           git push
