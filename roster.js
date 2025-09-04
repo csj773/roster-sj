@@ -1,9 +1,11 @@
+
 import puppeteer from "puppeteer";
 import fs from "fs";
 import path from "path";
+import "dotenv/config";
 
 (async () => {
-  const browser = await puppeteer.launch({ headless: false, slowMo: 50 });
+  const browser = await puppeteer.launch({ headless: true, slowMo: 0 });
   const page = await browser.newPage();
 
   // 로그인 페이지 접속
@@ -11,8 +13,29 @@ import path from "path";
     waitUntil: "networkidle0",
   });
 
-  console.log("👉 브라우저가 열렸습니다. 아이디/비밀번호 입력 후 Roster 메뉴를 클릭하세요.");
-  await new Promise(resolve => setTimeout(resolve, 30000)); // 로그인 대기
+  console.log("👉 로그인 시도 중...");
+
+  // 환경변수에서 아이디/비밀번호 불러오기
+  const username = process.env.PDC_USERNAME;
+  const password = process.env.PDC_PASSWORD;
+
+  if (!username || !password) {
+    console.error("❌ PDC_USERNAME 또는 PDC_PASSWORD 환경변수가 설정되지 않았습니다.");
+    await browser.close();
+    process.exit(1);
+  }
+
+  // 아이디/비밀번호 입력
+  await page.type("#ctl00_Main_userId_edit", username, { delay: 50 });
+  await page.type("#ctl00_Main_password_edit", password, { delay: 50 });
+
+  // 로그인 버튼 클릭 (버튼 ID 확인 필요)
+  await Promise.all([
+    page.click("input[type=submit], button[type=submit]"), // 가장 흔한 로그인 버튼 선택자
+    page.waitForNavigation({ waitUntil: "networkidle0" }),
+  ]);
+
+  console.log("✅ 로그인 성공");
 
   // ------------------- Roster 메뉴 클릭 -------------------
   const rosterLink = await page.evaluateHandle(() => {
@@ -60,10 +83,8 @@ import path from "path";
     "Crew"
   ];
 
-  // 실제 사이트 테이블 헤더 (첫 row)
   const siteHeaders = rosterRaw[0];
 
-  // 헤더 매핑: { 원하는헤더 : 실제컬럼인덱스 }
   const headerMap = {};
   headers.forEach(h => {
     const idx = siteHeaders.findIndex(col => col.includes(h));
@@ -75,8 +96,8 @@ import path from "path";
   // ------------------- JSON 변환 -------------------
   let values = rosterRaw.slice(1).map(row => {
     return headers.map(h => {
-      if (h === "AcReg") return row[18] || "";  // ✅ 고정 인덱스 사용
-      if (h === "Crew") return row[22] || "";   // ✅ 고정 인덱스 사용
+      if (h === "AcReg") return row[18] || "";
+      if (h === "Crew") return row[22] || "";
       const idx = headerMap[h];
       return idx !== undefined ? (row[idx] || "") : "";
     });
@@ -91,30 +112,26 @@ import path from "path";
     return true;
   });
 
-  // 헤더 추가
   values.unshift(headers);
 
-  // ------------------- 저장 경로 -------------------
+  // ------------------- 저장 -------------------
   const publicDir = path.join(process.cwd(), "public");
   if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir);
 
-  // 기존 JSON/CSV 삭제
   const jsonFilePath = path.join(publicDir, "roster.json");
   if (fs.existsSync(jsonFilePath)) fs.unlinkSync(jsonFilePath);
 
   const csvFilePath = path.join(publicDir, "roster.csv");
   if (fs.existsSync(csvFilePath)) fs.unlinkSync(csvFilePath);
 
-  // ------------------- JSON 저장 -------------------
   fs.writeFileSync(jsonFilePath, JSON.stringify({ values }, null, 2), "utf-8");
-  console.log("✅ roster.json 저장 완료 (중복 제거 후 작성)");
+  console.log("✅ roster.json 저장 완료");
 
-  // ------------------- CSV 저장 -------------------
   const csvContent = values
     .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
     .join("\n");
   fs.writeFileSync(csvFilePath, csvContent, "utf-8");
-  console.log("✅ roster.csv 저장 완료 (중복 제거 후 작성)");
+  console.log("✅ roster.csv 저장 완료");
 
   await browser.close();
 })();
