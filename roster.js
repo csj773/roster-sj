@@ -41,7 +41,7 @@ import path from "path";
     );
   });
 
-// 헤더 정의 (요청 순서)
+  // 내가 원하는 최종 헤더 정의
   const headers = [
     "Date",
     "DC",
@@ -63,24 +63,36 @@ import path from "path";
   // 실제 사이트 테이블 헤더 (첫 row)
   const siteHeaders = rosterRaw[0];
 
-  // JSON 변환 (헤더 순서대로, 누락된 값은 "")
-  const values = [headers, ...rosterRaw.slice(1).map(row => [
-    row[0]  || "",   // Date
-    row[1]  || "",   // DC
-    row[3]  || "",   // C/I(L)
-    row[4]  || "",   // C/O(L)
-    row[5]  || "",   // Activity
-    row[6]  || "",   // F
-    row[7]  || "",   // From
-    row[8]  || "",   // STD(L)
-    row[9]  || "",   // STD(Z)
-    row[10] || "",   // To
-    row[11] || "",   // STA(L)
-    row[12] || "",   // STA(Z)
-    row[13] || "",   // BLH
-    row[14] || "",   // AcReg
-    row[22] || ""    // Crew
-  ])];
+  // 헤더 매핑: { 원하는헤더 : 실제컬럼인덱스 }
+  const headerMap = {};
+  headers.forEach(h => {
+    const idx = siteHeaders.findIndex(col => col.includes(h));
+    if (idx >= 0) headerMap[h] = idx;
+  });
+
+  console.log("✅ 헤더 매핑 결과:", headerMap);
+
+  // ------------------- JSON 변환 -------------------
+  let values = rosterRaw.slice(1).map(row => {
+    return headers.map(h => {
+      if (h === "AcReg") return row[18] || "";  // ✅ 고정 인덱스 사용
+      if (h === "Crew") return row[22] || "";   // ✅ 고정 인덱스 사용
+      const idx = headerMap[h];
+      return idx !== undefined ? (row[idx] || "") : "";
+    });
+  });
+
+  // ------------------- 중복 제거 -------------------
+  const seen = new Set();
+  values = values.filter(row => {
+    const key = row.join("||");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  // 헤더 추가
+  values.unshift(headers);
 
   // ------------------- 저장 경로 -------------------
   const publicDir = path.join(process.cwd(), "public");
