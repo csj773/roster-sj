@@ -2,7 +2,7 @@ name: Update Roster
 
 on:
   schedule:
-    - cron: "*/10 * * * *"   # 매 10분마다 실행
+    - cron: "0 * * * *"   # 매 hour 마다 실행
   workflow_dispatch:          # 수동 실행도 가능
 permissions:
   contents: write   # 👉 반드시 추가
