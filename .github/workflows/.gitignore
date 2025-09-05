@@ -68,3 +68,5 @@ coverage/
 
 # Typescript build
 *.tsbuildinfo
+
+serviceAccountKey.json
