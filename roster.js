@@ -5,6 +5,11 @@ import "dotenv/config";
 import admin from "firebase-admin";
 
 // ------------------- Firebase 초기화 -------------------
+if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
+  console.error("❌ FIREBASE_SERVICE_ACCOUNT 환경변수가 설정되지 않았습니다.");
+  process.exit(1);
+}
+
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
 if (!admin.apps.length) {
