@@ -2,21 +2,39 @@ import puppeteer from "puppeteer";
 import fs from "fs";
 import path from "path";
 import "dotenv/config";
+import admin from "firebase-admin";
+
+// ------------------- Firebase 초기화 -------------------
+const serviceAccountPath = path.join(process.cwd(), "serviceAccountKey.json");
+
+if (!fs.existsSync(serviceAccountPath)) {
+  console.error("❌ serviceAccountKey.json 파일이 존재하지 않습니다:", serviceAccountPath);
+  process.exit(1);
+}
+
+const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, "utf-8"));
+
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+  });
+}
+const db = admin.firestore();
 
 (async () => {
   const browser = await puppeteer.launch({
-    headless: "new", // 최신 Puppeteer 권장 방식
-    args: ["--no-sandbox", "--disable-setuid-sandbox"]
+    headless: "new",
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
   });
 
   const page = await browser.newPage();
 
   console.log("👉 로그인 페이지 접속 중...");
   await page.goto("https://pdc-web.premia.kr/CrewConnex/default.aspx", {
-    waitUntil: "networkidle0"
+    waitUntil: "networkidle0",
   });
 
-  // ------------------- 환경변수 확인 -------------------
+  // ------------------- 로그인 -------------------
   const username = process.env.PDC_USERNAME;
   const password = process.env.PDC_PASSWORD;
 
@@ -27,36 +45,26 @@ import "dotenv/config";
   }
 
   console.log("👉 로그인 시도 중...");
-
-  // ------------------- 로그인 -------------------
   await page.type("#ctl00_Main_userId_edit", username, { delay: 50 });
   await page.type("#ctl00_Main_password_edit", password, { delay: 50 });
 
-  try {
-    await Promise.all([
-      page.click("#ctl00_Main_login_btn"), // 기본 로그인 버튼 ID
-      page.waitForNavigation({ waitUntil: "networkidle0" })
-    ]);
-  } catch {
-    // fallback (버튼 ID가 다를 경우 대비)
-    await Promise.all([
-      page.click("input[type=submit], button[type=submit]"),
-      page.waitForNavigation({ waitUntil: "networkidle0" })
-    ]);
-  }
+  await Promise.all([
+    page.click("#ctl00_Main_login_btn"),
+    page.waitForNavigation({ waitUntil: "networkidle0" }),
+  ]);
 
   console.log("✅ 로그인 성공");
 
   // ------------------- Roster 메뉴 이동 -------------------
   const rosterLink = await page.evaluateHandle(() => {
     const links = Array.from(document.querySelectorAll("a"));
-    return links.find(a => a.textContent.includes("Roster")) || null;
+    return links.find((a) => a.textContent.includes("Roster")) || null;
   });
 
   if (rosterLink) {
     await Promise.all([
       rosterLink.click(),
-      page.waitForNavigation({ waitUntil: "networkidle0" })
+      page.waitForNavigation({ waitUntil: "networkidle0" }),
     ]);
     console.log("✅ Roster 메뉴 클릭 완료");
   } else {
@@ -67,10 +75,9 @@ import "dotenv/config";
 
   // ------------------- Roster 테이블 추출 -------------------
   await page.waitForSelector("table tr");
-
   const rosterRaw = await page.evaluate(() => {
-    return Array.from(document.querySelectorAll("table tr")).map(tr =>
-      Array.from(tr.querySelectorAll("td")).map(td => td.innerText.trim())
+    return Array.from(document.querySelectorAll("table tr")).map((tr) =>
+      Array.from(tr.querySelectorAll("td")).map((td) => td.innerText.trim())
     );
   });
 
@@ -83,31 +90,28 @@ import "dotenv/config";
   // ------------------- 헤더 매핑 -------------------
   const headers = [
     "Date", "DC", "C/I(L)", "C/O(L)", "Activity", "F", "From",
-    "STD(L)", "STD(Z)", "To", "STA(L)", "STA(Z)", "BLH", "AcReg", "Crew"
+    "STD(L)", "STD(Z)", "To", "STA(L)", "STA(Z)", "BLH", "AcReg", "Crew",
   ];
 
   const siteHeaders = rosterRaw[0];
   const headerMap = {};
-  headers.forEach(h => {
-    const idx = siteHeaders.findIndex(col => col.includes(h));
+  headers.forEach((h) => {
+    const idx = siteHeaders.findIndex((col) => col.includes(h));
     if (idx >= 0) headerMap[h] = idx;
   });
 
-  console.log("✅ 헤더 매핑 결과:", headerMap);
-
-  // ------------------- JSON 변환 -------------------
-  let values = rosterRaw.slice(1).map(row => {
-    return headers.map(h => {
+  let values = rosterRaw.slice(1).map((row) => {
+    return headers.map((h) => {
       if (h === "AcReg") return row[18] || "";
       if (h === "Crew") return row[22] || "";
       const idx = headerMap[h];
-      return idx !== undefined ? (row[idx] || "") : "";
+      return idx !== undefined ? row[idx] || "" : "";
     });
   });
 
   // ------------------- 중복 제거 -------------------
   const seen = new Set();
-  values = values.filter(row => {
+  values = values.filter((row) => {
     const key = row.join("||");
     if (seen.has(key)) return false;
     seen.add(key);
@@ -116,26 +120,73 @@ import "dotenv/config";
 
   values.unshift(headers);
 
-  // ------------------- 저장 -------------------
+  // ------------------- 파일 저장 -------------------
   const publicDir = path.join(process.cwd(), "public");
   if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir);
 
   const jsonFilePath = path.join(publicDir, "roster.json");
-  const csvFilePath = path.join(publicDir, "roster.csv");
-
-  [jsonFilePath, csvFilePath].forEach(file => {
-    if (fs.existsSync(file)) fs.unlinkSync(file);
-  });
-
   fs.writeFileSync(jsonFilePath, JSON.stringify({ values }, null, 2), "utf-8");
   console.log("✅ roster.json 저장 완료");
 
-  const csvContent = values
-    .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
-    .join("\n");
+  // ------------------- CSV 저장 -------------------
+  const csvFilePath = path.join(publicDir, "roster.csv");
+
+  // CSV 문자열 생성
+  const csvContent = values.map((row) =>
+    row.map((col) => `"${(col || "").replace(/"/g, '""')}"`).join(",")
+  ).join("\n");
 
   fs.writeFileSync(csvFilePath, csvContent, "utf-8");
   console.log("✅ roster.csv 저장 완료");
 
   await browser.close();
+
+  // ------------------- Firestore 업로드 -------------------
+  console.log("🚀 Firestore 업로드 시작");
+
+  const headerMapFirestore = {
+    "C/I(L)": "CIL",
+    "C/O(L)": "COL",
+    "STD(L)": "STDL",
+    "STD(Z)": "STDZ",
+    "STA(L)": "STAL",
+    "STA(Z)": "STAZ",
+  };
+
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const docData = {};
+
+    headers.forEach((h, idx) => {
+      const key = headerMapFirestore[h] || h;
+      docData[key] = row[idx] || "";
+    });
+
+    try {
+      const querySnapshot = await db
+        .collection("roster")
+        .where("Date", "==", docData["Date"])
+        .where("DC", "==", docData["DC"])
+        .where("F", "==", docData["F"])
+        .where("From", "==", docData["From"])
+        .where("To", "==", docData["To"])
+        .where("AcReg", "==", docData["AcReg"])
+        .where("Crew", "==", docData["Crew"])
+        .get();
+
+      if (!querySnapshot.empty) {
+        for (const doc of querySnapshot.docs) {
+          await db.collection("roster").doc(doc.id).set(docData, { merge: true });
+        }
+        console.log(`🔄 ${i}행 기존 문서 업데이트 완료`);
+      } else {
+        await db.collection("roster").add(docData);
+        console.log(`✅ ${i}행 신규 업로드 완료`);
+      }
+    } catch (err) {
+      console.error(`❌ ${i}행 업로드 실패:`, err.message);
+    }
+  }
+
+  console.log("🎉 Firestore 업로드 완료!");
 })();
