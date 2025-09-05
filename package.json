@@ -5,11 +5,11 @@
   "main": "roster.js",
   "type": "module",
   "scripts": {
-    "start": "node roster.js"
+    "start": "node roster.js",
+    "firestore": "node writeToFirestore.js"
   },
   "dependencies": {
     "dotenv": "^16.6.1",
-
     "puppeteer": "^22.15.0"
   },
   "keywords": [],
