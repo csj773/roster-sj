@@ -1,21 +1,22 @@
-
 import puppeteer from "puppeteer";
 import fs from "fs";
 import path from "path";
 import "dotenv/config";
 
 (async () => {
-  const browser = await puppeteer.launch({ headless: true, slowMo: 0 });
-  const page = await browser.newPage();
-
-  // 로그인 페이지 접속
-  await page.goto("https://pdc-web.premia.kr/CrewConnex/default.aspx", {
-    waitUntil: "networkidle0",
+  const browser = await puppeteer.launch({
+    headless: "new", // 최신 Puppeteer 권장 방식
+    args: ["--no-sandbox", "--disable-setuid-sandbox"]
   });
 
-  console.log("👉 로그인 시도 중...");
+  const page = await browser.newPage();
 
-  // 환경변수에서 아이디/비밀번호 불러오기
+  console.log("👉 로그인 페이지 접속 중...");
+  await page.goto("https://pdc-web.premia.kr/CrewConnex/default.aspx", {
+    waitUntil: "networkidle0"
+  });
+
+  // ------------------- 환경변수 확인 -------------------
   const username = process.env.PDC_USERNAME;
   const password = process.env.PDC_PASSWORD;
 
@@ -25,19 +26,28 @@ import "dotenv/config";
     process.exit(1);
   }
 
-  // 아이디/비밀번호 입력
+  console.log("👉 로그인 시도 중...");
+
+  // ------------------- 로그인 -------------------
   await page.type("#ctl00_Main_userId_edit", username, { delay: 50 });
   await page.type("#ctl00_Main_password_edit", password, { delay: 50 });
 
-  // 로그인 버튼 클릭 (버튼 ID 확인 필요)
-  await Promise.all([
-    page.click("input[type=submit], button[type=submit]"), // 가장 흔한 로그인 버튼 선택자
-    page.waitForNavigation({ waitUntil: "networkidle0" }),
-  ]);
+  try {
+    await Promise.all([
+      page.click("#ctl00_Main_login_btn"), // 기본 로그인 버튼 ID
+      page.waitForNavigation({ waitUntil: "networkidle0" })
+    ]);
+  } catch {
+    // fallback (버튼 ID가 다를 경우 대비)
+    await Promise.all([
+      page.click("input[type=submit], button[type=submit]"),
+      page.waitForNavigation({ waitUntil: "networkidle0" })
+    ]);
+  }
 
   console.log("✅ 로그인 성공");
 
-  // ------------------- Roster 메뉴 클릭 -------------------
+  // ------------------- Roster 메뉴 이동 -------------------
   const rosterLink = await page.evaluateHandle(() => {
     const links = Array.from(document.querySelectorAll("a"));
     return links.find(a => a.textContent.includes("Roster")) || null;
@@ -46,11 +56,11 @@ import "dotenv/config";
   if (rosterLink) {
     await Promise.all([
       rosterLink.click(),
-      page.waitForNavigation({ waitUntil: "networkidle0" }),
+      page.waitForNavigation({ waitUntil: "networkidle0" })
     ]);
     console.log("✅ Roster 메뉴 클릭 완료");
   } else {
-    console.log("❌ Roster 링크를 찾지 못했습니다.");
+    console.error("❌ Roster 링크를 찾지 못했습니다.");
     await browser.close();
     return;
   }
@@ -64,27 +74,19 @@ import "dotenv/config";
     );
   });
 
-  // 내가 원하는 최종 헤더 정의
+  if (rosterRaw.length < 2) {
+    console.error("❌ Roster 데이터가 비어있습니다.");
+    await browser.close();
+    return;
+  }
+
+  // ------------------- 헤더 매핑 -------------------
   const headers = [
-    "Date",
-    "DC",
-    "C/I(L)",
-    "C/O(L)",
-    "Activity",
-    "F",
-    "From",
-    "STD(L)",
-    "STD(Z)",
-    "To",
-    "STA(L)",
-    "STA(Z)",
-    "BLH",
-    "AcReg",
-    "Crew"
+    "Date", "DC", "C/I(L)", "C/O(L)", "Activity", "F", "From",
+    "STD(L)", "STD(Z)", "To", "STA(L)", "STA(Z)", "BLH", "AcReg", "Crew"
   ];
 
   const siteHeaders = rosterRaw[0];
-
   const headerMap = {};
   headers.forEach(h => {
     const idx = siteHeaders.findIndex(col => col.includes(h));
@@ -94,14 +96,12 @@ import "dotenv/config";
   console.log("✅ 헤더 매핑 결과:", headerMap);
 
   // ------------------- JSON 변환 -------------------
-  let values = rosterRaw.slice(1).map(row => {
-    return headers.map(h => {
-      if (h === "AcReg") return row[18] || "";
-      if (h === "Crew") return row[22] || "";
+  let values = rosterRaw.slice(1).map(row =>
+    headers.map(h => {
       const idx = headerMap[h];
       return idx !== undefined ? (row[idx] || "") : "";
-    });
-  });
+    })
+  );
 
   // ------------------- 중복 제거 -------------------
   const seen = new Set();
@@ -119,10 +119,11 @@ import "dotenv/config";
   if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir);
 
   const jsonFilePath = path.join(publicDir, "roster.json");
-  if (fs.existsSync(jsonFilePath)) fs.unlinkSync(jsonFilePath);
-
   const csvFilePath = path.join(publicDir, "roster.csv");
-  if (fs.existsSync(csvFilePath)) fs.unlinkSync(csvFilePath);
+
+  [jsonFilePath, csvFilePath].forEach(file => {
+    if (fs.existsSync(file)) fs.unlinkSync(file);
+  });
 
   fs.writeFileSync(jsonFilePath, JSON.stringify({ values }, null, 2), "utf-8");
   console.log("✅ roster.json 저장 완료");
@@ -130,6 +131,7 @@ import "dotenv/config";
   const csvContent = values
     .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
     .join("\n");
+
   fs.writeFileSync(csvFilePath, csvContent, "utf-8");
   console.log("✅ roster.csv 저장 완료");
 
