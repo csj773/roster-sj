@@ -96,12 +96,14 @@ import "dotenv/config";
   console.log("✅ 헤더 매핑 결과:", headerMap);
 
   // ------------------- JSON 변환 -------------------
-  let values = rosterRaw.slice(1).map(row =>
-    headers.map(h => {
+  let values = rosterRaw.slice(1).map(row => {
+    return headers.map(h => {
+      if (h === "AcReg") return row[18] || "";
+      if (h === "Crew") return row[22] || "";
       const idx = headerMap[h];
       return idx !== undefined ? (row[idx] || "") : "";
-    })
-  );
+    });
+  });
 
   // ------------------- 중복 제거 -------------------
   const seen = new Set();
