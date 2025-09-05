@@ -2,9 +2,8 @@ name: Update Roster
 
 on:
   schedule:
-    - cron: "0 * * * *"   # 매 hour 마다 실행
+    - cron: "0 * * * *"   # 매 시간마다 실행
   workflow_dispatch:          # 수동 실행도 가능
-
 permissions:
   contents: write   # 👉 반드시 추가
 
@@ -24,19 +23,12 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      # ✅ Firebase service account 설정
-      - name: Set up Firebase service account
-        run: echo "${{ secrets.FIREBASE_SERVICE_ACCOUNT }}" > serviceAccountKey.json
-
-      # ✅ roster.js 실행
       - name: Run roster.js
         run: node roster.js
         env:
           PDC_USERNAME: ${{ secrets.PDC_USERNAME }}
           PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
-      # ✅ 변경된 JSON/CSV 커밋 & 푸시
       - name: Commit and Push roster.json & roster.csv
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
