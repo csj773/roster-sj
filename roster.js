@@ -1,8 +1,14 @@
-import puppeteer from "puppeteer";
+mport puppeteer from "puppeteer";
 import fs from "fs";
 import path from "path";
 import "dotenv/config";
 import admin from "firebase-admin";
+
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
 
 // ------------------- Firebase 초기화 -------------------
 const serviceAccountPath = path.join(process.cwd(), "serviceAccountKey.json");
