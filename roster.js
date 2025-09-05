@@ -4,31 +4,18 @@ import path from "path";
 import "dotenv/config";
 import admin from "firebase-admin";
 
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-});
-
 // ------------------- Firebase 초기화 -------------------
-const serviceAccountPath = path.join(process.cwd(), "serviceAccountKey.json");
-
-if (!fs.existsSync(serviceAccountPath)) {
-  console.error("❌ serviceAccountKey.json 파일이 존재하지 않습니다:", serviceAccountPath);
-  process.exit(1);
-}
-
-// 수정 후
-const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, "utf-8"));
-
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
 if (!admin.apps.length) {
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
   });
 }
+
 const db = admin.firestore();
 
+// ------------------- Puppeteer 시작 -------------------
 (async () => {
   const browser = await puppeteer.launch({
     headless: "new",
@@ -136,14 +123,10 @@ const db = admin.firestore();
   fs.writeFileSync(jsonFilePath, JSON.stringify({ values }, null, 2), "utf-8");
   console.log("✅ roster.json 저장 완료");
 
-  // ------------------- CSV 저장 -------------------
   const csvFilePath = path.join(publicDir, "roster.csv");
-
-  // CSV 문자열 생성
   const csvContent = values.map((row) =>
     row.map((col) => `"${(col || "").replace(/"/g, '""')}"`).join(",")
   ).join("\n");
-
   fs.writeFileSync(csvFilePath, csvContent, "utf-8");
   console.log("✅ roster.csv 저장 완료");
 
@@ -164,7 +147,6 @@ const db = admin.firestore();
   for (let i = 1; i < values.length; i++) {
     const row = values[i];
     const docData = {};
-
     headers.forEach((h, idx) => {
       const key = headerMapFirestore[h] || h;
       docData[key] = row[idx] || "";
