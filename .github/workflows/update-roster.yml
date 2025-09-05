@@ -4,7 +4,8 @@ on:
   schedule:
     - cron: "*/10 * * * *"   # 매 10분마다 실행
   workflow_dispatch:          # 수동 실행도 가능
-
+permissions:
+  contents: write   # 👉 반드시 추가
 jobs:
   build:
     runs-on: ubuntu-latest
