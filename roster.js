@@ -18,7 +18,9 @@ if (!fs.existsSync(serviceAccountPath)) {
   process.exit(1);
 }
 
+// 수정 후
 const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, "utf-8"));
+
 
 if (!admin.apps.length) {
   admin.initializeApp({
