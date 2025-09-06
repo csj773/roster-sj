@@ -3,9 +3,10 @@ name: Update Roster
 on:
   schedule:
     - cron: "0 * * * *"   # 매 시간마다 실행
-  workflow_dispatch:          # 수동 실행도 가능
+  workflow_dispatch:       # 수동 실행 가능
+
 permissions:
-  contents: write   # 👉 반드시 추가
+  contents: write   # commit & push 권한 필요
 
 jobs:
   build:
@@ -16,7 +17,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: "20"
 
@@ -24,11 +25,13 @@ jobs:
         run: npm install
 
       - name: Run roster.js
-        run: node roster.js
         env:
           PDC_USERNAME: ${{ secrets.PDC_USERNAME }}
           PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}     
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}  # 🔑 추가
+        run: node roster.js
+
       - name: Commit and Push roster.json & roster.csv
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
