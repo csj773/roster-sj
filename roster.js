@@ -175,7 +175,24 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
     }
   }
   console.log("🎉 Firestore 업로드 완료!");
+  
+// 🔹 Date 변환용 함수 (map에서 쓰기 전에 선언)
+  function convertDate(mmmdd) {
+    if (!mmmdd) return "N/A"; // 비어있을 경우 기본값
+    const months = {
+      Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",
+      Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12"
+    };
+    const parts = mmmdd.split(" "); // ["Sep", "07"]
+    if (parts.length !== 2) return "N/A";
 
+    const year = new Date().getFullYear();
+    const month = months[parts[0]];
+    const day = parts[1].padStart(2, "0");
+
+    if (!month) return "N/A";
+    return `${year}.${month}.${day}`;
+  }
 
 // 🔹 Google Sheets에 업로드할 values 복사 & 변환
   const sheetValues = values.map((row, idx) => {
