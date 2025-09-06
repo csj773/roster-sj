@@ -176,17 +176,21 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
   }
   console.log("🎉 Firestore 업로드 완료!");
 
-  // Google Sheets A3부터 덮어쓰기
-  console.log("🚀 Google Sheets A3부터 덮어쓰기 시작...");
-  const spreadsheetId = "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
-  const sheetName = "Roster1";
+
+// 🔹 Google Sheets에 업로드할 values 복사 & 변환
+  const sheetValues = values.map((row, idx) => {
+    if (idx === 0) return row; // 헤더는 그대로
+    const newRow = [...row];
+    newRow[0] = convertDate(row[0]); // Date 컬럼 변환 (A열)
+    return newRow;
+  });
 
   try {
     await sheetsApi.spreadsheets.values.update({
       spreadsheetId,
       range: `${sheetName}!A3`,
       valueInputOption: "RAW",
-      requestBody: { values },
+      requestBody: { values: sheetValues },
     });
     console.log("✅ Google Sheets A3부터 덮어쓰기 완료!");
   } catch (err) {
