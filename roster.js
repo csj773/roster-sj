@@ -177,25 +177,49 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
   console.log("🎉 Firestore 업로드 완료!");
   
   // 🔹 Date 변환용 함수 (MMM dd → YYYY.MM.DD, 그 외는 그대로 반환)
-function convertDate(mmmdd) {
-  if (!mmmdd) return mmmdd; // 비어있으면 그대로
 
+  // MMM dd 또는 (요일 약어) dd -> YYYY.MM.DD (그 외는 원래 값 반환)
+function convertDate(input) {
+  if (!input || typeof input !== "string") return input;
+
+  const s = input.trim();
+  const parts = s.split(/\s+/);
+  if (parts.length !== 2) return input; // 형식이 아니면 원래값 반환
+
+  const token = parts[0];
+  const dayStr = parts[1].replace(/^0+/, "") || "0";
+  if (!/^\d+$/.test(dayStr)) return input;
+  const day = parseInt(dayStr, 10);
+  if (day < 1 || day > 31) return input;
+
+  const now = new Date();
+  const year = now.getFullYear();
+
+  // month mapping (소문자 키)
   const months = {
-    Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",
-    Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12"
+    jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
+    jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12"
   };
 
-  const parts = mmmdd.split(" ");
-  if (parts.length !== 2) return mmmdd; // 형식이 다르면 그대로 반환
+  const tokenLower = token.toLowerCase();
 
-  const month = months[parts[0]];
-  const day = parts[1].padStart(2, "0");
+  // 1) MMM (월) 처리: "Sep 07"
+  if (months[tokenLower]) {
+    const month = months[tokenLower];
+    return `${year}.${month}.${String(day).padStart(2, "0")}`;
+  }
 
-  if (!month || isNaN(day)) return mmmdd; // 변환 불가하면 원래 값 유지
+  // 2) 요일 약어 처리: "Mon 01" 등 → 현재 월 사용
+  const weekdays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+  if (weekdays.includes(tokenLower)) {
+    const month = String(now.getMonth() + 1).padStart(2, "0"); // 현재 월
+    return `${year}.${month}.${String(day).padStart(2, "0")}`;
+  }
 
-  const year = new Date().getFullYear();
-  return `${year}.${month}.${day}`;
+  // 3) 그 외는 원래 값 반환
+  return input;
 }
+  
   // ------------------- Google Sheets 업로드 -------------------
   console.log("🚀 Google Sheets A3부터 덮어쓰기 시작...");
 
