@@ -3,9 +3,10 @@ name: Update Roster
 on:
   schedule:
     - cron: "0 * * * *"   # 매 시간마다 실행
-  workflow_dispatch:          # 수동 실행도 가능
+  workflow_dispatch:       # 수동 실행도 가능
+
 permissions:
-  contents: write   # 👉 반드시 추가
+  contents: write   # 👉 반드시 필요 (commit & push 권한)
 
 jobs:
   build:
@@ -13,22 +14,23 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4   # 최신 버전 사용 권장
 
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: "20"
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci   # CI 환경에서는 npm install 대신 npm ci 권장 (더 빠르고 안정적)
 
       - name: Run roster.js
-        run: node roster.js
         env:
           PDC_USERNAME: ${{ secrets.PDC_USERNAME }}
           PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}     
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}  # 🔥 Firebase 인증 JSON
+        run: node roster.js
+
       - name: Commit and Push roster.json & roster.csv
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
