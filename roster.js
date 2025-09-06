@@ -176,14 +176,14 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
   }
   console.log("🎉 Firestore 업로드 완료!");
   
-// 🔹 Date 변환용 함수 (map에서 쓰기 전에 선언)
+// 🔹 Date 변환용 함수 (Firestore 이후, Sheets 이전에 정의)
   function convertDate(mmmdd) {
-    if (!mmmdd) return "N/A"; // 비어있을 경우 기본값
+    if (!mmmdd) return "N/A"; // 비어있으면 기본값
     const months = {
       Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",
       Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12"
     };
-    const parts = mmmdd.split(" "); // ["Sep", "07"]
+    const parts = mmmdd.split(" ");
     if (parts.length !== 2) return "N/A";
 
     const year = new Date().getFullYear();
@@ -194,11 +194,17 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
     return `${year}.${month}.${day}`;
   }
 
-// 🔹 Google Sheets에 업로드할 values 복사 & 변환
+  // ------------------- Google Sheets 업로드 -------------------
+  console.log("🚀 Google Sheets A3부터 덮어쓰기 시작...");
+
+  // ✅ 여기서 반드시 재선언
+  const spreadsheetId = "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
+  const sheetName = "Roster1";
+
   const sheetValues = values.map((row, idx) => {
     if (idx === 0) return row; // 헤더는 그대로
     const newRow = [...row];
-    newRow[0] = convertDate(row[0]); // Date 컬럼 변환 (A열)
+    newRow[0] = convertDate(row[0]); // Date 변환
     return newRow;
   });
 
@@ -213,5 +219,4 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
   } catch (err) {
     console.error("❌ Google Sheets 업로드 실패:", err);
   }
-
 })();
