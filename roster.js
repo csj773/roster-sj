@@ -176,24 +176,26 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
   }
   console.log("🎉 Firestore 업로드 완료!");
   
-// 🔹 Date 변환용 함수 (Firestore 이후, Sheets 이전에 정의)
-  function convertDate(mmmdd) {
-    if (!mmmdd) return "N/A"; // 비어있으면 기본값
-    const months = {
-      Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",
-      Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12"
-    };
-    const parts = mmmdd.split(" ");
-    if (parts.length !== 2) return "N/A";
+  // 🔹 Date 변환용 함수 (MMM dd → YYYY.MM.DD, 그 외는 그대로 반환)
+function convertDate(mmmdd) {
+  if (!mmmdd) return mmmdd; // 비어있으면 그대로
 
-    const year = new Date().getFullYear();
-    const month = months[parts[0]];
-    const day = parts[1].padStart(2, "0");
+  const months = {
+    Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",
+    Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12"
+  };
 
-    if (!month) return "N/A";
-    return `${year}.${month}.${day}`;
-  }
+  const parts = mmmdd.split(" ");
+  if (parts.length !== 2) return mmmdd; // 형식이 다르면 그대로 반환
 
+  const month = months[parts[0]];
+  const day = parts[1].padStart(2, "0");
+
+  if (!month || isNaN(day)) return mmmdd; // 변환 불가하면 원래 값 유지
+
+  const year = new Date().getFullYear();
+  return `${year}.${month}.${day}`;
+}
   // ------------------- Google Sheets 업로드 -------------------
   console.log("🚀 Google Sheets A3부터 덮어쓰기 시작...");
 
