@@ -223,5 +223,83 @@ const db = admin.firestore();
   } catch (err) {
     console.error("❌ Google Sheet 업로드 실패:", err);
   }
+// ------------------- Google Sheets A3부터 A열 변환 후 B열 작성 -------------------
+if (!process.env.GOOGLE_SHEETS_CREDENTIALS) {
+  console.error("❌ GOOGLE_SHEETS_CREDENTIALS 환경변수가 없습니다.");
+  process.exit(1);
+}
+
+const sheetCredentials = JSON.parse(process.env.GOOGLE_SHEETS_CREDENTIALS);
+if (sheetCredentials.private_key) {
+  sheetCredentials.private_key = sheetCredentials.private_key.replace(/\\n/g, "\n");
+}
+
+const authSheets = new google.auth.GoogleAuth({
+  credentials: sheetCredentials,
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+});
+
+const sheetsApi = google.sheets({ version: "v4", auth: authSheets });
+
+const spreadsheetId = "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
+const sheetName = "Roster1";
+
+// 헬퍼: "MMM dd" → "YYYY.MM.DD"
+function parseDateString(dateStr, year) {
+  const months = {
+    Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6,
+    Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12
+  };
+
+  const parts = dateStr.split(" ");
+  if (parts.length !== 2) return null;
+
+  const mon = months[parts[0]];
+  const day = parseInt(parts[1], 10);
+  if (!mon || isNaN(day)) return null;
+
+  return `${year}.${String(mon).padStart(2, "0")}.${String(day).padStart(2, "0")}`;
+}
+
+try {
+  // 1️⃣ A3부터 끝까지 값 읽기
+  const res = await sheetsApi.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${sheetName}!A3:A`,
+  });
+
+  const rows = res.data.values || [];
+  if (!rows.length) {
+    console.log("No data found in column A.");
+  } else {
+    // 2️⃣ 연도 가져오기 (C2 셀)
+    const yearRes = await sheetsApi.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${sheetName}!C2`,
+    });
+    const year = parseInt(yearRes.data.values?.[0][0], 10);
+    if (!year) {
+      console.log("Invalid year in C2.");
+    } else {
+      // 3️⃣ 변환 후 B열 작성
+      const updatedValues = rows.map((r) => {
+        const original = r[0];
+        const formatted = parseDateString(original, year);
+        return [formatted];
+      });
+
+      await sheetsApi.spreadsheets.values.update({
+        spreadsheetId,
+        range: `${sheetName}!B3`,
+        valueInputOption: "RAW",
+        requestBody: { values: updatedValues },
+      });
+
+      console.log("✅ Google Sheet B열에 변환된 날짜 작성 완료!");
+    }
+  }
+} catch (err) {
+  console.error("❌ Google Sheet 날짜 변환 업로드 실패:", err);
+}
 
 })();
