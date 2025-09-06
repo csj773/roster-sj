@@ -12,15 +12,14 @@ if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
 }
 
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-if (serviceAccount.private_key) {
-  serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
-}
+if (serviceAccount.private_key) serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
 
 if (!admin.apps.length) {
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
   });
 }
+
 const db = admin.firestore();
 
 // ------------------- Google Sheets 초기화 -------------------
@@ -29,16 +28,14 @@ if (!process.env.GOOGLE_SHEETS_CREDENTIALS) {
   process.exit(1);
 }
 
-const sheetsCredentials = JSON.parse(process.env.GOOGLE_SHEETS_CREDENTIALS);
-if (sheetsCredentials.private_key) {
-  sheetsCredentials.private_key = sheetsCredentials.private_key.replace(/\\n/g, "\n");
-}
+const sheetCredentials = JSON.parse(process.env.GOOGLE_SHEETS_CREDENTIALS);
+if (sheetCredentials.private_key) sheetCredentials.private_key = sheetCredentials.private_key.replace(/\\n/g, "\n");
 
-const sheetsAuth = new google.auth.GoogleAuth({
-  credentials: sheetsCredentials,
+const authSheets = new google.auth.GoogleAuth({
+  credentials: sheetCredentials,
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
-const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
+const sheetsApi = google.sheets({ version: "v4", auth: authSheets });
 
 // ------------------- Puppeteer 시작 -------------------
 (async () => {
@@ -48,12 +45,10 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
   });
 
   const page = await browser.newPage();
-
   console.log("👉 로그인 페이지 접속 중...");
-  await page.goto("https://pdc-web.premia.kr/CrewConnex/default.aspx", {
-    waitUntil: "networkidle0",
-  });
+  await page.goto("https://pdc-web.premia.kr/CrewConnex/default.aspx", { waitUntil: "networkidle0" });
 
+  // 로그인
   const username = process.env.PDC_USERNAME;
   const password = process.env.PDC_PASSWORD;
   if (!username || !password) {
@@ -76,12 +71,8 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
     const links = Array.from(document.querySelectorAll("a"));
     return links.find(a => a.textContent.includes("Roster")) || null;
   });
-
   if (rosterLink) {
-    await Promise.all([
-      rosterLink.click(),
-      page.waitForNavigation({ waitUntil: "networkidle0" }),
-    ]);
+    await Promise.all([rosterLink.click(), page.waitForNavigation({ waitUntil: "networkidle0" })]);
     console.log("✅ Roster 메뉴 클릭 완료");
   } else {
     console.error("❌ Roster 링크를 찾지 못했습니다.");
@@ -96,27 +87,20 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
       Array.from(tr.querySelectorAll("td")).map(td => td.innerText.trim())
     )
   );
-
   if (rosterRaw.length < 2) {
     console.error("❌ Roster 데이터가 비어있습니다.");
     await browser.close();
     return;
   }
 
-  const headers = ["Date", "DC", "C/I(L)", "C/O(L)", "Activity", "F", "From", "STD(L)", "STD(Z)", "To", "STA(L)", "STA(Z)", "BLH", "AcReg", "Crew"];
+  const headers = ["Date","DC","C/I(L)","C/O(L)","Activity","F","From","STD(L)","STD(Z)","To","STA(L)","STA(Z)","BLH","AcReg","Crew"];
   const siteHeaders = rosterRaw[0];
   const headerMap = {};
-  headers.forEach(h => {
-    const idx = siteHeaders.findIndex(col => col.includes(h));
-    if (idx >= 0) headerMap[h] = idx;
-  });
+  headers.forEach(h => { const idx = siteHeaders.findIndex(col => col.includes(h)); if (idx>=0) headerMap[h]=idx; });
 
-  let values = rosterRaw.slice(1).map(row => headers.map(h => {
-    if (h === "AcReg") return row[18] || "";
-    if (h === "Crew") return row[22] || "";
-    const idx = headerMap[h];
-    return idx !== undefined ? row[idx] || "" : "";
-  }));
+  let values = rosterRaw.slice(1).map(row =>
+    headers.map(h => h==="AcReg"?row[18]||"":h==="Crew"?row[22]||"":headerMap[h]!==undefined?row[headerMap[h]]||"":"")
+  );
 
   // 중복 제거
   const seen = new Set();
@@ -126,53 +110,35 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
     seen.add(key);
     return true;
   });
-
   values.unshift(headers);
 
   // 파일 저장
   const publicDir = path.join(process.cwd(), "public");
   if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir);
-
-  fs.writeFileSync(path.join(publicDir, "roster.json"), JSON.stringify({ values }, null, 2), "utf-8");
-  console.log("✅ roster.json 저장 완료");
-
-  fs.writeFileSync(path.join(publicDir, "roster.csv"), values.map(row => row.map(col => `"${(col||"").replace(/"/g,'""')}"`).join(",")).join("\n"), "utf-8");
-  console.log("✅ roster.csv 저장 완료");
-
+  fs.writeFileSync(path.join(publicDir,"roster.json"),JSON.stringify({ values },null,2),"utf-8");
+  fs.writeFileSync(path.join(publicDir,"roster.csv"),values.map(r=>r.map(c=>`"${(c||"").replace(/"/g,'""')}"`).join(",")).join("\n"),"utf-8");
+  console.log("✅ roster.json & roster.csv 저장 완료");
   await browser.close();
 
   // Firestore 업로드
   console.log("🚀 Firestore 업로드 시작");
-  const headerMapFirestore = { "C/I(L)": "CIL", "C/O(L)": "COL", "STD(L)": "STDL", "STD(Z)": "STDZ", "STA(L)": "STAL", "STA(Z)": "STAZ" };
-
-  for (let i = 1; i < values.length; i++) {
-    const row = values[i];
-    const docData = {};
-    headers.forEach((h, idx) => {
-      docData[headerMapFirestore[h] || h] = row[idx] || "";
-    });
-
+  const headerMapFirestore = { "C/I(L)":"CIL","C/O(L)":"COL","STD(L)":"STDL","STD(Z)":"STDZ","STA(L)":"STAL","STA(Z)":"STAZ" };
+  for (let i=1;i<values.length;i++){
+    const row=values[i], docData={};
+    headers.forEach((h,idx)=>{ docData[headerMapFirestore[h]||h]=row[idx]||""; });
     try {
       const querySnapshot = await db.collection("roster")
-        .where("Date", "==", docData["Date"])
-        .where("DC", "==", docData["DC"])
-        .where("F", "==", docData["F"])
-        .where("From", "==", docData["From"])
-        .where("To", "==", docData["To"])
-        .where("AcReg", "==", docData["AcReg"])
-        .where("Crew", "==", docData["Crew"])
+        .where("Date","==",docData["Date"])
+        .where("DC","==",docData["DC"])
+        .where("F","==",docData["F"])
+        .where("From","==",docData["From"])
+        .where("To","==",docData["To"])
+        .where("AcReg","==",docData["AcReg"])
+        .where("Crew","==",docData["Crew"])
         .get();
-
-      if (!querySnapshot.empty) {
-        for (const doc of querySnapshot.docs) {
-          await db.collection("roster").doc(doc.id).set(docData, { merge: true });
-        }
-      } else {
-        await db.collection("roster").add(docData);
-      }
-    } catch (err) {
-      console.error(`❌ ${i}행 Firestore 업로드 실패:`, err.message);
-    }
+      if(!querySnapshot.empty){ for(const doc of querySnapshot.docs) await db.collection("roster").doc(doc.id).set(docData,{merge:true}); }
+      else await db.collection("roster").add(docData);
+    } catch(err){ console.error(`❌ ${i}행 Firestore 업로드 실패:`,err.message); }
   }
   console.log("🎉 Firestore 업로드 완료!");
 
@@ -184,13 +150,35 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
   try {
     await sheetsApi.spreadsheets.values.update({
       spreadsheetId,
-      range: `${sheetName}!A3`,
-      valueInputOption: "RAW",
-      requestBody: { values },
+      range:`${sheetName}!A3`,
+      valueInputOption:"RAW",
+      requestBody:{values},
     });
     console.log("✅ Google Sheets A3부터 덮어쓰기 완료!");
-  } catch (err) {
-    console.error("❌ Google Sheets 업로드 실패:", err);
-  }
+  } catch(err){ console.error("❌ Google Sheets 업로드 실패:",err); }
+
+  // Google Sheets A3:A → B3:B 날짜 변환
+  const parseDateString=(dateStr,year)=>{
+    const months={Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12};
+    const parts=dateStr?.split(" ");
+    if(!parts||parts.length!==2) return null;
+    const mon=months[parts[0]], day=parseInt(parts[1],10);
+    if(!mon||isNaN(day)) return null;
+    return `${year}.${String(mon).padStart(2,"0")}.${String(day).padStart(2,"0")}`;
+  };
+
+  try{
+    const res = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range:`${sheetName}!A3:A` });
+    const rows = res.data.values||[];
+    if(rows.length){
+      const yearRes = await sheetsApi.spreadsheets.values.get({ spreadsheetId, range:`${sheetName}!C2` });
+      const year = parseInt(yearRes.data.values?.[0]?.[0],10);
+      if(year){
+        const updatedValues = rows.map(r=>[parseDateString(r[0],year)]);
+        await sheetsApi.spreadsheets.values.update({ spreadsheetId, range:`${sheetName}!B3`, valueInputOption:"RAW", requestBody:{values:updatedValues} });
+        console.log("✅ Google Sheets B열 날짜 변환 작성 완료!");
+      } else console.log("❌ C2 연도 값이 유효하지 않습니다.");
+    } else console.log("❌ A3:A 데이터가 없습니다.");
+  } catch(err){ console.error("❌ Google Sheets B열 업로드 실패:",err); }
 
 })();
