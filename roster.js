@@ -6,11 +6,16 @@ import admin from "firebase-admin";
 
 // ------------------- Firebase 초기화 -------------------
 if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
-  console.error("❌ FIREBASE_SERVICE_ACCOUNT 환경변수가 설정되지 않았습니다.");
+  console.error("❌ FIREBASE_SERVICE_ACCOUNT 환경변수가 없습니다.");
   process.exit(1);
 }
 
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+
+// 🔑 private_key 개행 처리 (GitHub Secrets 문제 방지)
+if (serviceAccount.private_key) {
+  serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
+}
 
 if (!admin.apps.length) {
   admin.initializeApp({
