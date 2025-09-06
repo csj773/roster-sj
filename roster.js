@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import "dotenv/config";
 import admin from "firebase-admin";
+import { google } from "googleapis";
 
 // ------------------- Firebase 초기화 -------------------
 if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
@@ -44,7 +45,7 @@ const db = admin.firestore();
   const password = process.env.PDC_PASSWORD;
 
   if (!username || !password) {
-    console.error("❌ PDC_USERNAME 또는 PDC_PASSWORD 환경변수가 설정되지 않았습니다.");
+    console.error("❌ PDC_USERNAME 또는 PDC_PASSWORD 환경변수가 없습니다.");
     await browser.close();
     process.exit(1);
   }
@@ -189,4 +190,38 @@ const db = admin.firestore();
   }
 
   console.log("🎉 Firestore 업로드 완료!");
+
+  // ------------------- Google Sheets A3부터 덮어쓰기 -------------------
+  if (!process.env.GOOGLE_SHEETS_CREDENTIALS) {
+    console.error("❌ GOOGLE_SHEETS_CREDENTIALS 환경변수가 없습니다.");
+    process.exit(1);
+  }
+
+  const sheetCredentials = JSON.parse(process.env.GOOGLE_SHEETS_CREDENTIALS);
+  if (sheetCredentials.private_key) {
+    sheetCredentials.private_key = sheetCredentials.private_key.replace(/\\n/g, "\n");
+  }
+
+  const authSheets = new google.auth.GoogleAuth({
+    credentials: sheetCredentials,
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  });
+
+  const sheetsApi = google.sheets({ version: "v4", auth: authSheets });
+
+  const spreadsheetId = "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
+  const sheetName = "Roster1";
+
+  try {
+    await sheetsApi.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${sheetName}!A3`, // A3부터 덮어쓰기
+      valueInputOption: "RAW",
+      requestBody: { values },
+    });
+    console.log("✅ Google Sheet A3부터 덮어쓰기 완료!");
+  } catch (err) {
+    console.error("❌ Google Sheet 업로드 실패:", err);
+  }
+
 })();
