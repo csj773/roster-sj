@@ -221,7 +221,7 @@ function convertDate(input) {
 }
   
   // ------------------- Google Sheets 업로드 -------------------
-  console.log("🚀 Google Sheets A3부터 덮어쓰기 시작...");
+  console.log("🚀 Google Sheets A1부터 덮어쓰기 시작...");
 
   // ✅ 여기서 반드시 재선언
   const spreadsheetId = "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
@@ -237,11 +237,11 @@ function convertDate(input) {
   try {
     await sheetsApi.spreadsheets.values.update({
       spreadsheetId,
-      range: `${sheetName}!A3`,
+      range: `${sheetName}!A1`,
       valueInputOption: "RAW",
       requestBody: { values: sheetValues },
     });
-    console.log("✅ Google Sheets A3부터 덮어쓰기 완료!");
+    console.log("✅ Google Sheets A1부터 덮어쓰기 완료!");
   } catch (err) {
     console.error("❌ Google Sheets 업로드 실패:", err);
   }
