@@ -142,39 +142,47 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
   await browser.close();
 
   // Firestore 업로드
-  console.log("🚀 Firestore 업로드 시작");
-  const headerMapFirestore = { "C/I(L)": "CIL", "C/O(L)": "COL", "STD(L)": "STDL", "STD(Z)": "STDZ", "STA(L)": "STAL", "STA(Z)": "STAZ" };
+console.log("🚀 Firestore 업로드 시작");
+const headerMapFirestore = { "C/I(L)": "CIL", "C/O(L)": "COL", "STD(L)": "STDL", "STD(Z)": "STDZ", "STA(L)": "STAL", "STA(Z)": "STAZ" };
 
-  for (let i = 1; i < values.length; i++) {
-    const row = values[i];
-    const docData = {};
-    headers.forEach((h, idx) => {
-      docData[headerMapFirestore[h] || h] = row[idx] || "";
-    });
+// .env에서 username 가져오기
+const userName = process.env.PDC_USERNAME || "unknown_user";
 
-    try {
-      const querySnapshot = await db.collection("roster")
-        .where("Date", "==", docData["Date"])
-        .where("DC", "==", docData["DC"])
-        .where("F", "==", docData["F"])
-        .where("From", "==", docData["From"])
-        .where("To", "==", docData["To"])
-        .where("AcReg", "==", docData["AcReg"])
-        .where("Crew", "==", docData["Crew"])
-        .get();
+for (let i = 1; i < values.length; i++) {
+  const row = values[i];
+  const docData = {};
 
-      if (!querySnapshot.empty) {
-        for (const doc of querySnapshot.docs) {
-          await db.collection("roster").doc(doc.id).set(docData, { merge: true });
-        }
-      } else {
-        await db.collection("roster").add(docData);
+  headers.forEach((h, idx) => {
+    docData[headerMapFirestore[h] || h] = row[idx] || "";
+  });
+
+  // user_name 필드 추가
+  docData["user_name"] = userName;
+
+  try {
+    const querySnapshot = await db.collection("roster")
+      .where("Date", "==", docData["Date"])
+      .where("DC", "==", docData["DC"])
+      .where("F", "==", docData["F"])
+      .where("From", "==", docData["From"])
+      .where("To", "==", docData["To"])
+      .where("AcReg", "==", docData["AcReg"])
+      .where("Crew", "==", docData["Crew"])
+      .get();
+
+    if (!querySnapshot.empty) {
+      for (const doc of querySnapshot.docs) {
+        await db.collection("roster").doc(doc.id).set(docData, { merge: true });
       }
-    } catch (err) {
-      console.error(`❌ ${i}행 Firestore 업로드 실패:`, err.message);
+    } else {
+      await db.collection("roster").add(docData);
     }
+  } catch (err) {
+    console.error(`❌ ${i}행 Firestore 업로드 실패:`, err.message);
   }
-  console.log("🎉 Firestore 업로드 완료!");
+}
+
+console.log("🎉 Firestore 업로드 완료!");
   
   // 🔹 Date 변환용 함수 (MMM dd → YYYY.MM.DD, 그 외는 그대로 반환)
 
