@@ -54,8 +54,9 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
     waitUntil: "networkidle0",
   });
 
-  const username = process.env.PDC_USERNAME;
-  const password = process.env.PDC_PASSWORD;
+  // 최소 변경 — 입력값을 우선 사용하고 없으면 기존 env 사용
+  const username = process.env.INPUT_PDC_USERNAME || process.env.PDC_USERNAME;
+  const password = process.env.INPUT_PDC_PASSWORD || process.env.PDC_PASSWORD;
   if (!username || !password) {
     console.error("❌ PDC_USERNAME 또는 PDC_PASSWORD 환경변수가 없습니다.");
     await browser.close();
