@@ -134,19 +134,22 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
   if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir);
 
   fs.writeFileSync(path.join(publicDir, "roster.json"), JSON.stringify({ values }, null, 2), "utf-8");
-  console.log("✅ roster.json 저장 완료");
-
   fs.writeFileSync(path.join(publicDir, "roster.csv"), values.map(row => row.map(col => `"${(col||"").replace(/"/g,'""')}"`).join(",")).join("\n"), "utf-8");
-  console.log("✅ roster.csv 저장 완료");
+  console.log("✅ roster.json / roster.csv 저장 완료");
 
   await browser.close();
 
-  // Firestore 업로드
-console.log("🚀 Firestore 업로드 시작");
-const headerMapFirestore = { "C/I(L)": "CIL", "C/O(L)": "COL", "STD(L)": "STDL", "STD(Z)": "STDZ", "STA(L)": "STAL", "STA(Z)": "STAZ" };
 
-// .env에서 username 가져오기
+// ------------------- Firestore 업로드 -------------------
+console.log("🚀 Firestore 업로드 시작");
+
+const headerMapFirestore = { 
+  "C/I(L)": "CIL", "C/O(L)": "COL", "STD(L)": "STDL", 
+  "STD(Z)": "STDZ", "STA(L)": "STAL", "STA(Z)": "STAZ" 
+};
+
 const userName = process.env.PDC_USERNAME || "unknown_user";
+const userId = process.env.FIREBASE_UID || "unknown_uid"; // 상위 document id
 
 for (let i = 1; i < values.length; i++) {
   const row = values[i];
@@ -156,14 +159,18 @@ for (let i = 1; i < values.length; i++) {
     docData[headerMapFirestore[h] || h] = row[idx] || "";
   });
 
-  // user_name 필드 추가
-  docData["user_name"] = userName;
+  // uid, pdc_user_name 추가
+  docData["userId"] = userId;
+  docData["pdc_user_name"] = userName;
 
   try {
-    const querySnapshot = await db.collection("roster")
+    // 상위 document(uid) 참조
+    const userDocRef = db.collection("roster").doc(userId);
+    const entriesRef = userDocRef.collection("entries");
+
+    // 중복 체크: Date + From + To + AcReg + Crew
+    const querySnapshot = await entriesRef
       .where("Date", "==", docData["Date"])
-      .where("DC", "==", docData["DC"])
-      .where("F", "==", docData["F"])
       .where("From", "==", docData["From"])
       .where("To", "==", docData["To"])
       .where("AcReg", "==", docData["AcReg"])
@@ -171,74 +178,59 @@ for (let i = 1; i < values.length; i++) {
       .get();
 
     if (!querySnapshot.empty) {
-      for (const doc of querySnapshot.docs) {
-        await db.collection("roster").doc(doc.id).set(docData, { merge: true });
-      }
+      const docId = querySnapshot.docs[0].id;
+      await entriesRef.doc(docId).set(docData, { merge: true });
+      console.log(`✅ ${docData["Date"]} ${docData["From"]} → ${docData["To"]} 업데이트 완료`);
     } else {
-      await db.collection("roster").add(docData);
+      await entriesRef.add(docData); // 새 entry 추가
+      console.log(`✅ ${docData["Date"]} ${docData["From"]} → ${docData["To"]} 신규 추가 완료`);
     }
+
   } catch (err) {
-    console.error(`❌ ${i}행 Firestore 업로드 실패:`, err.message);
+    console.error(`❌ ${row["Date"]} ${row["From"]} → ${row["To"]} 업로드 실패:`, err.message);
   }
 }
 
 console.log("🎉 Firestore 업로드 완료!");
-  
-  // 🔹 Date 변환용 함수 (MMM dd → YYYY.MM.DD, 그 외는 그대로 반환)
-
-  // MMM dd 또는 (요일 약어) dd -> YYYY.MM.DD (그 외는 원래 값 반환)
-function convertDate(input) {
-  if (!input || typeof input !== "string") return input;
-
-  const s = input.trim();
-  const parts = s.split(/\s+/);
-  if (parts.length !== 2) return input; // 형식이 아니면 원래값 반환
-
-  const token = parts[0];
-  const dayStr = parts[1].replace(/^0+/, "") || "0";
-  if (!/^\d+$/.test(dayStr)) return input;
-  const day = parseInt(dayStr, 10);
-  if (day < 1 || day > 31) return input;
-
-  const now = new Date();
-  const year = now.getFullYear();
-
-  // month mapping (소문자 키)
-  const months = {
-    jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
-    jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12"
-  };
-
-  const tokenLower = token.toLowerCase();
-
-  // 1) MMM (월) 처리: "Sep 07"
-  if (months[tokenLower]) {
-    const month = months[tokenLower];
-    return `${year}.${month}.${String(day).padStart(2, "0")}`;
+  // ------------------- Date 변환 함수 -------------------
+  function convertDate(input) {
+    if (!input || typeof input !== "string") return input;
+    const s = input.trim();
+    const parts = s.split(/\s+/);
+    if (parts.length !== 2) return input;
+    const token = parts[0];
+    const dayStr = parts[1].replace(/^0+/, "") || "0";
+    if (!/^\d+$/.test(dayStr)) return input;
+    const day = parseInt(dayStr, 10);
+    if (day < 1 || day > 31) return input;
+    const now = new Date();
+    const year = now.getFullYear();
+    const months = {
+      jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
+      jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12"
+    };
+    const tokenLower = token.toLowerCase();
+    if (months[tokenLower]) {
+      const month = months[tokenLower];
+      return `${year}.${month}.${String(day).padStart(2, "0")}`;
+    }
+    const weekdays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+    if (weekdays.includes(tokenLower)) {
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      return `${year}.${month}.${String(day).padStart(2, "0")}`;
+    }
+    return input;
   }
 
-  // 2) 요일 약어 처리: "Mon 01" 등 → 현재 월 사용
-  const weekdays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
-  if (weekdays.includes(tokenLower)) {
-    const month = String(now.getMonth() + 1).padStart(2, "0"); // 현재 월
-    return `${year}.${month}.${String(day).padStart(2, "0")}`;
-  }
-
-  // 3) 그 외는 원래 값 반환
-  return input;
-}
-  
   // ------------------- Google Sheets 업로드 -------------------
   console.log("🚀 Google Sheets A1부터 덮어쓰기 시작...");
-
-  // ✅ 여기서 반드시 재선언
   const spreadsheetId = "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
   const sheetName = "Roster1";
 
   const sheetValues = values.map((row, idx) => {
-    if (idx === 0) return row; // 헤더는 그대로
+    if (idx === 0) return row;
     const newRow = [...row];
-    newRow[0] = convertDate(row[0]); // Date 변환
+    newRow[0] = convertDate(row[0]);
     return newRow;
   });
 
@@ -253,4 +245,5 @@ function convertDate(input) {
   } catch (err) {
     console.error("❌ Google Sheets 업로드 실패:", err);
   }
+
 })();
