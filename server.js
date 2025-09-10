@@ -7,37 +7,35 @@ app.use(express.json());
 
 const API_KEY = process.env.API_KEY || "change_me";
 
-// ------------------- POST /runRoster -------------------
 app.post("/runRoster", async (req, res) => {
   try {
     const auth = req.headers["x-api-key"];
     if (!auth || auth !== API_KEY) return res.status(401).json({ error: "Unauthorized" });
 
-    const { username, password, firebaseUid } = req.body || {};
-    if (!username || !password) return res.status(400).json({ error: "username and password required" });
+    // FlutterFlow에서 username/password 전달 안 하면 환경변수 사용
+    const username = req.body.username || process.env.INPUT_PDC_USERNAME || process.env.PDC_USERNAME;
+    const password = req.body.password || process.env.INPUT_PDC_PASSWORD || process.env.PDC_PASSWORD;
+    const firebaseUid = req.body.firebaseUid || process.env.FIREBASE_UID;
 
-    const env = {
-      ...process.env,
-      INPUT_PDC_USERNAME: username,
-      INPUT_PDC_PASSWORD: password,
-      FIREBASE_UID: firebaseUid || process.env.FIREBASE_UID,
-    };
+    if (!username || !password) {
+      return res.status(400).json({ error: "환경변수에서 PDC 계정이 설정되지 않았습니다." });
+    }
+
+    const env = { ...process.env, INPUT_PDC_USERNAME: username, INPUT_PDC_PASSWORD: password, FIREBASE_UID: firebaseUid };
 
     const child = spawn("node", ["./roster.js"], { env });
 
     let out = "";
     let err = "";
 
-    // stdout / stderr 수집
     child.stdout.on("data", (d) => (out += d.toString()));
     child.stderr.on("data", (d) => (err += d.toString()));
 
-    // 종료 시 JSON으로 반환
     child.on("close", (code) => {
       res.json({
         exitCode: code,
         stdout: out.replace(new RegExp(username, "g"), "[REDACTED]"),
-        stderr: err || "",
+        stderr: err || ""
       });
     });
   } catch (e) {
@@ -45,9 +43,6 @@ app.post("/runRoster", async (req, res) => {
   }
 });
 
-// ------------------- 서버 실행 -------------------
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => {
-  console.log(`✅ Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
 
