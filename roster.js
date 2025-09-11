@@ -140,59 +140,95 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
 
   await browser.close();
 
-
 // ------------------- Firestore 업로드 -------------------
 console.log("🚀 Firestore 업로드 시작");
 
-const headerMapFirestore = { 
-  "C/I(L)": "CIL", "C/O(L)": "COL", "STD(L)": "STDL", 
-  "STD(Z)": "STDZ", "STA(L)": "STAL", "STA(Z)": "STAZ" 
+const headerMapFirestore = {
+  "C/I(L)": "CIL",
+  "C/O(L)": "COL",
+  "STD(L)": "STDL",
+  "STD(Z)": "STDZ",
+  "STA(L)": "STAL",
+  "STA(Z)": "STAZ",
 };
 
 const userName = process.env.PDC_USERNAME || "unknown_user";
-const userId = process.env.FIREBASE_UID || "unknown_uid"; // 상위 document id
+const userId = process.env.FIREBASE_UID || "unknown_uid"; // Firebase Auth UID
 
 for (let i = 1; i < values.length; i++) {
   const row = values[i];
   const docData = {};
 
   headers.forEach((h, idx) => {
-    docData[headerMapFirestore[h] || h] = row[idx] || "";
+    const key = headerMapFirestore[h] || h;
+    docData[key] = row[idx] || "";
   });
 
   // uid, pdc_user_name 추가
   docData["userId"] = userId;
   docData["pdc_user_name"] = userName;
 
-  try {
-    // 상위 document(uid) 참조
-    const userDocRef = db.collection("roster").doc(userId);
-    const entriesRef = userDocRef.collection("entries");
+  // 🔥 Activity 값이 없으면 Firestore에서 기존 문서까지 삭제
+  if (!docData["Activity"] || docData["Activity"].trim() === "") {
+    try {
+      const querySnapshot = await db
+        .collection("roster")
+        .where("Date", "==", docData["Date"])
+        .where("DC", "==", docData["DC"])
+        .where("F", "==", docData["F"])
+        .where("From", "==", docData["From"])
+        .where("To", "==", docData["To"])
+        .where("AcReg", "==", docData["AcReg"])
+        .where("Crew", "==", docData["Crew"])
+        .where("userId", "==", userId)
+        .where("pdc_user_name", "==", userName)
+        .get();
 
-    // 중복 체크: Date + From + To + AcReg + Crew
-    const querySnapshot = await entriesRef
+      if (!querySnapshot.empty) {
+        for (const doc of querySnapshot.docs) {
+          await db.collection("roster").doc(doc.id).delete();
+          console.log(`🗑️ ${i}행 Activity 없음 → 기존 문서 삭제 완료`);
+        }
+      } else {
+        console.log(`⏭️ ${i}행 Activity 없음 → 삭제할 문서 없음`);
+      }
+    } catch (err) {
+      console.error(`❌ ${i}행 Activity 없음 삭제 실패:`, err.message);
+    }
+    continue; // 저장 스킵
+  }
+
+  try {
+    // 중복 체크: Date + DC + F + From + To + AcReg + Crew + userId + pdc_user_name
+    const querySnapshot = await db
+      .collection("roster")
       .where("Date", "==", docData["Date"])
+      .where("DC", "==", docData["DC"])
+      .where("F", "==", docData["F"])
       .where("From", "==", docData["From"])
       .where("To", "==", docData["To"])
       .where("AcReg", "==", docData["AcReg"])
       .where("Crew", "==", docData["Crew"])
+      .where("userId", "==", userId)
+      .where("pdc_user_name", "==", userName)
       .get();
 
     if (!querySnapshot.empty) {
-      const docId = querySnapshot.docs[0].id;
-      await entriesRef.doc(docId).set(docData, { merge: true });
-      console.log(`✅ ${docData["Date"]} ${docData["From"]} → ${docData["To"]} 업데이트 완료`);
+      for (const doc of querySnapshot.docs) {
+        await db.collection("roster").doc(doc.id).set(docData, { merge: true });
+      }
+      console.log(`🔄 ${i}행 기존 문서 업데이트 완료`);
     } else {
-      await entriesRef.add(docData); // 새 entry 추가
-      console.log(`✅ ${docData["Date"]} ${docData["From"]} → ${docData["To"]} 신규 추가 완료`);
+      await db.collection("roster").add(docData);
+      console.log(`✅ ${i}행 신규 업로드 완료`);
     }
-
   } catch (err) {
-    console.error(`❌ ${row["Date"]} ${row["From"]} → ${row["To"]} 업로드 실패:`, err.message);
+    console.error(`❌ ${i}행 업로드 실패:`, err.message);
   }
 }
 
 console.log("🎉 Firestore 업로드 완료!");
+
   // ------------------- Date 변환 함수 -------------------
   function convertDate(input) {
     if (!input || typeof input !== "string") return input;
@@ -248,3 +284,4 @@ console.log("🎉 Firestore 업로드 완료!");
   }
 
 })();
+
