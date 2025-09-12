@@ -10,12 +10,10 @@ if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
   console.error("❌ FIREBASE_SERVICE_ACCOUNT 환경변수가 없습니다.");
   process.exit(1);
 }
-
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 if (serviceAccount.private_key) {
   serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
 }
-
 if (!admin.apps.length) {
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
@@ -28,12 +26,10 @@ if (!process.env.GOOGLE_SHEETS_CREDENTIALS) {
   console.error("❌ GOOGLE_SHEETS_CREDENTIALS 환경변수가 없습니다.");
   process.exit(1);
 }
-
 const sheetsCredentials = JSON.parse(process.env.GOOGLE_SHEETS_CREDENTIALS);
 if (sheetsCredentials.private_key) {
   sheetsCredentials.private_key = sheetsCredentials.private_key.replace(/\\n/g, "\n");
 }
-
 const sheetsAuth = new google.auth.GoogleAuth({
   credentials: sheetsCredentials,
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
@@ -46,7 +42,6 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
     headless: "new",
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
   });
-
   const page = await browser.newPage();
 
   console.log("👉 로그인 페이지 접속 중...");
@@ -54,23 +49,19 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
     waitUntil: "networkidle0",
   });
 
+  // ⬇️ 동적 환경변수 적용 (API 호출 시 INPUT_* 우선, 없으면 기본값 사용)
   const username = process.env.INPUT_PDC_USERNAME || process.env.PDC_USERNAME;
   const password = process.env.INPUT_PDC_PASSWORD || process.env.PDC_PASSWORD;
-  const firebaseUid = process.env.INPUT_FIREBASE_UID || process.env.FIREBASE_UID;
+  const userId = process.env.INPUT_FIREBASE_UID || process.env.FIREBASE_UID || "unknown_uid";
+  const userName = username || "unknown_user";
 
   if (!username || !password) {
-    console.error("❌ PDC_USERNAME 또는 PDC_PASSWORD 환경변수가 없습니다.");
+    console.error("❌ PDC_USERNAME 또는 PDC_PASSWORD 누락");
     await browser.close();
     process.exit(1);
   }
 
-  if (!firebaseUid) {
-    console.error("❌ FIREBASE_UID 환경변수가 없습니다.");
-    await browser.close();
-    process.exit(1);
-  }
-
-  console.log("👉 로그인 시도 중...");
+  console.log(`👉 로그인 시도 중... [uid=${userId}]`);
   await page.type("#ctl00_Main_userId_edit", username, { delay: 50 });
   await page.type("#ctl00_Main_password_edit", password, { delay: 50 });
   await Promise.all([
@@ -84,7 +75,6 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
     const links = Array.from(document.querySelectorAll("a"));
     return links.find(a => a.textContent.includes("Roster")) || null;
   });
-
   if (rosterLink) {
     await Promise.all([
       rosterLink.click(),
@@ -104,7 +94,6 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
       Array.from(tr.querySelectorAll("td")).map(td => td.innerText.trim())
     )
   );
-
   if (rosterRaw.length < 2) {
     console.error("❌ Roster 데이터가 비어있습니다.");
     await browser.close();
@@ -134,71 +123,83 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
     seen.add(key);
     return true;
   });
-
   values.unshift(headers);
 
-  // 파일 저장
+  // roster.json / roster.csv 저장
   const publicDir = path.join(process.cwd(), "public");
   if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir);
-
   fs.writeFileSync(path.join(publicDir, "roster.json"), JSON.stringify({ values }, null, 2), "utf-8");
   fs.writeFileSync(path.join(publicDir, "roster.csv"), values.map(row => row.map(col => `"${(col||"").replace(/"/g,'""')}"`).join(",")).join("\n"), "utf-8");
   console.log("✅ roster.json / roster.csv 저장 완료");
 
   await browser.close();
-// ------------------- Firestore 업로드 -------------------
-console.log("🚀 Firestore 업로드 시작");
 
-const headerMapFirestore = {
-  "C/I(L)": "CIL",
-  "C/O(L)": "COL",
-  "STD(L)": "STDL",
-  "STD(Z)": "STDZ",
-  "STA(L)": "STAL",
-  "STA(Z)": "STAZ",
-};
+  // ------------------- Firestore 업로드 -------------------
+  console.log("🚀 Firestore 업로드 시작");
+  const headerMapFirestore = {
+    "C/I(L)": "CIL",
+    "C/O(L)": "COL",
+    "STD(L)": "STDL",
+    "STD(Z)": "STDZ",
+    "STA(L)": "STAL",
+    "STA(Z)": "STAZ",
+  };
 
-const userId = firebaseUid;
-const userName = username;
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const docData = {};
+    headers.forEach((h, idx) => {
+      const key = headerMapFirestore[h] || h;
+      docData[key] = row[idx] || "";
+    });
+    docData.userId = userId;
+    docData.pdc_user_name = userName;
 
-// ✅ 기존 uid 데이터 전체 삭제
-console.log(`🗑️ 기존 UID(${userId}) 데이터 전체 삭제 중...`);
-const existingDocs = await db.collection("roster").where("userId", "==", userId).get();
-for (const doc of existingDocs.docs) {
-  await db.collection("roster").doc(doc.id).delete();
-}
-console.log(`🗑️ ${existingDocs.size}개 문서 삭제 완료`);
-
-// ✅ 신규 데이터 업로드 (Activity 있는 행만)
-for (let i = 1; i < values.length; i++) {
-  const row = values[i];
-  const docData = {};
-
-  headers.forEach((h, idx) => {
-    const key = headerMapFirestore[h] || h;
-    docData[key] = row[idx] || "";
-  });
-
-  docData.userId = userId;
-  docData.pdc_user_name = userName;
-
-  try {
+    // Activity 없는 경우 삭제 처리
     if (!docData.Activity || docData.Activity.trim() === "") {
-      console.log(`⏭️ ${i}행 Activity 없음 → 업로드 건너뜀`);
+      try {
+        const querySnapshot = await db.collection("roster")
+          .where("Date", "==", docData.Date)
+          .where("userId", "==", userId)
+          .get();
+        for (const doc of querySnapshot.docs) {
+          await db.collection("roster").doc(doc.id).delete();
+          console.log(`🗑️ ${i}행 Activity 없음 → 삭제 완료`);
+        }
+      } catch (err) {
+        console.error(`❌ ${i}행 Activity 없음 삭제 실패:`, err.message);
+      }
       continue;
     }
 
-    await db.collection("roster").add(docData);
-    console.log(`✅ ${i}행 신규 업로드 완료`);
-  } catch (err) {
-    console.error(`❌ ${i}행 업로드 실패:`, err.message);
+    try {
+      const querySnapshot = await db.collection("roster")
+        .where("Date", "==", docData.Date)
+        .where("DC", "==", docData.DC)
+        .where("F", "==", docData.F)
+        .where("From", "==", docData.From)
+        .where("To", "==", docData.To)
+        .where("AcReg", "==", docData.AcReg)
+        .where("Crew", "==", docData.Crew)
+        .where("userId", "==", userId)
+        .get();
+
+      if (!querySnapshot.empty) {
+        for (const doc of querySnapshot.docs) {
+          await db.collection("roster").doc(doc.id).set(docData, { merge: true });
+        }
+        console.log(`🔄 ${i}행 기존 문서 업데이트 완료`);
+      } else {
+        await db.collection("roster").add(docData);
+        console.log(`✅ ${i}행 신규 업로드 완료`);
+      }
+    } catch (err) {
+      console.error(`❌ ${i}행 업로드 실패:`, err.message);
+    }
   }
-}
+  console.log("🎉 Firestore 업로드 완료!");
 
-console.log("🎉 Firestore 업로드 완료!");
-  
-
-  // ------------------- Date 변환 함수 -------------------
+  // ------------------- Google Sheets 업로드 -------------------
   function convertDate(input) {
     if (!input || typeof input !== "string") return input;
     const s = input.trim();
@@ -216,10 +217,8 @@ console.log("🎉 Firestore 업로드 완료!");
       jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12"
     };
     const tokenLower = token.toLowerCase();
-    if (months[tokenLower]) {
-      return `${year}.${months[tokenLower]}.${String(day).padStart(2, "0")}`;
-    }
-    const weekdays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+    if (months[tokenLower]) return `${year}.${months[tokenLower]}.${String(day).padStart(2, "0")}`;
+    const weekdays = ["mon","tue","wed","thu","fri","sat","sun"];
     if (weekdays.includes(tokenLower)) {
       const month = String(now.getMonth() + 1).padStart(2, "0");
       return `${year}.${month}.${String(day).padStart(2, "0")}`;
@@ -227,18 +226,15 @@ console.log("🎉 Firestore 업로드 완료!");
     return input;
   }
 
-  // ------------------- Google Sheets 업로드 -------------------
   console.log("🚀 Google Sheets A1부터 덮어쓰기 시작...");
   const spreadsheetId = "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
   const sheetName = "Roster1";
-
   const sheetValues = values.map((row, idx) => {
     if (idx === 0) return row;
     const newRow = [...row];
     newRow[0] = convertDate(row[0]);
     return newRow;
   });
-
   try {
     await sheetsApi.spreadsheets.values.update({
       spreadsheetId,
@@ -250,6 +246,5 @@ console.log("🎉 Firestore 업로드 완료!");
   } catch (err) {
     console.error("❌ Google Sheets 업로드 실패:", err);
   }
-
 })();
 
