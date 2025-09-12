@@ -139,7 +139,6 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
   console.log("✅ roster.json / roster.csv 저장 완료");
 
   await browser.close();
-
 // ------------------- Firestore 업로드 -------------------
 console.log("🚀 Firestore 업로드 시작");
 
@@ -168,9 +167,9 @@ for (let i = 1; i < values.length; i++) {
   docData["userId"] = userId;
   docData["pdc_user_name"] = userName;
 
-  // 🔥 Activity 값이 없으면 Firestore에서 기존 문서까지 삭제
-  if (!docData["Activity"] || docData["Activity"].trim() === "") {
-    try {
+  try {
+    // 🔥 Activity 값이 없으면 기존 문서 삭제 후 스킵
+    if (!docData["Activity"] || docData["Activity"].trim() === "") {
       const querySnapshot = await db
         .collection("roster")
         .where("Date", "==", docData["Date"])
@@ -192,14 +191,10 @@ for (let i = 1; i < values.length; i++) {
       } else {
         console.log(`⏭️ ${i}행 Activity 없음 → 삭제할 문서 없음`);
       }
-    } catch (err) {
-      console.error(`❌ ${i}행 Activity 없음 삭제 실패:`, err.message);
+      continue; // 저장 스킵
     }
-    continue; // 저장 스킵
-  }
 
-  try {
-    // 중복 체크: Date + DC + F + From + To + AcReg + Crew + userId + pdc_user_name
+    // 🔹 중복 체크: Date + DC + F + From + To + AcReg + Crew + userId + pdc_user_name
     const querySnapshot = await db
       .collection("roster")
       .where("Date", "==", docData["Date"])
@@ -214,20 +209,30 @@ for (let i = 1; i < values.length; i++) {
       .get();
 
     if (!querySnapshot.empty) {
-      for (const doc of querySnapshot.docs) {
-        await db.collection("roster").doc(doc.id).set(docData, { merge: true });
+      // 첫 번째 문서만 업데이트
+      const firstDoc = querySnapshot.docs[0];
+      await db.collection("roster").doc(firstDoc.id).set(docData, { merge: true });
+      console.log(`🔄 ${i}행 기존 문서(대표 1개) 업데이트 완료`);
+
+      // 나머지 중복 문서는 삭제
+      const duplicateDocs = querySnapshot.docs.slice(1);
+      for (const dup of duplicateDocs) {
+        await db.collection("roster").doc(dup.id).delete();
+        console.log(`🗑️ ${i}행 중복 문서 삭제 완료: ${dup.id}`);
       }
-      console.log(`🔄 ${i}행 기존 문서 업데이트 완료`);
     } else {
+      // 신규 추가
       await db.collection("roster").add(docData);
       console.log(`✅ ${i}행 신규 업로드 완료`);
     }
+
   } catch (err) {
     console.error(`❌ ${i}행 업로드 실패:`, err.message);
   }
 }
 
 console.log("🎉 Firestore 업로드 완료!");
+
 
   // ------------------- Date 변환 함수 -------------------
   function convertDate(input) {
