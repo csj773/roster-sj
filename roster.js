@@ -146,88 +146,57 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
   console.log("✅ roster.json / roster.csv 저장 완료");
 
   await browser.close();
+// ------------------- Firestore 업로드 -------------------
+console.log("🚀 Firestore 업로드 시작");
 
-  // ------------------- Firestore 업로드 -------------------
-  console.log("🚀 Firestore 업로드 시작");
+const headerMapFirestore = {
+  "C/I(L)": "CIL",
+  "C/O(L)": "COL",
+  "STD(L)": "STDL",
+  "STD(Z)": "STDZ",
+  "STA(L)": "STAL",
+  "STA(Z)": "STAZ",
+};
 
-  const headerMapFirestore = {
-    "C/I(L)": "CIL",
-    "C/O(L)": "COL",
-    "STD(L)": "STDL",
-    "STD(Z)": "STDZ",
-    "STA(L)": "STAL",
-    "STA(Z)": "STAZ",
-  };
+const userId = firebaseUid;
+const userName = username;
 
-  const userId = firebaseUid;
-  const userName = username;
+// ✅ 기존 uid 데이터 전체 삭제
+console.log(`🗑️ 기존 UID(${userId}) 데이터 전체 삭제 중...`);
+const existingDocs = await db.collection("roster").where("userId", "==", userId).get();
+for (const doc of existingDocs.docs) {
+  await db.collection("roster").doc(doc.id).delete();
+}
+console.log(`🗑️ ${existingDocs.size}개 문서 삭제 완료`);
 
-  for (let i = 1; i < values.length; i++) {
-    const row = values[i];
-    const docData = {};
+// ✅ 신규 데이터 업로드 (Activity 있는 행만)
+for (let i = 1; i < values.length; i++) {
+  const row = values[i];
+  const docData = {};
 
-    headers.forEach((h, idx) => {
-      const key = headerMapFirestore[h] || h;
-      docData[key] = row[idx] || "";
-    });
+  headers.forEach((h, idx) => {
+    const key = headerMapFirestore[h] || h;
+    docData[key] = row[idx] || "";
+  });
 
-    docData.userId = userId;
-    docData.pdc_user_name = userName;
+  docData.userId = userId;
+  docData.pdc_user_name = userName;
 
-    try {
-      if (!docData.Activity || docData.Activity.trim() === "") {
-        const querySnapshot = await db
-          .collection("roster")
-          .where("Date", "==", docData.Date)
-          .where("DC", "==", docData.DC)
-          .where("F", "==", docData.F)
-          .where("From", "==", docData.From)
-          .where("To", "==", docData.To)
-          .where("AcReg", "==", docData.AcReg)
-          .where("Crew", "==", docData.Crew)
-          .where("userId", "==", userId)
-          .where("pdc_user_name", "==", userName)
-          .get();
-
-        for (const doc of querySnapshot.docs) {
-          await db.collection("roster").doc(doc.id).delete();
-          console.log(`🗑️ ${i}행 Activity 없음 → 기존 문서 삭제 완료`);
-        }
-        continue;
-      }
-
-      const querySnapshot = await db
-        .collection("roster")
-        .where("Date", "==", docData.Date)
-        .where("DC", "==", docData.DC)
-        .where("F", "==", docData.F)
-        .where("From", "==", docData.From)
-        .where("To", "==", docData.To)
-        .where("AcReg", "==", docData.AcReg)
-        .where("Crew", "==", docData.Crew)
-        .where("userId", "==", userId)
-        .where("pdc_user_name", "==", userName)
-        .get();
-
-      if (!querySnapshot.empty) {
-        const firstDoc = querySnapshot.docs[0];
-        await db.collection("roster").doc(firstDoc.id).set(docData, { merge: true });
-        console.log(`🔄 ${i}행 기존 문서(대표 1개) 업데이트 완료`);
-
-        for (const dup of querySnapshot.docs.slice(1)) {
-          await db.collection("roster").doc(dup.id).delete();
-          console.log(`🗑️ ${i}행 중복 문서 삭제 완료: ${dup.id}`);
-        }
-      } else {
-        await db.collection("roster").add(docData);
-        console.log(`✅ ${i}행 신규 업로드 완료`);
-      }
-    } catch (err) {
-      console.error(`❌ ${i}행 업로드 실패:`, err.message);
+  try {
+    if (!docData.Activity || docData.Activity.trim() === "") {
+      console.log(`⏭️ ${i}행 Activity 없음 → 업로드 건너뜀`);
+      continue;
     }
-  }
 
-  console.log("🎉 Firestore 업로드 완료!");
+    await db.collection("roster").add(docData);
+    console.log(`✅ ${i}행 신규 업로드 완료`);
+  } catch (err) {
+    console.error(`❌ ${i}행 업로드 실패:`, err.message);
+  }
+}
+
+console.log("🎉 Firestore 업로드 완료!");
+  
 
   // ------------------- Date 변환 함수 -------------------
   function convertDate(input) {
