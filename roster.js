@@ -54,11 +54,18 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
     waitUntil: "networkidle0",
   });
 
-  // 최소 변경 — 입력값을 우선 사용하고 없으면 기존 env 사용
   const username = process.env.INPUT_PDC_USERNAME || process.env.PDC_USERNAME;
   const password = process.env.INPUT_PDC_PASSWORD || process.env.PDC_PASSWORD;
+  const firebaseUid = process.env.INPUT_FIREBASE_UID || process.env.FIREBASE_UID;
+
   if (!username || !password) {
     console.error("❌ PDC_USERNAME 또는 PDC_PASSWORD 환경변수가 없습니다.");
+    await browser.close();
+    process.exit(1);
+  }
+
+  if (!firebaseUid) {
+    console.error("❌ FIREBASE_UID 환경변수가 없습니다.");
     await browser.close();
     process.exit(1);
   }
@@ -139,100 +146,88 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
   console.log("✅ roster.json / roster.csv 저장 완료");
 
   await browser.close();
-// ------------------- Firestore 업로드 -------------------
-console.log("🚀 Firestore 업로드 시작");
 
-const headerMapFirestore = {
-  "C/I(L)": "CIL",
-  "C/O(L)": "COL",
-  "STD(L)": "STDL",
-  "STD(Z)": "STDZ",
-  "STA(L)": "STAL",
-  "STA(Z)": "STAZ",
-};
+  // ------------------- Firestore 업로드 -------------------
+  console.log("🚀 Firestore 업로드 시작");
 
-const userName = process.env.PDC_USERNAME || "unknown_user";
-const userId = process.env.FIREBASE_UID || "unknown_uid"; // Firebase Auth UID
+  const headerMapFirestore = {
+    "C/I(L)": "CIL",
+    "C/O(L)": "COL",
+    "STD(L)": "STDL",
+    "STD(Z)": "STDZ",
+    "STA(L)": "STAL",
+    "STA(Z)": "STAZ",
+  };
 
-for (let i = 1; i < values.length; i++) {
-  const row = values[i];
-  const docData = {};
+  const userId = firebaseUid;
+  const userName = username;
 
-  headers.forEach((h, idx) => {
-    const key = headerMapFirestore[h] || h;
-    docData[key] = row[idx] || "";
-  });
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const docData = {};
 
-  // uid, pdc_user_name 추가
-  docData["userId"] = userId;
-  docData["pdc_user_name"] = userName;
+    headers.forEach((h, idx) => {
+      const key = headerMapFirestore[h] || h;
+      docData[key] = row[idx] || "";
+    });
 
-  try {
-    // 🔥 Activity 값이 없으면 기존 문서 삭제 후 스킵
-    if (!docData["Activity"] || docData["Activity"].trim() === "") {
+    docData.userId = userId;
+    docData.pdc_user_name = userName;
+
+    try {
+      if (!docData.Activity || docData.Activity.trim() === "") {
+        const querySnapshot = await db
+          .collection("roster")
+          .where("Date", "==", docData.Date)
+          .where("DC", "==", docData.DC)
+          .where("F", "==", docData.F)
+          .where("From", "==", docData.From)
+          .where("To", "==", docData.To)
+          .where("AcReg", "==", docData.AcReg)
+          .where("Crew", "==", docData.Crew)
+          .where("userId", "==", userId)
+          .where("pdc_user_name", "==", userName)
+          .get();
+
+        for (const doc of querySnapshot.docs) {
+          await db.collection("roster").doc(doc.id).delete();
+          console.log(`🗑️ ${i}행 Activity 없음 → 기존 문서 삭제 완료`);
+        }
+        continue;
+      }
+
       const querySnapshot = await db
         .collection("roster")
-        .where("Date", "==", docData["Date"])
-        .where("DC", "==", docData["DC"])
-        .where("F", "==", docData["F"])
-        .where("From", "==", docData["From"])
-        .where("To", "==", docData["To"])
-        .where("AcReg", "==", docData["AcReg"])
-        .where("Crew", "==", docData["Crew"])
+        .where("Date", "==", docData.Date)
+        .where("DC", "==", docData.DC)
+        .where("F", "==", docData.F)
+        .where("From", "==", docData.From)
+        .where("To", "==", docData.To)
+        .where("AcReg", "==", docData.AcReg)
+        .where("Crew", "==", docData.Crew)
         .where("userId", "==", userId)
         .where("pdc_user_name", "==", userName)
         .get();
 
       if (!querySnapshot.empty) {
-        for (const doc of querySnapshot.docs) {
-          await db.collection("roster").doc(doc.id).delete();
-          console.log(`🗑️ ${i}행 Activity 없음 → 기존 문서 삭제 완료`);
+        const firstDoc = querySnapshot.docs[0];
+        await db.collection("roster").doc(firstDoc.id).set(docData, { merge: true });
+        console.log(`🔄 ${i}행 기존 문서(대표 1개) 업데이트 완료`);
+
+        for (const dup of querySnapshot.docs.slice(1)) {
+          await db.collection("roster").doc(dup.id).delete();
+          console.log(`🗑️ ${i}행 중복 문서 삭제 완료: ${dup.id}`);
         }
       } else {
-        console.log(`⏭️ ${i}행 Activity 없음 → 삭제할 문서 없음`);
+        await db.collection("roster").add(docData);
+        console.log(`✅ ${i}행 신규 업로드 완료`);
       }
-      continue; // 저장 스킵
+    } catch (err) {
+      console.error(`❌ ${i}행 업로드 실패:`, err.message);
     }
-
-    // 🔹 중복 체크: Date + DC + F + From + To + AcReg + Crew + userId + pdc_user_name
-    const querySnapshot = await db
-      .collection("roster")
-      .where("Date", "==", docData["Date"])
-      .where("DC", "==", docData["DC"])
-      .where("F", "==", docData["F"])
-      .where("From", "==", docData["From"])
-      .where("To", "==", docData["To"])
-      .where("AcReg", "==", docData["AcReg"])
-      .where("Crew", "==", docData["Crew"])
-      .where("userId", "==", userId)
-      .where("pdc_user_name", "==", userName)
-      .get();
-
-    if (!querySnapshot.empty) {
-      // 첫 번째 문서만 업데이트
-      const firstDoc = querySnapshot.docs[0];
-      await db.collection("roster").doc(firstDoc.id).set(docData, { merge: true });
-      console.log(`🔄 ${i}행 기존 문서(대표 1개) 업데이트 완료`);
-
-      // 나머지 중복 문서는 삭제
-      const duplicateDocs = querySnapshot.docs.slice(1);
-      for (const dup of duplicateDocs) {
-        await db.collection("roster").doc(dup.id).delete();
-        console.log(`🗑️ ${i}행 중복 문서 삭제 완료: ${dup.id}`);
-      }
-    } else {
-      // 신규 추가
-      await db.collection("roster").add(docData);
-      console.log(`✅ ${i}행 신규 업로드 완료`);
-    }
-
-  } catch (err) {
-    console.error(`❌ ${i}행 업로드 실패:`, err.message);
   }
-}
 
-console.log("🎉 Firestore 업로드 완료!");
-
+  console.log("🎉 Firestore 업로드 완료!");
 
   // ------------------- Date 변환 함수 -------------------
   function convertDate(input) {
@@ -253,8 +248,7 @@ console.log("🎉 Firestore 업로드 완료!");
     };
     const tokenLower = token.toLowerCase();
     if (months[tokenLower]) {
-      const month = months[tokenLower];
-      return `${year}.${month}.${String(day).padStart(2, "0")}`;
+      return `${year}.${months[tokenLower]}.${String(day).padStart(2, "0")}`;
     }
     const weekdays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
     if (weekdays.includes(tokenLower)) {
