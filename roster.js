@@ -49,21 +49,24 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
     waitUntil: "networkidle0",
   });
 
-  // 동적 환경변수 적용 (INPUT_* 우선, 없으면 기본값)
+  // 환경변수 적용 (INPUT_* 우선)
   const username = process.env.INPUT_PDC_USERNAME || process.env.PDC_USERNAME;
   const password = process.env.INPUT_PDC_PASSWORD || process.env.PDC_PASSWORD;
-  const userId = process.env.INPUT_FIREBASE_UID || process.env.FIREBASE_UID || "unknown_uid";
-  const adminId = process.env.INPUT_ADMIN_FIREBASE_UID || process.env.ADMIN_FIREBASE_UID || "unknown_admin";
-  const userName = username || "unknown_user";
-  let pdc_user_name = userName;
+  const flutterflowUid = process.env.INPUT_FIREBASE_UID || process.env.FIREBASE_UID;
+  const firestoreAdminUid = process.env.INPUT_ADMIN_FIREBASE_UID || process.env.ADMIN_FIREBASE_UID;
 
   if (!username || !password) {
     console.error("❌ PDC_USERNAME 또는 PDC_PASSWORD 누락");
     await browser.close();
     process.exit(1);
   }
+  if (!flutterflowUid || !firestoreAdminUid) {
+    console.error("❌ FlutterFlow UID(userId) 또는 Firestore Admin UID(adminId) 누락");
+    await browser.close();
+    process.exit(1);
+  }
 
-  console.log(`👉 로그인 시도 중... [uid=${userId}]`);
+  console.log(`👉 로그인 시도 중... [userId=${flutterflowUid}]`);
   await page.type("#ctl00_Main_userId_edit", username, { delay: 50 });
   await page.type("#ctl00_Main_password_edit", password, { delay: 50 });
   await Promise.all([
@@ -137,44 +140,29 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
   await browser.close();
 
   // ------------------- Firestore 업로드 -------------------
-console.log("🚀 Firestore 업로드 시작");
+  console.log("🚀 Firestore 업로드 시작");
 
-// 환경변수에서 UID 가져오기 (Action에서 반드시 넘겨주는 값 사용)
-const flutterflowUid = process.env.INPUT_FIREBASE_UID || process.env.FIREBASE_UID;
-const firestoreAdminUid = process.env.INPUT_ADMIN_FIREBASE_UID || process.env.ADMIN_FIREBASE_UID;
+  const headerMapFirestore = {
+    "C/I(L)": "CIL",
+    "C/O(L)": "COL",
+    "STD(L)": "STDL",
+    "STD(Z)": "STDZ",
+    "STA(L)": "STAL",
+    "STA(Z)": "STAZ",
+  };
 
-if (!flutterflowUid || !firestoreAdminUid) {
-  console.error("❌ FlutterFlow UID 또는 Firestore Admin UID 환경변수가 없습니다.");
-  process.exit(1);
-}
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const docData = {};
+    headers.forEach((h, idx) => {
+      const key = headerMapFirestore[h] || h;
+      docData[key] = row[idx] || "";
+    });
 
-const headerMapFirestore = {
-  "C/I(L)": "CIL",
-  "C/O(L)": "COL",
-  "STD(L)": "STDL",
-  "STD(Z)": "STDZ",
-  "STA(L)": "STAL",
-  "STA(Z)": "STAZ",
-};
+    docData.userId = flutterflowUid;      // FlutterFlow UID
+    docData.adminId = firestoreAdminUid;  // Admin UID
 
-// Firestore 업로드 루프
-for (let i = 1; i < values.length; i++) {
-  const row = values[i];
-  const docData = {};
-
-  // 필드 매핑
-  headers.forEach((h, idx) => {
-    const key = headerMapFirestore[h] || h;
-    docData[key] = row[idx] || "";
-  });
-
-  // FlutterFlow UID와 Firestore Admin UID 명확히 할당
-  docData.userId = flutterflowUid;      // FlutterFlow 로그인 UID
-  docData.adminId = firestoreAdminUid;  // Firestore Admin UID
-
-  // Activity 없으면 기존 문서 삭제
-  if (!docData.Activity || docData.Activity.trim() === "") {
-    try {
+    if (!docData.Activity || docData.Activity.trim() === "") {
       const querySnapshot = await db.collection("roster")
         .where("Date", "==", docData.Date)
         .where("userId", "==", flutterflowUid)
@@ -183,14 +171,9 @@ for (let i = 1; i < values.length; i++) {
         await db.collection("roster").doc(doc.id).delete();
         console.log(`🗑️ ${i}행 Activity 없음 → 삭제 완료`);
       }
-    } catch (err) {
-      console.error(`❌ ${i}행 Activity 없음 삭제 실패:`, err.message);
+      continue;
     }
-    continue;
-  }
 
-  // 기존 문서 업데이트 또는 신규 업로드
-  try {
     const querySnapshot = await db.collection("roster")
       .where("Date", "==", docData.Date)
       .where("DC", "==", docData.DC)
@@ -211,12 +194,9 @@ for (let i = 1; i < values.length; i++) {
       await db.collection("roster").add(docData);
       console.log(`✅ ${i}행 신규 업로드 완료`);
     }
-  } catch (err) {
-    console.error(`❌ ${i}행 업로드 실패:`, err.message);
   }
-}
 
-console.log("🎉 Firestore 업로드 완료!");
+  console.log("🎉 Firestore 업로드 완료!");
 
   // ------------------- Google Sheets 업로드 -------------------
   function convertDate(input) {
