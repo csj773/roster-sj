@@ -49,12 +49,13 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
     waitUntil: "networkidle0",
   });
 
-  // ⬇️ 동적 환경변수 적용 (API 호출 시 INPUT_* 우선, 없으면 기본값 사용)
+  // 동적 환경변수 적용 (INPUT_* 우선, 없으면 기본값)
   const username = process.env.INPUT_PDC_USERNAME || process.env.PDC_USERNAME;
   const password = process.env.INPUT_PDC_PASSWORD || process.env.PDC_PASSWORD;
   const userId = process.env.INPUT_FIREBASE_UID || process.env.FIREBASE_UID || "unknown_uid";
-  const adminId = process.env.INPUT_ADMIN_FIREBASE_UID || process.env.ADMIN_FIREBASE_UID || "unknown_admin"; // ✅ 추가
+  const adminId = process.env.INPUT_ADMIN_FIREBASE_UID || process.env.ADMIN_FIREBASE_UID || "unknown_admin";
   const userName = username || "unknown_user";
+  let pdc_user_name = userName;
 
   if (!username || !password) {
     console.error("❌ PDC_USERNAME 또는 PDC_PASSWORD 누락");
@@ -154,10 +155,8 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
       docData[key] = row[idx] || "";
     });
     docData.userId = userId;
-    docData.adminId = adminId;   // ✅ 추가.
-    pdc_user_name = userName;
+    docData.adminId = adminId;
 
-    // Activity 없는 경우 삭제 처리
     if (!docData.Activity || docData.Activity.trim() === "") {
       try {
         const querySnapshot = await db.collection("roster")
@@ -228,6 +227,30 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
     return input;
   }
 
+  async function updateGoogleSheet(spreadsheetId, sheetName, values, maxRetries = 3) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        await sheetsApi.spreadsheets.values.update({
+          spreadsheetId,
+          range: `${sheetName}!A1`,
+          valueInputOption: "RAW",
+          requestBody: { values },
+        });
+        console.log(`✅ Google Sheets A1부터 덮어쓰기 완료 (시도 ${attempt})`);
+        break;
+      } catch (err) {
+        console.error(`❌ Google Sheets 업로드 실패 (시도 ${attempt}):`, err.message);
+        if (attempt < maxRetries) {
+          const delay = 1000 + Math.random() * 1000;
+          console.log(`⏳ ${delay.toFixed(0)}ms 후 재시도...`);
+          await new Promise(res => setTimeout(res, delay));
+        } else {
+          console.error("❌ 최대 재시도 횟수 도달, 업로드 실패");
+        }
+      }
+    }
+  }
+
   console.log("🚀 Google Sheets A1부터 덮어쓰기 시작...");
   const spreadsheetId = "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
   const sheetName = "Roster1";
@@ -237,16 +260,7 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
     newRow[0] = convertDate(row[0]);
     return newRow;
   });
-  try {
-    await sheetsApi.spreadsheets.values.update({
-      spreadsheetId,
-      range: `${sheetName}!A1`,
-      valueInputOption: "RAW",
-      requestBody: { values: sheetValues },
-    });
-    console.log("✅ Google Sheets A1부터 덮어쓰기 완료!");
-  } catch (err) {
-    console.error("❌ Google Sheets 업로드 실패:", err);
-  }
-})();
 
+  await updateGoogleSheet(spreadsheetId, sheetName, sheetValues);
+
+})();
