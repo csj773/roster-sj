@@ -139,11 +139,15 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
   // ------------------- Firestore 업로드 -------------------
 console.log("🚀 Firestore 업로드 시작");
 
-// FlutterFlow 로그인 UID (userId)와 Firestore Admin UID (adminId) 분리
-const flutterflowUid = process.env.INPUT_FIREBASE_UID || process.env.FIREBASE_UID || "unknown_user_uid";
-const firestoreAdminUid = process.env.INPUT_ADMIN_FIREBASE_UID || process.env.ADMIN_FIREBASE_UID || "your_admin_uid"; // <- 변경된 환경변수 이름
+// 환경변수에서 UID 가져오기 (Action에서 반드시 넘겨주는 값 사용)
+const flutterflowUid = process.env.INPUT_FIREBASE_UID || process.env.FIREBASE_UID;
+const firestoreAdminUid = process.env.INPUT_ADMIN_FIREBASE_UID || process.env.ADMIN_FIREBASE_UID;
 
-// Firestore 업로드 루프
+if (!flutterflowUid || !firestoreAdminUid) {
+  console.error("❌ FlutterFlow UID 또는 Firestore Admin UID 환경변수가 없습니다.");
+  process.exit(1);
+}
+
 const headerMapFirestore = {
   "C/I(L)": "CIL",
   "C/O(L)": "COL",
@@ -153,6 +157,7 @@ const headerMapFirestore = {
   "STA(Z)": "STAZ",
 };
 
+// Firestore 업로드 루프
 for (let i = 1; i < values.length; i++) {
   const row = values[i];
   const docData = {};
@@ -164,8 +169,8 @@ for (let i = 1; i < values.length; i++) {
   });
 
   // FlutterFlow UID와 Firestore Admin UID 명확히 할당
-  docData.userId = flutterflowUid;
-  docData.adminId = firestoreAdminUid;
+  docData.userId = flutterflowUid;      // FlutterFlow 로그인 UID
+  docData.adminId = firestoreAdminUid;  // Firestore Admin UID
 
   // Activity 없으면 기존 문서 삭제
   if (!docData.Activity || docData.Activity.trim() === "") {
@@ -210,6 +215,7 @@ for (let i = 1; i < values.length; i++) {
     console.error(`❌ ${i}행 업로드 실패:`, err.message);
   }
 }
+
 console.log("🎉 Firestore 업로드 완료!");
 
   // ------------------- Google Sheets 업로드 -------------------
