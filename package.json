@@ -3,9 +3,13 @@
   "version": "1.0.0",
   "description": "Air Premia Roster scraper with Firebase and Google Sheets integration",
   "type": "module",
-  "main": "roster.js",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
-    "start": "node roster.js"
+    "start": "node server.js",
+    "update-roster": "node -r dotenv/config roster.js"
   },
   "dependencies": {
     "body-parser": "^2.2.0",
@@ -13,11 +17,8 @@
     "dotenv": "^16.6.1",
     "express": "^5.1.0",
     "firebase-admin": "^13.5.0",
-    "googleapis": "^120.0.0",
+    "googleapis": "^131.0.0",
     "puppeteer": "^24.19.0"
-  },
-  "engines": {
-    "node": ">=18.0.0"
   },
   "keywords": [
     "puppeteer",
