@@ -2,40 +2,36 @@ name: Update Roster
 
 on:
   schedule:
-    - cron: "0 * * * *"   # 매 시간마다 실행
-  workflow_dispatch:       # 수동 실행 가능
+    - cron: "0 * * * *"
+  workflow_dispatch:
 
 permissions:
-  contents: write   # commit & push 권한 필요
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Install dependencies
-        run: npm install
+      - run: npm install
 
       - name: Run roster.js
         env:
-          INPUT_PDC_USERNAME: ${{ secrets.PDC_USERNAME }}          # FlutterFlow 계정 username
-          INPUT_PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}          # FlutterFlow 계정 password
+          INPUT_PDC_USERNAME: ${{ secrets.PDC_USERNAME }}
+          INPUT_PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
-          INPUT_FIREBASE_UID: ${{ secrets.FLUTTERFLOW_UID }}       # userId (FlutterFlow UID)
-          INPUT_ADMIN_FIREBASE_UID: ${{ secrets.FIREBASE_ADMIN_UID }} # adminId (Firestore Admin UID)
-        run: node -r dotenv/config roster.js   # ✅ dotenv fallback 적용
+          INPUT_FIREBASE_UID: ${{ secrets.FLUTTERFLOW_UID }}         # userId
+          INPUT_ADMIN_FIREBASE_UID: ${{ secrets.FIREBASE_ADMIN_UID }} # adminId
+        run: node -r dotenv/config roster.js
 
-      - name: Commit and Push roster.json & roster.csv
-        run: |
+      - run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add public/roster.json public/roster.csv
