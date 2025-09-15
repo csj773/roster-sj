@@ -13,25 +13,29 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - run: npm install
+      - name: Install dependencies
+        run: npm install
 
       - name: Run roster.js
         env:
-          INPUT_PDC_USERNAME: ${{ secrets.PDC_USERNAME }}
-          INPUT_PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}
+          PDC_USERNAME: ${{ secrets.PDC_USERNAME }}
+          PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
-          INPUT_FIREBASE_UID: ${{ secrets.FLUTTERFLOW_UID }}         # userId
-          INPUT_ADMIN_FIREBASE_UID: ${{ secrets.FIREBASE_ADMIN_UID }} # adminId
+          INPUT_FIREBASE_UID: ${{ secrets.FLUTTERFLOW_UID }}
+          INPUT_ADMIN_FIREBASE_UID: ${{ secrets.FIRESTORE_ADMIN_UID }}
         run: node -r dotenv/config roster.js
 
-      - run: |
+      - name: Commit and Push roster.json & roster.csv
+        run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add public/roster.json public/roster.csv
