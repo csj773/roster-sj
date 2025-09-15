@@ -2,8 +2,8 @@ name: Update Roster
 
 on:
   schedule:
-    - cron: "0 * * * *"
-  workflow_dispatch:
+    - cron: "0 * * * *"   # 매 시간마다 실행
+  workflow_dispatch:       # 수동 실행 가능
 
 permissions:
   contents: write
@@ -23,6 +23,17 @@ jobs:
 
       - name: Install dependencies
         run: npm install
+
+      - name: Validate Secrets
+        run: |
+          if [ -z "${{ secrets.PDC_USERNAME }}" ] || [ -z "${{ secrets.PDC_PASSWORD }}" ]; then
+            echo "❌ PDC_USERNAME 또는 PDC_PASSWORD 누락"
+            exit 1
+          fi
+          if [ -z "${{ secrets.FLUTTERFLOW_UID }}" ] || [ -z "${{ secrets.FIRESTORE_ADMIN_UID }}" ]; then
+            echo "❌ FLUTTERFLOW_UID 또는 FIRESTORE_ADMIN_UID 누락"
+            exit 1
+          fi
 
       - name: Run roster.js
         env:
