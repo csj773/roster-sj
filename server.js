@@ -20,12 +20,32 @@ app.post("/runRoster", async (req, res) => {
     }
 
     // FlutterFlow에서 username/password 전달 안 하면 환경변수 사용
-    const username = req.body.username || process.env.INPUT_PDC_USERNAME || process.env.PDC_USERNAME;
-    const password = req.body.password || process.env.INPUT_PDC_PASSWORD || process.env.PDC_PASSWORD;
-    const firebaseUid = req.body.firebaseUid || process.env.FIREBASE_UID;
+    const username =
+      req.body.username ||
+      process.env.INPUT_PDC_USERNAME ||
+      process.env.PDC_USERNAME;
+
+    const password =
+      req.body.password ||
+      process.env.INPUT_PDC_PASSWORD ||
+      process.env.PDC_PASSWORD;
+
+    const firebaseUid =
+      req.body.firebaseUid ||
+      process.env.INPUT_FIREBASE_UID ||
+      process.env.FIREBASE_UID ||
+      "unknown_uid";
+
+    const adminFirebaseUid =
+      req.body.adminFirebaseUid ||
+      process.env.INPUT_ADMIN_FIREBASE_UID ||
+      process.env.ADMIN_FIREBASE_UID ||
+      "unknown_admin_uid";
 
     if (!username || !password) {
-      return res.status(400).json({ error: "PDC 계정이 입력되지 않았습니다." });
+      return res
+        .status(400)
+        .json({ error: "PDC 계정(username/password)이 입력되지 않았습니다." });
     }
 
     // roster.js 실행
@@ -33,7 +53,8 @@ app.post("/runRoster", async (req, res) => {
       ...process.env,
       INPUT_PDC_USERNAME: username,
       INPUT_PDC_PASSWORD: password,
-      FIREBASE_UID: firebaseUid
+      FIREBASE_UID: firebaseUid,
+      ADMIN_FIREBASE_UID: adminFirebaseUid,
     };
 
     const child = spawn("node", ["./roster.js"], { env });
@@ -48,7 +69,7 @@ app.post("/runRoster", async (req, res) => {
       res.json({
         exitCode: code,
         stdout: out.replace(new RegExp(escapeRegex(username), "g"), "[REDACTED]"),
-        stderr: err || ""
+        stderr: err || "",
       });
     });
   } catch (e) {
