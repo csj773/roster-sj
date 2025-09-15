@@ -123,8 +123,10 @@ if (!flutterflowUid || !firestoreAdminUid) {
     const row=values[i];
     const docData={};
     headers.forEach((h,idx)=>{docData[headerMapFirestore[h]||h]=row[idx]||"";});
-    docData.userId=flutterflowUid;
-    docData.adminId=firestoreAdminUid;
+    // 여기에 UID와 이름 추가
+     docData.userId = flutterflowUid;      // FlutterFlow 로그인 UID
+     docData.adminId = firestoreAdminUid;  // Firestore Admin UID
+     docData.pdc_user_name = username;     // PDC 계정 이    
 
     if(!docData.Activity||docData.Activity.trim()===""){
       const querySnapshot=await db.collection("roster")
