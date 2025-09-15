@@ -141,7 +141,7 @@ console.log("🚀 Firestore 업로드 시작");
 
 // FlutterFlow 로그인 UID (userId)와 Firestore Admin UID (adminId) 분리
 const flutterflowUid = process.env.INPUT_FIREBASE_UID || process.env.FIREBASE_UID || "unknown_user_uid";
-const firestoreAdminUid = process.env.INPUT_ADMIN_FIREBASE_UID || process.env.ADMIN_FIREBASE_UID || "your_admin_uid";
+const firestoreAdminUid = process.env.INPUT_ADMIN_FIREBASE_UID || process.env.ADMIN_FIREBASE_UID || "your_admin_uid"; // <- 변경된 환경변수 이름
 
 // Firestore 업로드 루프
 const headerMapFirestore = {
