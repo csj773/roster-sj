@@ -26,13 +26,13 @@ jobs:
 
       - name: Run roster.js
         env:
-          PDC_USERNAME: ${{ secrets.PDC_USERNAME }}
-          PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}
+          INPUT_PDC_USERNAME: ${{ secrets.PDC_USERNAME }}          # FlutterFlow 계정 username
+          INPUT_PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}          # FlutterFlow 계정 password
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}  # 🔑 추가
-          FIREBASE_UID: ${{ secrets.FIREBASE_UID }}   # admin UID
-        
-        run: node -r dotenv/config roster.js   # ✅ .env fallback 적용: 
+          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+          INPUT_FIREBASE_UID: ${{ secrets.FLUTTERFLOW_UID }}       # userId (FlutterFlow UID)
+          INPUT_ADMIN_FIREBASE_UID: ${{ secrets.FIREBASE_ADMIN_UID }} # adminId (Firestore Admin UID)
+        run: node -r dotenv/config roster.js   # ✅ dotenv fallback 적용
 
       - name: Commit and Push roster.json & roster.csv
         run: |
