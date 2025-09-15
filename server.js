@@ -5,9 +5,9 @@ import "dotenv/config";
 const app = express();
 app.use(express.json());
 
-const API_KEY = process.env.API_KEY || "change_me";
+const API_KEY = process.env.API_KEY || "change_me"; // 요청 인증용
 
-// 정규식 escape 함수
+// 정규식 escape (로그 출력용)
 function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -19,35 +19,16 @@ app.post("/runRoster", async (req, res) => {
       return res.status(401).json({ error: "Unauthorized" });
     }
 
-    // FlutterFlow 계정 정보
-    const username =
-      req.body.username ||
-      process.env.INPUT_PDC_USERNAME ||
-      process.env.PDC_USERNAME;
-    const password =
-      req.body.password ||
-      process.env.INPUT_PDC_PASSWORD ||
-      process.env.PDC_PASSWORD;
-
-    // UID
-    const firebaseUid =
-      req.body.firebaseUid ||
-      process.env.INPUT_FIREBASE_UID ||
-      process.env.FIREBASE_UID;
-    const adminFirebaseUid =
-      req.body.adminFirebaseUid ||
-      process.env.INPUT_ADMIN_FIREBASE_UID ||
-      process.env.ADMIN_FIREBASE_UID;
+    const username = req.body.username || process.env.INPUT_PDC_USERNAME || process.env.PDC_USERNAME;
+    const password = req.body.password || process.env.INPUT_PDC_PASSWORD || process.env.PDC_PASSWORD;
+    const firebaseUid = req.body.firebaseUid || process.env.INPUT_FIREBASE_UID || process.env.FIREBASE_UID;
+    const adminFirebaseUid = req.body.adminFirebaseUid || process.env.INPUT_ADMIN_FIREBASE_UID || process.env.ADMIN_FIREBASE_UID;
 
     if (!username || !password) {
-      return res
-        .status(400)
-        .json({ error: "PDC 계정(username/password)이 입력되지 않았습니다." });
+      return res.status(400).json({ error: "PDC 계정(username/password)이 입력되지 않았습니다." });
     }
     if (!firebaseUid || !adminFirebaseUid) {
-      return res
-        .status(400)
-        .json({ error: "Firebase UID(userId) 또는 Admin UID(adminId)가 입력되지 않았습니다." });
+      return res.status(400).json({ error: "FlutterFlow UID 또는 Admin UID가 입력되지 않았습니다." });
     }
 
     // roster.js 실행
@@ -74,6 +55,7 @@ app.post("/runRoster", async (req, res) => {
         stderr: err || "",
       });
     });
+
   } catch (e) {
     console.error("❌ 서버 실행 에러:", e);
     res.status(500).json({ error: e.message });
