@@ -32,7 +32,7 @@ jobs:
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}  # 🔑 추가
           FIREBASE_UID: ${{ secrets.FIREBASE_UID }}   # admin UID
         
-        run: node roster.js
+        run: node -r dotenv/config roster.js   # ✅ .env fallback 적용: 
 
       - name: Commit and Push roster.json & roster.csv
         run: |
