@@ -53,6 +53,7 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
   const username = process.env.INPUT_PDC_USERNAME || process.env.PDC_USERNAME;
   const password = process.env.INPUT_PDC_PASSWORD || process.env.PDC_PASSWORD;
   const userId = process.env.INPUT_FIREBASE_UID || process.env.FIREBASE_UID || "unknown_uid";
+  const adminId = process.env.INPUT_ADMIN_FIREBASE_UID || process.env.ADMIN_FIREBASE_UID || "unknown_admin"; // ✅ 추가
   const userName = username || "unknown_user";
 
   if (!username || !password) {
@@ -153,7 +154,8 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
       docData[key] = row[idx] || "";
     });
     docData.userId = userId;
-    docData.pdc_user_name = userName;
+    docData.adminId = adminId;   // ✅ 추가.
+    pdc_user_name = userName;
 
     // Activity 없는 경우 삭제 처리
     if (!docData.Activity || docData.Activity.trim() === "") {
