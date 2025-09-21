@@ -21,14 +21,10 @@ jobs:
         with:
           node-version: "20"
 
-      # 3. Chromium 설치
-      - name: Install Chromium
-        run: sudo apt-get update && sudo apt-get install -y chromium-browser
-
-      # 4. 의존성 설치
+      # 3. 의존성 설치
       - run: npm install
 
-      # 5. roster.js 실행
+      # 4. roster.js 실행
       - name: Run roster.js
         env:
           CHROME_PATH: "/usr/bin/chromium-browser"  # Puppeteer 실행할 Chromium 경로
@@ -40,7 +36,7 @@ jobs:
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
         run: node -r dotenv/config roster.js
 
-      # 6. 변경된 파일 커밋 & 푸시
+      # 5. 변경된 파일 커밋 & 푸시
       - name: Commit & Push roster.json & roster.csv
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
