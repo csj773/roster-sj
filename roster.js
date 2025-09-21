@@ -116,47 +116,71 @@ if (!flutterflowUid || !firestoreAdminUid) {
   await browser.close();
 
   // ------------------- Firestore 업로드 -------------------
-  console.log("🚀 Firestore 업로드 시작");
-  const headerMapFirestore = { "C/I(L)":"CIL","C/O(L)":"COL","STD(L)":"STDL","STD(Z)":"STDZ","STA(L)":"STAL","STA(Z)":"STAZ" };
+console.log("🚀 Firestore 업로드 시작");
 
-  for (let i=1;i<values.length;i++){
-    const row=values[i];
-    const docData={};
-    headers.forEach((h,idx)=>{docData[headerMapFirestore[h]||h]=row[idx]||"";});
-    // 여기에 UID와 이름 추가
-     docData.userId = flutterflowUid;      // FlutterFlow 로그인 UID
-     docData.adminId = firestoreAdminUid;  // Firestore Admin UID
-     docData.pdc_user_name = username;     // PDC 계정 이    
+const headerMapFirestore = {
+  "C/I(L)": "CIL",
+  "C/O(L)": "COL",
+  "STD(L)": "STDL",
+  "STD(Z)": "STDZ",
+  "STA(L)": "STAL",
+  "STA(Z)": "STAZ",
+};
 
-    if(!docData.Activity||docData.Activity.trim()===""){
-      const querySnapshot=await db.collection("roster")
-        .where("Date","==",docData.Date)
-        .where("userId","==",flutterflowUid).get();
-      for(const doc of querySnapshot.docs) await db.collection("roster").doc(doc.id).delete();
-      continue;
-    }
+for (let i = 1; i < values.length; i++) {
+  const row = values[i];
+  const docData = {};
 
-    const querySnapshot=await db.collection("roster")
-      .where("Date","==",docData.Date)
-      .where("DC","==",docData.DC)
-      .where("F","==",docData.F)
-      .where("From","==",docData.From)
-      .where("To","==",docData.To)
-      .where("AcReg","==",docData.AcReg)
-      .where("Crew","==",docData.Crew)
-      .where("userId","==",flutterflowUid)
+  headers.forEach((h, idx) => {
+    docData[headerMapFirestore[h] || h] = row[idx] || "";
+  });
+
+  // UID와 이름 추가
+  docData.userId = flutterflowUid;      // FlutterFlow 로그인 UID
+  docData.adminId = firestoreAdminUid;  // Firestore Admin UID
+  docData.pdc_user_name = username;     // PDC 계정 이름
+
+  // Activity 비어있으면 해당 날짜 기존 데이터 삭제 후 continue
+  if (!docData.Activity || docData.Activity.trim() === "") {
+    const querySnapshot = await db
+      .collection("roster")
+      .where("Date", "==", docData.Date)
+      .where("userId", "==", flutterflowUid)
       .get();
 
-    if(!querySnapshot.empty){
-      for(const doc of querySnapshot.docs) await db.collection("roster").doc(doc.id).set(docData,{merge:true});
-      console.log(`🔄 ${i}행 기존 문서 업데이트 완료`);
-    } else {
-      await db.collection("roster").add(docData);
-      console.log(`✅ ${i}행 신규 업로드 완료`);
+    for (const doc of querySnapshot.docs) {
+      await db.collection("roster").doc(doc.id).delete();
     }
+    continue;
   }
-  console.log("🎉 Firestore 업로드 완료!");
 
+  // 🔑 중복 체크 시 userId는 제외 (즉, 같은 스케줄이라도 userId 다르면 신규 저장됨)
+  const querySnapshot = await db
+    .collection("roster")
+    .where("Date", "==", docData.Date)
+    .where("DC", "==", docData.DC)
+    .where("F", "==", docData.F)
+    .where("From", "==", docData.From)
+    .where("To", "==", docData.To)
+    .where("AcReg", "==", docData.AcReg)
+    .where("Crew", "==", docData.Crew)
+    .get();
+
+  if (!querySnapshot.empty) {
+    for (const doc of querySnapshot.docs) {
+      // 동일 스케줄이면 업데이트
+      await db.collection("roster").doc(doc.id).set(docData, { merge: true });
+    }
+    console.log(`🔄 ${i}행 기존 문서 업데이트 완료`);
+  } else {
+    // userId 다르면 신규 저장됨
+    await db.collection("roster").add(docData);
+    console.log(`✅ ${i}행 신규 업로드 완료`);
+  }
+}
+
+console.log("🎉 Firestore 업로드 완료!");
+  
   // ------------------- Google Sheets 업로드 -------------------
   function convertDate(input){
     if(!input||typeof input!=="string") return input;
