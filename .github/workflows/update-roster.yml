@@ -2,8 +2,8 @@ name: Update Roster
 
 on:
   schedule:
-    - cron: "0 * * * *"   # 매 시간마다 실행
-  workflow_dispatch:       # 수동 실행 가능
+    - cron: "0 * * * *"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -13,28 +13,25 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ------------------- 저장소 체크아웃 -------------------
+      # 1. 코드 체크아웃
       - uses: actions/checkout@v4
 
-      # ------------------- Node.js 셋업 -------------------
+      # 2. Node.js 설치
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      # ------------------- 시스템 Chromium 설치 -------------------
-      - name: Install system Chromium
+      # 3. Chromium 설치
+      - name: Install Chromium
         run: sudo apt-get update && sudo apt-get install -y chromium-browser
 
-      # ------------------- Node.js 의존성 설치 -------------------
-      - name: Install dependencies
-        run: npm install
-        env:
-          PUPPETEER_SKIP_DOWNLOAD: "true"  # Puppeteer 브라우저 다운로드 건너뛰기
+      # 4. 의존성 설치
+      - run: npm install
 
-      # ------------------- roster.js 실행 -------------------
+      # 5. roster.js 실행
       - name: Run roster.js
         env:
-          CHROME_PATH: "/usr/bin/chromium-browser"  # Puppeteer가 시스템 Chromium 사용
+          CHROME_PATH: "/usr/bin/chromium-browser"  # Puppeteer 실행할 Chromium 경로
           INPUT_PDC_USERNAME: ${{ secrets.PDC_USERNAME }}
           INPUT_PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}
           INPUT_FIREBASE_UID: ${{ secrets.FLUTTERFLOW_UID }}
@@ -43,7 +40,7 @@ jobs:
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
         run: node -r dotenv/config roster.js
 
-      # ------------------- Git commit & push -------------------
+      # 6. 변경된 파일 커밋 & 푸시
       - name: Commit & Push roster.json & roster.csv
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
