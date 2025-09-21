@@ -2,8 +2,8 @@ name: Update Roster
 
 on:
   schedule:
-    - cron: "0 * * * *"  # 매 시간마다 실행
-  workflow_dispatch:       # 수동 실행 가능
+    - cron: "0 * * * *"  # 매 시간 실행
+  workflow_dispatch:      # 수동 실행 가능
 
 permissions:
   contents: write
@@ -36,7 +36,7 @@ jobs:
           fi
 
       - name: Run roster.js
-        # FlutterFlow API 호출 시 env 전달 가능 → 존재하면 우선 사용
+        # FlutterFlow API 호출 시 전달 값이 있으면 우선 사용
         env:
           INPUT_PDC_USERNAME: ${{ secrets.PDC_USERNAME }}
           INPUT_PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}
