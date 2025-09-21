@@ -1,53 +1,49 @@
 import puppeteer from "puppeteer";
 import fs from "fs";
 import path from "path";
+import "dotenv/config";
 import admin from "firebase-admin";
 import { google } from "googleapis";
 
+// ------------------- Config Loader -------------------
+const getConfigValue = (secretName, envName) => {
+  if (process.env[secretName]) return process.env[secretName]; // ✅ Secrets 우선
+  if (process.env[envName]) return process.env[envName];       // ✅ 없으면 env fallback
+  return null;
+};
+
 // ------------------- Firebase 초기화 -------------------
-if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
+const firebaseServiceAccount = getConfigValue("INPUT_FIREBASE_SERVICE_ACCOUNT", "FIREBASE_SERVICE_ACCOUNT");
+if (!firebaseServiceAccount) {
   console.error("❌ FIREBASE_SERVICE_ACCOUNT 누락");
   process.exit(1);
 }
-let serviceAccount;
-try {
-  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-  if (serviceAccount.private_key) {
-    serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
-  }
-} catch (err) {
-  console.error("❌ Firebase Service Account JSON 파싱 실패:", err.message);
-  process.exit(1);
-}
-if (!admin.apps.length) {
-  admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-}
+const serviceAccount = JSON.parse(firebaseServiceAccount);
+if (serviceAccount.private_key) serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
+if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
 
 // ------------------- Google Sheets 초기화 -------------------
-if (!process.env.GOOGLE_SHEETS_CREDENTIALS) {
+const googleSheetsCreds = getConfigValue("INPUT_GOOGLE_SHEETS_CREDENTIALS", "GOOGLE_SHEETS_CREDENTIALS");
+if (!googleSheetsCreds) {
   console.error("❌ GOOGLE_SHEETS_CREDENTIALS 누락");
   process.exit(1);
 }
-let sheetsCredentials;
-try {
-  sheetsCredentials = JSON.parse(process.env.GOOGLE_SHEETS_CREDENTIALS);
-  if (sheetsCredentials.private_key) {
-    sheetsCredentials.private_key = sheetsCredentials.private_key.replace(/\\n/g, "\n");
-  }
-} catch (err) {
-  console.error("❌ Google Sheets Credentials JSON 파싱 실패:", err.message);
-  process.exit(1);
-}
+const sheetsCredentials = JSON.parse(googleSheetsCreds);
+if (sheetsCredentials.private_key) sheetsCredentials.private_key = sheetsCredentials.private_key.replace(/\\n/g, "\n");
 const sheetsAuth = new google.auth.GoogleAuth({
   credentials: sheetsCredentials,
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
 const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
 
-// ------------------- UID 체크 -------------------
-const flutterflowUid = process.env.INPUT_FIREBASE_UID;
-const firestoreAdminUid = process.env.INPUT_ADMIN_FIREBASE_UID;
+// ------------------- UID / API Config -------------------
+const flutterflowUid = getConfigValue("INPUT_FIREBASE_UID", "FIREBASE_UID");
+const firestoreAdminUid = getConfigValue("INPUT_ADMIN_FIREBASE_UID", "ADMIN_FIREBASE_UID");
+const apiBaseUrl = getConfigValue("INPUT_API_BASE_URL", "API_BASE_URL") || "https://roster-sj.onrender.com";
+const apiKey = getConfigValue("INPUT_API_KEY", "API_KEY") || "change_me";
+const firestoreCollection = getConfigValue("INPUT_FIRESTORE_COLLECTION", "FIRESTORE_COLLECTION") || "roster";
+
 if (!flutterflowUid || !firestoreAdminUid) {
   console.error("❌ FlutterFlow UID 또는 Firestore Admin UID 누락");
   process.exit(1);
@@ -55,24 +51,23 @@ if (!flutterflowUid || !firestoreAdminUid) {
 
 // ------------------- Puppeteer 시작 -------------------
 (async () => {
-  const username = process.env.INPUT_PDC_USERNAME;
-  const password = process.env.INPUT_PDC_PASSWORD;
+  const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox", "--disable-setuid-sandbox"] });
+  const page = await browser.newPage();
+
+  const username = getConfigValue("INPUT_PDC_USERNAME", "PDC_USERNAME");
+  const password = getConfigValue("INPUT_PDC_PASSWORD", "PDC_PASSWORD");
   if (!username || !password) {
     console.error("❌ PDC_USERNAME 또는 PDC_PASSWORD 누락");
+    await browser.close();
     process.exit(1);
   }
 
-  const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox","--disable-setuid-sandbox"] });
-  const page = await browser.newPage();
-
-  console.log(`👉 PDC 로그인 시도 중... [uid=${flutterflowUid}]`);
+  console.log(`👉 로그인 시도 중... [uid=${flutterflowUid}]`);
   await page.goto("https://pdc-web.premia.kr/CrewConnex/default.aspx", { waitUntil: "networkidle0" });
   await page.type("#ctl00_Main_userId_edit", username, { delay: 50 });
   await page.type("#ctl00_Main_password_edit", password, { delay: 50 });
   await Promise.all([page.click("#ctl00_Main_login_btn"), page.waitForNavigation({ waitUntil: "networkidle0" })]);
   console.log("✅ 로그인 성공");
-
-  
 
   // ------------------- Roster 메뉴 이동 -------------------
   const rosterLink = await page.evaluateHandle(() => {
@@ -139,20 +134,20 @@ if (!flutterflowUid || !firestoreAdminUid) {
     const row=values[i];
     const docData={};
     headers.forEach((h,idx)=>{docData[headerMapFirestore[h]||h]=row[idx]||"";});
-    // 여기에 UID와 이름 추가
-     docData.userId = flutterflowUid;      // FlutterFlow 로그인 UID
-     docData.adminId = firestoreAdminUid;  // Firestore Admin UID
-     docData.pdc_user_name = username;     // PDC 계정 이    
+    // UID & 계정 정보
+    docData.userId = flutterflowUid;
+    docData.adminId = firestoreAdminUid;
+    docData.pdc_user_name = username;
 
     if(!docData.Activity||docData.Activity.trim()===""){
-      const querySnapshot=await db.collection("roster")
+      const querySnapshot=await db.collection(firestoreCollection)
         .where("Date","==",docData.Date)
         .where("userId","==",flutterflowUid).get();
-      for(const doc of querySnapshot.docs) await db.collection("roster").doc(doc.id).delete();
+      for(const doc of querySnapshot.docs) await db.collection(firestoreCollection).doc(doc.id).delete();
       continue;
     }
 
-    const querySnapshot=await db.collection("roster")
+    const querySnapshot=await db.collection(firestoreCollection)
       .where("Date","==",docData.Date)
       .where("DC","==",docData.DC)
       .where("F","==",docData.F)
@@ -164,10 +159,10 @@ if (!flutterflowUid || !firestoreAdminUid) {
       .get();
 
     if(!querySnapshot.empty){
-      for(const doc of querySnapshot.docs) await db.collection("roster").doc(doc.id).set(docData,{merge:true});
+      for(const doc of querySnapshot.docs) await db.collection(firestoreCollection).doc(doc.id).set(docData,{merge:true});
       console.log(`🔄 ${i}행 기존 문서 업데이트 완료`);
     } else {
-      await db.collection("roster").add(docData);
+      await db.collection(firestoreCollection).add(docData);
       console.log(`✅ ${i}행 신규 업로드 완료`);
     }
   }
