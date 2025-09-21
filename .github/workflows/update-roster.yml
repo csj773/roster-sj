@@ -36,13 +36,14 @@ jobs:
           fi
 
       - name: Run roster.js
+        # FlutterFlow API 호출 시 env 전달 가능 → 존재하면 우선 사용
         env:
           INPUT_PDC_USERNAME: ${{ secrets.PDC_USERNAME }}
           INPUT_PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
           INPUT_FIREBASE_UID: ${{ secrets.FLUTTERFLOW_UID }}
           INPUT_ADMIN_FIREBASE_UID: ${{ secrets.FIRESTORE_ADMIN_UID }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
         run: node -r dotenv/config roster.js
 
       - name: Commit and Push roster.json & roster.csv
