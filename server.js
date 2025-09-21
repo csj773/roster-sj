@@ -39,12 +39,13 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
 // ------------------- Express POST /runRoster -------------------
 app.post("/runRoster", async (req, res) => {
   try {
+    // API Key 인증
     const auth = req.headers["x-api-key"];
     if (!auth || auth !== API_KEY) {
       return res.status(401).json({ error: "Unauthorized" });
     }
 
-    // FlutterFlow POST → env fallback
+    // FlutterFlow POST > env fallback
     const username = req.body.username || process.env.PDC_USERNAME;
     const password = req.body.password || process.env.PDC_PASSWORD;
     const flutterflowUid = req.body.firebaseUid || process.env.FLUTTERFLOW_UID;
@@ -72,9 +73,12 @@ app.post("/runRoster", async (req, res) => {
     ]);
     console.log("✅ 로그인 성공");
 
-    // --- 기존 roster.js 내용 그대로 사용 가능 ---
-    // roster 테이블 추출 → JSON/CSV 저장 → Firestore 업로드 → Google Sheets 업로드
-    // username/password/flutterflowUid를 사용하고, 필요시 fallback으로 env 사용
+    // ------------------- 여기서 기존 roster.js 내용 수행 -------------------
+    // 1. Roster 테이블 추출
+    // 2. JSON / CSV 저장
+    // 3. Firestore 업로드 (userId/flutterflowUid, adminId/firestoreAdminUid 포함)
+    // 4. Google Sheets 업로드
+    // FlutterFlow에서 보내온 값 사용 가능, 없으면 env fallback
 
     await browser.close();
     res.json({ message: "Roster 작업 완료" });
