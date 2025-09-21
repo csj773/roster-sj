@@ -73,7 +73,7 @@ app.post("/runRoster", async (req, res) => {
     ]);
     console.log("✅ 로그인 성공");
 
-    // ------------------- 여기서 기존 roster.js 내용 수행 -------------------
+    // ------------------- 기존 roster.js 내용 수행 -------------------
     // 1. Roster 테이블 추출
     // 2. JSON / CSV 저장
     // 3. Firestore 업로드 (userId/flutterflowUid, adminId/firestoreAdminUid 포함)
