@@ -28,11 +28,19 @@ const sheetsAuth = new google.auth.GoogleAuth({
 });
 const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
 
-// ------------------- UID 체크 -------------------
-const flutterflowUid = process.env.INPUT_FIREBASE_UID;
-const firestoreAdminUid = process.env.INPUT_ADMIN_FIREBASE_UID;
+// ------------------- UID 및 PDC 계정 체크 -------------------
+// FlutterFlow에서 전달된 값 우선, 없으면 env fallback
+const flutterflowUid = process.env.INPUT_FIREBASE_UID_FF || process.env.INPUT_FIREBASE_UID;
+const firestoreAdminUid = process.env.INPUT_ADMIN_FIREBASE_UID_FF || process.env.INPUT_ADMIN_FIREBASE_UID;
+const username = process.env.INPUT_PDC_USERNAME_FF || process.env.INPUT_PDC_USERNAME;
+const password = process.env.INPUT_PDC_PASSWORD_FF || process.env.INPUT_PDC_PASSWORD;
+
 if (!flutterflowUid || !firestoreAdminUid) {
   console.error("❌ FlutterFlow UID 또는 Firestore Admin UID 누락");
+  process.exit(1);
+}
+if (!username || !password) {
+  console.error("❌ PDC_USERNAME 또는 PDC_PASSWORD 누락");
   process.exit(1);
 }
 
@@ -41,22 +49,12 @@ if (!flutterflowUid || !firestoreAdminUid) {
   const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox", "--disable-setuid-sandbox"] });
   const page = await browser.newPage();
 
-  const username = process.env.INPUT_PDC_USERNAME;
-  const password = process.env.INPUT_PDC_PASSWORD;
-  if (!username || !password) {
-    console.error("❌ PDC_USERNAME 또는 PDC_PASSWORD 누락");
-    await browser.close();
-    process.exit(1);
-  }
-
   console.log(`👉 로그인 시도 중... [uid=${flutterflowUid}]`);
   await page.goto("https://pdc-web.premia.kr/CrewConnex/default.aspx", { waitUntil: "networkidle0" });
   await page.type("#ctl00_Main_userId_edit", username, { delay: 50 });
   await page.type("#ctl00_Main_password_edit", password, { delay: 50 });
   await Promise.all([page.click("#ctl00_Main_login_btn"), page.waitForNavigation({ waitUntil: "networkidle0" })]);
   console.log("✅ 로그인 성공");
-
- 
 
   // ------------------- Roster 메뉴 이동 -------------------
   const rosterLink = await page.evaluateHandle(() => {
@@ -123,10 +121,9 @@ if (!flutterflowUid || !firestoreAdminUid) {
     const row=values[i];
     const docData={};
     headers.forEach((h,idx)=>{docData[headerMapFirestore[h]||h]=row[idx]||"";});
-    // 여기에 UID와 이름 추가
-     docData.userId = flutterflowUid;      // FlutterFlow 로그인 UID
-     docData.adminId = firestoreAdminUid;  // Firestore Admin UID
-     docData.pdc_user_name = username;     // PDC 계정 이    
+    docData.userId = flutterflowUid;
+    docData.adminId = firestoreAdminUid;
+    docData.pdc_user_name = username;
 
     if(!docData.Activity||docData.Activity.trim()===""){
       const querySnapshot=await db.collection("roster")
