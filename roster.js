@@ -3,10 +3,11 @@ import fs from "fs";
 import path from "path";
 import admin from "firebase-admin";
 import { google } from "googleapis";
+import "dotenv/config";
 
 // ------------------- Firebase 초기화 -------------------
 if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
-  console.error("❌ FIREBASE_SERVICE_ACCOUNT 환경변수가 없습니다.");
+  console.error("❌ FIREBASE_SERVICE_ACCOUNT 누락");
   process.exit(1);
 }
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
@@ -18,12 +19,13 @@ const db = admin.firestore();
 
 // ------------------- Google Sheets 초기화 -------------------
 if (!process.env.GOOGLE_SHEETS_CREDENTIALS) {
-  console.error("❌ GOOGLE_SHEETS_CREDENTIALS 환경변수가 없습니다.");
+  console.error("❌ GOOGLE_SHEETS_CREDENTIALS 누락");
   process.exit(1);
 }
 const sheetsCredentials = JSON.parse(process.env.GOOGLE_SHEETS_CREDENTIALS);
 if (sheetsCredentials.private_key)
   sheetsCredentials.private_key = sheetsCredentials.private_key.replace(/\\n/g, "\n");
+
 const sheetsAuth = new google.auth.GoogleAuth({
   credentials: sheetsCredentials,
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
@@ -33,20 +35,19 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
 // ------------------- 환경변수 우선순위 -------------------
 const username = process.env.INPUT_PDC_USERNAME || process.env.PDC_USERNAME;
 const password = process.env.INPUT_PDC_PASSWORD || process.env.PDC_PASSWORD;
-const flutterflowUid =
-  process.env.INPUT_FIREBASE_UID || process.env.FLUTTERFLOW_UID;
-const firestoreAdminUid =
-  process.env.INPUT_ADMIN_FIREBASE_UID || process.env.FIRESTORE_ADMIN_UID;
+const flutterflowUid = process.env.INPUT_FIREBASE_UID || process.env.FLUTTERFLOW_UID;
+const firestoreAdminUid = process.env.INPUT_ADMIN_FIREBASE_UID || process.env.FIRESTORE_ADMIN_UID;
 
 if (!username || !password) {
-  console.error("❌ PDC_USERNAME 또는 PDC_PASSWORD가 없습니다.");
+  console.error("❌ PDC_USERNAME 또는 PDC_PASSWORD 누락");
   process.exit(1);
 }
 if (!flutterflowUid || !firestoreAdminUid) {
-  console.error("❌ FlutterFlow UID 또는 Firestore Admin UID가 없습니다.");
+  console.error("❌ FlutterFlow UID 또는 Firestore Admin UID 누락");
   process.exit(1);
 }
 
+// ------------------- Puppeteer 실행 -------------------
 (async () => {
   const browser = await puppeteer.launch({
     headless: "new",
@@ -55,9 +56,7 @@ if (!flutterflowUid || !firestoreAdminUid) {
   const page = await browser.newPage();
 
   console.log(`👉 로그인 시도 중... [uid=${flutterflowUid}]`);
-  await page.goto("https://pdc-web.premia.kr/CrewConnex/default.aspx", {
-    waitUntil: "networkidle0",
-  });
+  await page.goto("https://pdc-web.premia.kr/CrewConnex/default.aspx", { waitUntil: "networkidle0" });
   await page.type("#ctl00_Main_userId_edit", username, { delay: 50 });
   await page.type("#ctl00_Main_password_edit", password, { delay: 50 });
   await Promise.all([
@@ -121,29 +120,37 @@ if (!flutterflowUid || !firestoreAdminUid) {
     "utf-8"
   );
   console.log("✅ roster.json / roster.csv 저장 완료");
+
   await browser.close();
 
   // ------------------- Firestore 업로드 -------------------
   console.log("🚀 Firestore 업로드 시작");
   const headerMapFirestore = { "C/I(L)":"CIL","C/O(L)":"COL","STD(L)":"STDL","STD(Z)":"STDZ","STA(L)":"STAL","STA(Z)":"STAZ" };
 
-  for (let i=1;i<values.length;i++){
-    const row=values[i];
-    const docData={};
-    headers.forEach((h,idx)=>{docData[headerMapFirestore[h]||h]=row[idx]||"";});
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const docData = {};
+    headers.forEach((h, idx) => {
+      docData[headerMapFirestore[h] || h] = row[idx] || "";
+    });
+
     docData.userId = flutterflowUid;
     docData.adminId = firestoreAdminUid;
     docData.pdc_user_name = username;
 
-    if(!docData.Activity||docData.Activity.trim()===""){
-      const querySnapshot = await db.collection("roster")
+    if (!docData.Activity || docData.Activity.trim() === "") {
+      const querySnapshot = await db
+        .collection("roster")
         .where("Date","==",docData.Date)
-        .where("userId","==",flutterflowUid).get();
-      for(const doc of querySnapshot.docs) await db.collection("roster").doc(doc.id).delete();
+        .where("userId","==",flutterflowUid)
+        .get();
+      for (const doc of querySnapshot.docs) await db.collection("roster").doc(doc.id).delete();
       continue;
     }
 
-    const querySnapshot = await db.collection("roster")
+    // 🔑 userId 다른 경우 신규 저장
+    const querySnapshot = await db
+      .collection("roster")
       .where("Date","==",docData.Date)
       .where("DC","==",docData.DC)
       .where("F","==",docData.F)
@@ -153,8 +160,10 @@ if (!flutterflowUid || !firestoreAdminUid) {
       .where("Crew","==",docData.Crew)
       .get();
 
-    if(!querySnapshot.empty){
-      for(const doc of querySnapshot.docs) await db.collection("roster").doc(doc.id).set(docData,{merge:true});
+    if (!querySnapshot.empty) {
+      for (const doc of querySnapshot.docs) {
+        await db.collection("roster").doc(doc.id).set(docData, { merge: true });
+      }
       console.log(`🔄 ${i}행 기존 문서 업데이트 완료`);
     } else {
       await db.collection("roster").add(docData);
@@ -163,55 +172,53 @@ if (!flutterflowUid || !firestoreAdminUid) {
   }
   console.log("🎉 Firestore 업로드 완료!");
 
-  // ------------------- Google Sheets 업데이트 -------------------
-  function convertDate(input){
-    if(!input||typeof input!=="string") return input;
-    const s=input.trim();
-    const parts=s.split(/\s+/);
-    if(parts.length!==2) return input;
-    const token=parts[0];
-    const dayStr=parts[1].replace(/^0+/,"")||"0";
-    if(!/^\d+$/.test(dayStr)) return input;
-    const day=parseInt(dayStr,10);
-    const now=new Date();
-    const year=now.getFullYear();
-    const months={jan:"01",feb:"02",mar:"03",apr:"04",may:"05",jun:"06",jul:"07",aug:"08",sep:"09",oct:"10",nov:"11",dec:"12"};
-    const tokenLower=token.toLowerCase();
-    if(months[tokenLower]) return `${year}.${months[tokenLower]}.${String(day).padStart(2,"0")}`;
-    const weekdays=["mon","tue","wed","thu","fri","sat","sun"];
-    if(weekdays.includes(tokenLower)){
-      const month=String(now.getMonth()+1).padStart(2,"0");
+  // ------------------- Google Sheets 업로드 -------------------
+  function convertDate(input) {
+    if (!input || typeof input !== "string") return input;
+    const s = input.trim();
+    const parts = s.split(/\s+/);
+    if (parts.length !== 2) return input;
+    const token = parts[0];
+    const dayStr = parts[1].replace(/^0+/,"") || "0";
+    if (!/^\d+$/.test(dayStr)) return input;
+    const day = parseInt(dayStr,10);
+    const now = new Date();
+    const year = now.getFullYear();
+    const months = { jan:"01",feb:"02",mar:"03",apr:"04",may:"05",jun:"06",jul:"07",aug:"08",sep:"09",oct:"10",nov:"11",dec:"12" };
+    const tokenLower = token.toLowerCase();
+    if (months[tokenLower]) return `${year}.${months[tokenLower]}.${String(day).padStart(2,"0")}`;
+    const weekdays = ["mon","tue","wed","thu","fri","sat","sun"];
+    if (weekdays.includes(tokenLower)) {
+      const month = String(now.getMonth()+1).padStart(2,"0");
       return `${year}.${month}.${String(day).padStart(2,"0")}`;
     }
     return input;
   }
 
-  async function updateGoogleSheet(spreadsheetId,sheetName,values,maxRetries=3){
-    for(let attempt=1;attempt<=maxRetries;attempt++){
-      try{
+  async function updateGoogleSheet(spreadsheetId, sheetName, values, maxRetries=3) {
+    for (let attempt=1; attempt<=maxRetries; attempt++) {
+      try {
         await sheetsApi.spreadsheets.values.update({
           spreadsheetId,
-          range:`${sheetName}!A1`,
-          valueInputOption:"RAW",
-          requestBody:{values},
+          range: `${sheetName}!A1`,
+          valueInputOption: "RAW",
+          requestBody: { values },
         });
         console.log(`✅ Google Sheets A1부터 덮어쓰기 완료 (시도 ${attempt})`);
         break;
-      }catch(err){
-        console.error(`❌ Google Sheets 업로드 실패 (시도 ${attempt}):`,err.message);
-        if(attempt<maxRetries){
-          const delay=1000+Math.random()*1000;
-          console.log(`⏳ ${delay.toFixed(0)}ms 후 재시도...`);
-          await new Promise(res=>setTimeout(res,delay));
-        }else console.error("❌ 최대 재시도 횟수 도달, 업로드 실패");
+      } catch (err) {
+        console.error(`❌ Google Sheets 업로드 실패 (시도 ${attempt}): ${err.message}`);
+        if (attempt < maxRetries) await new Promise(res => setTimeout(res, 1000 + Math.random()*1000));
+        else console.error("❌ 최대 재시도 횟수 도달, 업로드 실패");
       }
     }
   }
 
-  console.log("🚀 Google Sheets A1부터 덮어쓰기 시작...");
-  const spreadsheetId="1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
-  const sheetName="Roster1";
-  const sheetValues=values.map((row,idx)=> idx===0?row:[...row.slice(0,1).map(cell=>convertDate(cell)).concat(row.slice(1))]);
-  await updateGoogleSheet(spreadsheetId,sheetName,sheetValues);
+  console.log("🚀 Google Sheets 업로드 시작...");
+  const spreadsheetId = "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
+  const sheetName = "Roster1";
+  const sheetValues = values.map((row,idx) => idx===0 ? row : [convertDate(row[0]), ...row.slice(1)]);
+  await updateGoogleSheet(spreadsheetId, sheetName, sheetValues);
 
+  console.log("🎉 Google Sheets 업데이트 완료!");
 })();
