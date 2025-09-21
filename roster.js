@@ -1,27 +1,44 @@
 import puppeteer from "puppeteer";
 import fs from "fs";
 import path from "path";
-import "dotenv/config";
 import admin from "firebase-admin";
 import { google } from "googleapis";
 
 // ------------------- Firebase 초기화 -------------------
 if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
-  console.error("❌ FIREBASE_SERVICE_ACCOUNT 환경변수가 없습니다.");
+  console.error("❌ FIREBASE_SERVICE_ACCOUNT 누락");
   process.exit(1);
 }
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-if (serviceAccount.private_key) serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
-if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+let serviceAccount;
+try {
+  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+  if (serviceAccount.private_key) {
+    serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
+  }
+} catch (err) {
+  console.error("❌ Firebase Service Account JSON 파싱 실패:", err.message);
+  process.exit(1);
+}
+if (!admin.apps.length) {
+  admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+}
 const db = admin.firestore();
 
 // ------------------- Google Sheets 초기화 -------------------
 if (!process.env.GOOGLE_SHEETS_CREDENTIALS) {
-  console.error("❌ GOOGLE_SHEETS_CREDENTIALS 환경변수가 없습니다.");
+  console.error("❌ GOOGLE_SHEETS_CREDENTIALS 누락");
   process.exit(1);
 }
-const sheetsCredentials = JSON.parse(process.env.GOOGLE_SHEETS_CREDENTIALS);
-if (sheetsCredentials.private_key) sheetsCredentials.private_key = sheetsCredentials.private_key.replace(/\\n/g, "\n");
+let sheetsCredentials;
+try {
+  sheetsCredentials = JSON.parse(process.env.GOOGLE_SHEETS_CREDENTIALS);
+  if (sheetsCredentials.private_key) {
+    sheetsCredentials.private_key = sheetsCredentials.private_key.replace(/\\n/g, "\n");
+  }
+} catch (err) {
+  console.error("❌ Google Sheets Credentials JSON 파싱 실패:", err.message);
+  process.exit(1);
+}
 const sheetsAuth = new google.auth.GoogleAuth({
   credentials: sheetsCredentials,
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
@@ -38,25 +55,24 @@ if (!flutterflowUid || !firestoreAdminUid) {
 
 // ------------------- Puppeteer 시작 -------------------
 (async () => {
-  const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox", "--disable-setuid-sandbox"] });
-  const page = await browser.newPage();
-
   const username = process.env.INPUT_PDC_USERNAME;
   const password = process.env.INPUT_PDC_PASSWORD;
   if (!username || !password) {
     console.error("❌ PDC_USERNAME 또는 PDC_PASSWORD 누락");
-    await browser.close();
     process.exit(1);
   }
 
-  console.log(`👉 로그인 시도 중... [uid=${flutterflowUid}]`);
+  const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox","--disable-setuid-sandbox"] });
+  const page = await browser.newPage();
+
+  console.log(`👉 PDC 로그인 시도 중... [uid=${flutterflowUid}]`);
   await page.goto("https://pdc-web.premia.kr/CrewConnex/default.aspx", { waitUntil: "networkidle0" });
   await page.type("#ctl00_Main_userId_edit", username, { delay: 50 });
   await page.type("#ctl00_Main_password_edit", password, { delay: 50 });
   await Promise.all([page.click("#ctl00_Main_login_btn"), page.waitForNavigation({ waitUntil: "networkidle0" })]);
   console.log("✅ 로그인 성공");
 
- 
+  
 
   // ------------------- Roster 메뉴 이동 -------------------
   const rosterLink = await page.evaluateHandle(() => {
