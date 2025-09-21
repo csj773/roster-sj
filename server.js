@@ -7,19 +7,20 @@ app.use(express.json());
 
 const API_KEY = process.env.API_KEY || "change_me";
 
-// 정규식 escape 함수
+// 정규식 escape
 function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 app.post("/runRoster", async (req, res) => {
   try {
+    // API 키 인증
     const auth = req.headers["x-api-key"];
     if (!auth || auth !== API_KEY) {
       return res.status(401).json({ error: "Unauthorized" });
     }
 
-    // body > env > fallback 순서
+    // FlutterFlow에서 보내온 값이 있으면 사용, 없으면 Secrets/.env fallback
     const username = req.body.username || process.env.INPUT_PDC_USERNAME;
     const password = req.body.password || process.env.INPUT_PDC_PASSWORD;
     const firebaseUid = req.body.firebaseUid || process.env.INPUT_FIREBASE_UID;
@@ -48,13 +49,13 @@ app.post("/runRoster", async (req, res) => {
     child.stdout.on("data", (data) => {
       const text = data.toString();
       stdout += text;
-      process.stdout.write(text); // 콘솔에도 실시간 출력
+      process.stdout.write(text); // 콘솔에도 출력
     });
 
     child.stderr.on("data", (data) => {
       const text = data.toString();
       stderr += text;
-      process.stderr.write(text); // 콘솔에도 실시간 출력
+      process.stderr.write(text);
     });
 
     child.on("close", (code) => {
