@@ -5,35 +5,71 @@ import "dotenv/config";
 const app = express();
 app.use(express.json());
 
-app.post("/runRoster", (req, res) => {
-  const { username, password, firebaseUid, adminFirebaseUid } = req.body;
+const API_KEY = process.env.API_KEY || "change_me";
 
-  const env = {
-    ...process.env,
-    INPUT_PDC_USERNAME: username || process.env.PDC_USERNAME || "",
-    INPUT_PDC_PASSWORD: password || process.env.PDC_PASSWORD || "",
-    INPUT_FIREBASE_UID: firebaseUid || process.env.FLUTTERFLOW_UID || "",
-    INPUT_ADMIN_FIREBASE_UID: adminFirebaseUid || process.env.FIRESTORE_ADMIN_UID || "",
-    FIREBASE_SERVICE_ACCOUNT: process.env.FIREBASE_SERVICE_ACCOUNT || "",
-    GOOGLE_SHEETS_CREDENTIALS: process.env.GOOGLE_SHEETS_CREDENTIALS || "",
-  };
+// 정규식 escape 함수
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
-  const child = spawn("node", ["-r", "dotenv/config", "roster.js"], { env });
+app.post("/runRoster", async (req, res) => {
+  try {
+    const auth = req.headers["x-api-key"];
+    if (!auth || auth !== API_KEY) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
 
-  let output = "", error = "";
+    // body > env > fallback 순서
+    const username = req.body.username || process.env.INPUT_PDC_USERNAME;
+    const password = req.body.password || process.env.INPUT_PDC_PASSWORD;
+    const firebaseUid = req.body.firebaseUid || process.env.INPUT_FIREBASE_UID;
+    const adminFirebaseUid = req.body.adminFirebaseUid || process.env.INPUT_ADMIN_FIREBASE_UID;
 
-  child.stdout.on("data", (data) => output += data.toString());
-  child.stderr.on("data", (data) => error += data.toString());
+    if (!username || !password) {
+      return res.status(400).json({ error: "PDC 계정(username/password)이 입력되지 않았습니다." });
+    }
+    if (!firebaseUid || !adminFirebaseUid) {
+      return res.status(400).json({ error: "FlutterFlow UID 또는 Admin UID가 입력되지 않았습니다." });
+    }
 
-  child.on("error", (err) => {
-    console.error("Child process error:", err);
-    res.status(500).json({ success: false, error: err.message });
-  });
+    // roster.js 실행
+    const env = {
+      ...process.env,
+      INPUT_PDC_USERNAME: username,
+      INPUT_PDC_PASSWORD: password,
+      INPUT_FIREBASE_UID: firebaseUid,
+      INPUT_ADMIN_FIREBASE_UID: adminFirebaseUid,
+    };
 
-  child.on("close", (code) => {
-    if (code === 0) res.json({ success: true, log: output });
-    else res.status(500).json({ success: false, error: error || "Unknown error" });
-  });
+    const child = spawn("node", ["./roster.js"], { env, stdio: "pipe" });
+
+    let stdout = "", stderr = "";
+
+    child.stdout.on("data", (data) => {
+      const text = data.toString();
+      stdout += text;
+      process.stdout.write(text); // 콘솔에도 실시간 출력
+    });
+
+    child.stderr.on("data", (data) => {
+      const text = data.toString();
+      stderr += text;
+      process.stderr.write(text); // 콘솔에도 실시간 출력
+    });
+
+    child.on("close", (code) => {
+      res.json({
+        exitCode: code,
+        stdout: stdout.replace(new RegExp(escapeRegex(username), "g"), "[REDACTED]"),
+        stderr: stderr || "",
+      });
+    });
+
+  } catch (error) {
+    console.error("❌ 서버 실행 에러:", error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
-app.listen(3000, () => console.log("🚀 Server running on port 3000"));
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
