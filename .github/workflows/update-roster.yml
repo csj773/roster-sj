@@ -2,8 +2,8 @@ name: Update Roster
 
 on:
   schedule:
-    - cron: "0 * * * *"  # 매 시간마다 실행
-  workflow_dispatch:       # 수동 실행 가능
+    - cron: "0 * * * *"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -13,38 +13,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Install dependencies
-        run: npm install
-
-      - name: Validate Secrets
-        run: |
-          if [ -z "${{ secrets.PDC_USERNAME }}" ] || [ -z "${{ secrets.PDC_PASSWORD }}" ]; then
-            echo "❌ PDC_USERNAME 또는 PDC_PASSWORD 누락"
-            exit 1
-          fi
-          if [ -z "${{ secrets.FLUTTERFLOW_UID }}" ] || [ -z "${{ secrets.FIRESTORE_ADMIN_UID }}" ]; then
-            echo "❌ FLUTTERFLOW_UID 또는 FIRESTORE_ADMIN_UID 누락"
-            exit 1
-          fi
-          if [ -z "${{ secrets.FIREBASE_SERVICE_ACCOUNT }}" ]; then
-            echo "❌ FIREBASE_SERVICE_ACCOUNT 누락"
-            exit 1
-          fi
-          if [ -z "${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}" ]; then
-            echo "❌ GOOGLE_SHEETS_CREDENTIALS 누락"
-            exit 1
-          fi
+      - run: npm install
 
       - name: Run roster.js
-        # FlutterFlow API 호출 시 env 전달 가능 → 존재하면 우선 사용
         env:
           INPUT_PDC_USERNAME: ${{ secrets.PDC_USERNAME }}
           INPUT_PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}
@@ -54,7 +31,7 @@ jobs:
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
         run: node -r dotenv/config roster.js
 
-      - name: Commit and Push roster.json & roster.csv
+      - name: Commit & Push roster.json & roster.csv
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
