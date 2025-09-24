@@ -13,33 +13,50 @@ const getConfigValue = (secretName, envName) => {
 };
 
 // ------------------- Firebase 초기화 -------------------
+const firebaseServiceAccount = getConfigValue("INPUT_FIREBASE_SERVICE_ACCOUNT", "FIREBASE_SERVICE_ACCOUNT");
+if (!firebaseServiceAccount) {
+  console.error("❌ FIREBASE_SERVICE_ACCOUNT 누락");
+  process.exit(1);
+}
+
 let serviceAccount;
 try {
-  const firebaseServiceAccount = getConfigValue("INPUT_FIREBASE_SERVICE_ACCOUNT", "FIREBASE_SERVICE_ACCOUNT");
-  if (!firebaseServiceAccount) throw new Error("FIREBASE_SERVICE_ACCOUNT 누락");
   serviceAccount = JSON.parse(firebaseServiceAccount);
-  if (serviceAccount.private_key) serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
 } catch (err) {
   console.error("❌ FIREBASE_SERVICE_ACCOUNT JSON 파싱 실패:", err.message);
   process.exit(1);
 }
 
+// private_key 줄바꿈 처리
+if (serviceAccount.private_key) {
+  serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
+}
+
+// Firebase Admin 초기화
 if (!admin.apps.length) {
-  admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+  });
 }
 const db = admin.firestore();
+console.log("✅ Firebase Admin 초기화 완료");
 
 // ------------------- Google Sheets 초기화 -------------------
+const googleSheetsCreds = getConfigValue("INPUT_GOOGLE_SHEETS_CREDENTIALS", "GOOGLE_SHEETS_CREDENTIALS");
+if (!googleSheetsCreds) {
+  console.error("❌ GOOGLE_SHEETS_CREDENTIALS 누락");
+  process.exit(1);
+}
+
 let sheetsCredentials;
 try {
-  const googleSheetsCreds = getConfigValue("INPUT_GOOGLE_SHEETS_CREDENTIALS", "GOOGLE_SHEETS_CREDENTIALS");
-  if (!googleSheetsCreds) throw new Error("GOOGLE_SHEETS_CREDENTIALS 누락");
   sheetsCredentials = JSON.parse(googleSheetsCreds);
-  if (sheetsCredentials.private_key) sheetsCredentials.private_key = sheetsCredentials.private_key.replace(/\\n/g, "\n");
 } catch (err) {
   console.error("❌ GOOGLE_SHEETS_CREDENTIALS JSON 파싱 실패:", err.message);
   process.exit(1);
 }
+
+if (sheetsCredentials.private_key) sheetsCredentials.private_key = sheetsCredentials.private_key.replace(/\\n/g, "\n");
 
 const sheetsAuth = new google.auth.GoogleAuth({
   credentials: sheetsCredentials,
@@ -246,5 +263,6 @@ if (!flutterflowUid || !firestoreAdminUid) {
   await updateGoogleSheet(spreadsheetId, sheetName, sheetValues);
 
 })();
+
 
 
