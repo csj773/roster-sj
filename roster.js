@@ -5,17 +5,22 @@ import "dotenv/config";
 import admin from "firebase-admin";
 import { google } from "googleapis";
 
+// ------------------- Config Loader -------------------
+function getConfigValue(secretName, envName) {
+  if (process.env[secretName]) return process.env[secretName];
+  if (process.env[envName]) return process.env[envName];
+  return null;
+}
+
 // ------------------- Firebase 초기화 -------------------
 if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
   console.error("❌ FIREBASE_SERVICE_ACCOUNT 환경변수가 없습니다.");
   process.exit(1);
 }
-
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 if (serviceAccount.private_key) {
   serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
 }
-
 if (!admin.apps.length) {
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
@@ -28,17 +33,25 @@ if (!process.env.GOOGLE_SHEETS_CREDENTIALS) {
   console.error("❌ GOOGLE_SHEETS_CREDENTIALS 환경변수가 없습니다.");
   process.exit(1);
 }
-
 const sheetsCredentials = JSON.parse(process.env.GOOGLE_SHEETS_CREDENTIALS);
 if (sheetsCredentials.private_key) {
   sheetsCredentials.private_key = sheetsCredentials.private_key.replace(/\\n/g, "\n");
 }
-
 const sheetsAuth = new google.auth.GoogleAuth({
   credentials: sheetsCredentials,
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
 const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
+
+// ------------------- UID / Config -------------------
+const flutterflowUid = getConfigValue("INPUT_FIREBASE_UID", "FIREBASE_UID");
+const firestoreAdminUid = getConfigValue("INPUT_ADMIN_FIREBASE_UID", "ADMIN_FIREBASE_UID");
+const firestoreCollection = getConfigValue("INPUT_FIRESTORE_COLLECTION", "FIRESTORE_COLLECTION") || "roster";
+
+if (!flutterflowUid || !firestoreAdminUid) {
+  console.error("❌ Firebase UID 또는 Admin UID가 설정되지 않았습니다.");
+  process.exit(1);
+}
 
 // ------------------- Puppeteer 시작 -------------------
 (async () => {
@@ -46,26 +59,15 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
     headless: "new",
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
   });
-
   const page = await browser.newPage();
 
   console.log("👉 로그인 페이지 접속 중...");
-  await page.goto("https://pdc-web.premia.kr/CrewConnex/default.aspx", {
-    waitUntil: "networkidle0",
-  });
+  await page.goto("https://pdc-web.premia.kr/CrewConnex/default.aspx", { waitUntil: "networkidle0" });
 
   const username = process.env.INPUT_PDC_USERNAME || process.env.PDC_USERNAME;
   const password = process.env.INPUT_PDC_PASSWORD || process.env.PDC_PASSWORD;
-  const firebaseUid = process.env.INPUT_FIREBASE_UID || process.env.FIREBASE_UID;
-
   if (!username || !password) {
     console.error("❌ PDC_USERNAME 또는 PDC_PASSWORD 환경변수가 없습니다.");
-    await browser.close();
-    process.exit(1);
-  }
-
-  if (!firebaseUid) {
-    console.error("❌ FIREBASE_UID 환경변수가 없습니다.");
     await browser.close();
     process.exit(1);
   }
@@ -84,12 +86,8 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
     const links = Array.from(document.querySelectorAll("a"));
     return links.find(a => a.textContent.includes("Roster")) || null;
   });
-
   if (rosterLink) {
-    await Promise.all([
-      rosterLink.click(),
-      page.waitForNavigation({ waitUntil: "networkidle0" }),
-    ]);
+    await Promise.all([rosterLink.click(), page.waitForNavigation({ waitUntil: "networkidle0" })]);
     console.log("✅ Roster 메뉴 클릭 완료");
   } else {
     console.error("❌ Roster 링크를 찾지 못했습니다.");
@@ -129,58 +127,59 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
   // 중복 제거
   const seen = new Set();
   values = values.filter(row => {
-    const key = row.join("||");
+    const key = row.map(c => (c||"").trim()).join("||");
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-
   values.unshift(headers);
 
   // 파일 저장
   const publicDir = path.join(process.cwd(), "public");
   if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir);
-
   fs.writeFileSync(path.join(publicDir, "roster.json"), JSON.stringify({ values }, null, 2), "utf-8");
   fs.writeFileSync(path.join(publicDir, "roster.csv"), values.map(row => row.map(col => `"${(col||"").replace(/"/g,'""')}"`).join(",")).join("\n"), "utf-8");
   console.log("✅ roster.json / roster.csv 저장 완료");
 
   await browser.close();
 
-   // ------------------- Firestore 업로드 -------------------
+  // ------------------- Firestore 업로드 -------------------
   console.log("🚀 Firestore 업로드 시작");
-  const headerMapFirestore = { "C/I(L)":"CIL","C/O(L)":"COL","STD(L)":"STDL","STD(Z)":"STDZ","STA(L)":"STAL","STA(Z)":"STAZ" };
 
-  for (let i=1;i<values.length;i++){
-    const row=values[i];
-    const docData={};
-    headers.forEach((h,idx)=>{docData[headerMapFirestore[h]||h]=row[idx]||"";});
-    // UID & 계정 정보
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const docData = {};
+    const headerMapFirestore = { "C/I(L)": "CIL", "C/O(L)": "COL", "STD(L)": "STDL", "STD(Z)": "STDZ", "STA(L)": "STAL", "STA(Z)": "STAZ" };
+    headers.forEach((h, idx) => {
+      docData[headerMapFirestore[h] || h] = row[idx] || "";
+    });
+
     docData.userId = flutterflowUid;
     docData.adminId = firestoreAdminUid;
     docData.pdc_user_name = username;
 
-    if(!docData.Activity||docData.Activity.trim()===""){
-      const querySnapshot=await db.collection(firestoreCollection)
-        .where("Date","==",docData.Date)
-        .where("userId","==",flutterflowUid).get();
-      for(const doc of querySnapshot.docs) await db.collection(firestoreCollection).doc(doc.id).delete();
+    if (!docData.Activity || docData.Activity.trim() === "") {
+      const querySnapshot = await db.collection(firestoreCollection)
+        .where("Date", "==", docData.Date)
+        .where("userId", "==", flutterflowUid)
+        .get();
+      for (const doc of querySnapshot.docs) await db.collection(firestoreCollection).doc(doc.id).delete();
       continue;
     }
 
-    const querySnapshot=await db.collection(firestoreCollection)
-      .where("Date","==",docData.Date)
-      .where("DC","==",docData.DC)
-      .where("F","==",docData.F)
-      .where("From","==",docData.From)
-      .where("To","==",docData.To)
-      .where("AcReg","==",docData.AcReg)
-      .where("Crew","==",docData.Crew)
-      .where("userId","==",flutterflowUid)
+    const querySnapshot = await db.collection(firestoreCollection)
+      .where("Date", "==", docData.Date)
+      .where("DC", "==", docData.DC)
+      .where("F", "==", docData.F)
+      .where("From", "==", docData.From)
+      .where("To", "==", docData.To)
+      .where("AcReg", "==", docData.AcReg)
+      .where("Crew", "==", docData.Crew)
+      .where("userId", "==", flutterflowUid)
       .get();
 
-    if(!querySnapshot.empty){
-      for(const doc of querySnapshot.docs) await db.collection(firestoreCollection).doc(doc.id).set(docData,{merge:true});
+    if (!querySnapshot.empty) {
+      for (const doc of querySnapshot.docs) await db.collection(firestoreCollection).doc(doc.id).set(docData, { merge: true });
       console.log(`🔄 ${i}행 기존 문서 업데이트 완료`);
     } else {
       await db.collection(firestoreCollection).add(docData);
@@ -243,5 +242,6 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
   }
 
 })();
+
 
 
