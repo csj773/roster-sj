@@ -13,24 +13,34 @@ const getConfigValue = (secretName, envName) => {
 };
 
 // ------------------- Firebase 초기화 -------------------
-const firebaseServiceAccount = getConfigValue("INPUT_FIREBASE_SERVICE_ACCOUNT", "FIREBASE_SERVICE_ACCOUNT");
-if (!firebaseServiceAccount) {
-  console.error("❌ FIREBASE_SERVICE_ACCOUNT 누락");
+let serviceAccount;
+try {
+  const firebaseServiceAccount = getConfigValue("INPUT_FIREBASE_SERVICE_ACCOUNT", "FIREBASE_SERVICE_ACCOUNT");
+  if (!firebaseServiceAccount) throw new Error("FIREBASE_SERVICE_ACCOUNT 누락");
+  serviceAccount = JSON.parse(firebaseServiceAccount);
+  if (serviceAccount.private_key) serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
+} catch (err) {
+  console.error("❌ FIREBASE_SERVICE_ACCOUNT JSON 파싱 실패:", err.message);
   process.exit(1);
 }
-const serviceAccount = JSON.parse(firebaseServiceAccount);
-if (serviceAccount.private_key) serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
-if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+
+if (!admin.apps.length) {
+  admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+}
 const db = admin.firestore();
 
 // ------------------- Google Sheets 초기화 -------------------
-const googleSheetsCreds = getConfigValue("INPUT_GOOGLE_SHEETS_CREDENTIALS", "GOOGLE_SHEETS_CREDENTIALS");
-if (!googleSheetsCreds) {
-  console.error("❌ GOOGLE_SHEETS_CREDENTIALS 누락");
+let sheetsCredentials;
+try {
+  const googleSheetsCreds = getConfigValue("INPUT_GOOGLE_SHEETS_CREDENTIALS", "GOOGLE_SHEETS_CREDENTIALS");
+  if (!googleSheetsCreds) throw new Error("GOOGLE_SHEETS_CREDENTIALS 누락");
+  sheetsCredentials = JSON.parse(googleSheetsCreds);
+  if (sheetsCredentials.private_key) sheetsCredentials.private_key = sheetsCredentials.private_key.replace(/\\n/g, "\n");
+} catch (err) {
+  console.error("❌ GOOGLE_SHEETS_CREDENTIALS JSON 파싱 실패:", err.message);
   process.exit(1);
 }
-const sheetsCredentials = JSON.parse(googleSheetsCreds);
-if (sheetsCredentials.private_key) sheetsCredentials.private_key = sheetsCredentials.private_key.replace(/\\n/g, "\n");
+
 const sheetsAuth = new google.auth.GoogleAuth({
   credentials: sheetsCredentials,
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
@@ -40,8 +50,6 @@ const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
 // ------------------- UID / API Config -------------------
 const flutterflowUid = getConfigValue("INPUT_FIREBASE_UID", "FIREBASE_UID");
 const firestoreAdminUid = getConfigValue("INPUT_ADMIN_FIREBASE_UID", "ADMIN_FIREBASE_UID");
-const apiBaseUrl = getConfigValue("INPUT_API_BASE_URL", "API_BASE_URL") || "https://roster-sj.onrender.com";
-const apiKey = getConfigValue("INPUT_API_KEY", "API_KEY") || "change_me";
 const firestoreCollection = getConfigValue("INPUT_FIRESTORE_COLLECTION", "FIRESTORE_COLLECTION") || "roster";
 
 if (!flutterflowUid || !firestoreAdminUid) {
@@ -238,4 +246,5 @@ if (!flutterflowUid || !firestoreAdminUid) {
   await updateGoogleSheet(spreadsheetId, sheetName, sheetValues);
 
 })();
+
 
