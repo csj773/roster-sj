@@ -152,17 +152,25 @@ if (!flutterflowUid || !firestoreAdminUid) {
 console.log("🚀 Firestore 업로드 시작");
 const headerMapFirestore = { "C/I(L)":"CIL","C/O(L)":"COL","STD(L)":"STDL","STD(Z)":"STDZ","STA(L)":"STAL","STA(Z)":"STAZ" };
 
-// 시간 문자열 "HH:MM" -> decimal hour
-function timeStrToHour(str) {
-  const [h, m] = str.split(":").map(Number);
-  return h + m/60;
+// BLH 문자열("HHMM" 또는 "HH:MM") -> decimal hour
+function blhStrToHour(str) {
+  if (!str) return 0;
+  if (str.includes(":")) {
+    const [h,m] = str.split(":").map(Number);
+    return h + m/60;
+  } else if (str.length === 4) {
+    const h = Number(str.slice(0,2));
+    const m = Number(str.slice(2,4));
+    return h + m/60;
+  }
+  return 0;
 }
 
 // decimal hour -> "HH:MM"
 function hourToTimeStr(hour) {
   const h = Math.floor(hour);
   let m = Math.round((hour - h) * 60);
-  if (m === 60) { return hourToTimeStr(h+1); }
+  if (m === 60) return hourToTimeStr(h+1);
   return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
 }
 
@@ -178,21 +186,21 @@ for (let i=1; i<values.length; i++){
 
   if (!docData.Activity || docData.Activity.trim() === "") continue;
 
-  // ------------------- ET, NT 계산 -------------------
-  // BLH는 roster.json에서 가져온 그대로 사용
-  let std = docData.STDZ || "00:00";
-  let sta = docData.STAZ || "00:00";
-  let stdHour = timeStrToHour(std);
-  let staHour = timeStrToHour(sta);
+  // ------------------- BL (HH:MM) -------------------
+  const blhStr = docData.BLH || "0000"; // roster.json에서 가져온 BLH
+  const blhHour = blhStrToHour(blhStr);
+  docData.BL = hourToTimeStr(blhHour);
 
-  let blhHour = timeStrToHour(docData.BLH || "00:00"); // BLH 그대로
-
-  // ET(Extended Time) -> 8시간 초과분
+  // ------------------- ET (Extended Time) -------------------
   docData.ET = blhHour > 8 ? hourToTimeStr(blhHour - 8) : "00:00";
 
-  // NT(Night Time) -> 13:00~21:00 Z시간 내 포함된 시간
-  let nightStart = 13;
-  let nightEnd = 21;
+  // ------------------- NT (Night Time) -------------------
+  // BL 시간을 기준으로 NT 계산
+  // STDZ / STAZ 기준 시간
+  const stdHour = timeStrToHour(docData.STDZ || "00:00");
+  const staHour = timeStrToHour(docData.STAZ || "00:00");
+  const nightStart = 13; // 13:00Z
+  const nightEnd = 21;   // 21:00Z
   let nt = Math.min(staHour, nightEnd) - Math.max(stdHour, nightStart);
   if (nt < 0) nt = 0;
   docData.NT = hourToTimeStr(nt);
@@ -219,7 +227,6 @@ for (let i=1; i<values.length; i++){
       }
     }
     if (!updated) {
-      // userId가 다르면 새 문서 추가
       await db.collection(firestoreCollection).add(docData);
       console.log(`✅ ${i}행 신규 업로드 완료 (userId가 다름)`);
     }
@@ -229,6 +236,7 @@ for (let i=1; i<values.length; i++){
   }
 }
 console.log("🎉 Firestore 업로드 완료!");
+ 
  
   // ------------------- Date 변환 함수 -------------------
   function convertDate(input) {
