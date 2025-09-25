@@ -55,8 +55,8 @@ export function calculateET(blhStr) {
 export function calculateNTFromSTDSTA(stdZ, staZ, flightDate) {
   if (!stdZ || !staZ) return "00:00";
 
-  let stdDate = parseUTCDate(stdZ, flightDate);
-  let staDate = parseUTCDate(staZ, flightDate);
+  const stdDate = parseUTCDate(stdZ, flightDate);
+  const staDate = parseUTCDate(staZ, flightDate);
 
   let totalNT = 0;
   let cursor = new Date(stdDate);
@@ -119,14 +119,3 @@ export function parseCrewString(crewStr) {
   const regex = /[가-힣]{2,3}/g; // 2~3글자 한글 기준
   return crewStr.match(regex) || [];
 }
-
-// ------------------- Export -------------------
-export {
-  blhStrToHour,
-  hourToTimeStr,
-  parseUTCDate,
-  calculateET,
-  calculateNTFromSTDSTA,
-  convertDate,
-  parseCrewString
-};
