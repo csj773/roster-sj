@@ -58,14 +58,17 @@ export function calculateET(blhStr) {
 export function calculateNT(stdDate, staDate) {
   if (!stdDate || !staDate) return 0;
 
-  // NT 구간: 당일 13:00~21:00 UTC
+  // NT 구간: STD 날짜 기준 13:00~21:00
   const ntStart = new Date(stdDate);
   ntStart.setUTCHours(13, 0, 0, 0);
 
   const ntEnd = new Date(stdDate);
   ntEnd.setUTCHours(21, 0, 0, 0);
 
-  // STD~STA 구간과 NT 구간 겹치는 시간
+  // STA가 다음 날이면 NT 계산 시 해당 날짜까지 확장
+  if (staDate > ntEnd) ntEnd.setUTCDate(staDate.getUTCDate());
+
+  // STD~STA 구간과 NT 구간 겹치는 시간 계산
   const start = stdDate > ntStart ? stdDate : ntStart;
   const end = staDate < ntEnd ? staDate : ntEnd;
   const diff = (end - start) / 1000 / 3600; // 시간 단위
