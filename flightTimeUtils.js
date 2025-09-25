@@ -83,12 +83,25 @@ export function calculateNT(stdDate, staDate) {
   return nt;
 }
 
-// YYYY-MM-DD -> "MM/DD/YYYY" (Google Sheets용)
-export function convertDate(dateStr) {
-  if (!dateStr) return "";
-  const date = new Date(dateStr);
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
-  const yyyy = date.getFullYear();
-  return `${mm}/${dd}/${yyyy}`;
-}
+// ------------------- Date 변환 함수 -------------------
+  function convertDate(input) {
+    if (!input || typeof input !== "string") return input;
+    const s = input.trim();
+    const parts = s.split(/\s+/);
+    if (parts.length !== 2) return input;
+    const token = parts[0]; 
+    const dayStr = parts[1].replace(/^0+/, "") || "0"; 
+    if (!/^\d+$/.test(dayStr)) return input;
+    const day = parseInt(dayStr, 10); 
+    const now = new Date(); 
+    const year = now.getFullYear(); 
+    const months = { jan:"01", feb:"02", mar:"03", apr:"04", may:"05", jun:"06", jul:"07", aug:"08", sep:"09", oct:"10", nov:"11", dec:"12" };
+    const tokenLower = token.toLowerCase(); 
+    if (months[tokenLower]) return `${year}.${months[tokenLower]}.${String(day).padStart(2,"0")}`;
+    const weekdays = ["mon","tue","wed","thu","fri","sat","sun"];
+    if (weekdays.includes(tokenLower)) {
+      const month = String(now.getMonth()+1).padStart(2,"0");
+      return `${year}.${month}.${String(day).padStart(2,"0")}`;
+    }
+    return input;
+ 
