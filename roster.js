@@ -234,29 +234,36 @@ console.log("✅ UID 및 Config 로드 완료");
     console.log(`✅ ${i}행 Firestore 업로드 완료: ${newDocRef.id}`);
   }
 
-  // ------------------- Google Sheets 업로드 -------------------
-  console.log("🚀 Google Sheets 업로드 시작");
-  const spreadsheetId = "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
-  const sheetName = "Roster1";
-  const crewIndex = headers.indexOf("Crew") + 1;
+ // ------------------- Google Sheets 업로드 -------------------
+console.log("🚀 Google Sheets A1부터 덮어쓰기 시작...");
+const spreadsheetId = "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
+const sheetName = "Roster1";
 
-  const sheetValues = values.map((row, idx) => {
-    const newRow = row.slice(0, crewIndex);
-    if (idx !== 0) newRow[0] = convertDate(row[0]);
-    return newRow;
+// Crew 열까지 추출
+// headers 배열에서 Crew 열의 index 확인
+const crewIndex = headers.findIndex(h => h === "Crew");
+
+const sheetValues = values.map((row, idx) => {
+  // 헤더는 그대로
+  if (idx === 0) return row.slice(0, crewIndex + 1);
+
+  // 날짜 변환 후 Crew까지만 포함
+  const newRow = [...row];
+  newRow[0] = convertDate(row[0]);
+  return newRow.slice(0, crewIndex + 1);
+});
+
+try {
+  await sheetsApi.spreadsheets.values.update({
+    spreadsheetId,
+    range: `${sheetName}!A1`,
+    valueInputOption: "RAW",
+    requestBody: { values: sheetValues },
   });
-
-  try {
-    await sheetsApi.spreadsheets.values.update({
-      spreadsheetId,
-      range: `${sheetName}!A1`,
-      valueInputOption: "RAW",
-      requestBody: { values: sheetValues },
-    });
-    console.log("✅ Google Sheets 업로드 완료");
-  } catch (err) {
-    console.error("❌ Google Sheets 업로드 실패:", err);
-  }
+  console.log("✅ Google Sheets A1부터 덮어쓰기 완료!");
+} catch (err) {
+  console.error("❌ Google Sheets 업로드 실패:", err);
+}
 
 })();
 
