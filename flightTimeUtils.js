@@ -26,8 +26,7 @@ export function hourToTimeStr(hour) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-// STD(Z), STA(Z) 문자열 -> Date 객체
-// nextDay = true 이면 다음날로 계산
+// STD(Z), STA(Z) 문자열 -> Date 객체 (nextDay 처리 가능)
 export function parseUTCDate(str, baseDate, nextDay = false) {
   if (!str || !baseDate) return null;
   const date = new Date(baseDate);
@@ -35,13 +34,8 @@ export function parseUTCDate(str, baseDate, nextDay = false) {
   if (str.includes(":")) {
     [h, m] = str.split(":").map(Number);
   } else if (/^\d{3,4}$/.test(str)) {
-    if (str.length === 3) { // e.g. "755"
-      h = Number(str[0]);
-      m = Number(str.slice(1, 3));
-    } else {
-      h = Number(str.slice(0, 2));
-      m = Number(str.slice(2, 4));
-    }
+    if (str.length === 3) { h = Number(str[0]); m = Number(str.slice(1, 3)); }
+    else { h = Number(str.slice(0, 2)); m = Number(str.slice(2, 4)); }
   }
   date.setUTCHours(h, m, 0, 0);
   if (nextDay) date.setUTCDate(date.getUTCDate() + 1);
@@ -54,33 +48,55 @@ export function calculateET(blhStr) {
   return blh > 8 ? hourToTimeStr(blh - 8) : "00:00";
 }
 
-// NT 계산: STD~STA 구간과 13:00~21:00 UTC 구간 겹치는 시간 계산
-export function calculateNT(stdDate, staDate) {
-  if (!stdDate || !staDate) return 0;
+// ------------------- NT 계산 -------------------
+// STD~STA 구간에서 UTC 13:00~21:00만 합산
+// STD/STA는 HHMM(+1/-1) 형식
+export function calculateNT(stdHHMM, staHHMM, baseDate) {
+  if (!stdHHMM || !staHHMM || !baseDate) return "00:00";
 
-  let nt = 0;
+  // HHMM -> Date (UTC) 변환
+  const parseHHMMToUTCDate = (str, base) => {
+    if (!str) return null;
+    let nextDay = 0;
+    if (str.endsWith("+1")) { nextDay = 1; str = str.slice(0, -2); }
+    else if (str.endsWith("-1")) { nextDay = -1; str = str.slice(0, -2); }
 
-  // STD~STA 구간을 하루 단위로 나눠서 처리
-  const startDate = new Date(stdDate);
-  const endDate = new Date(staDate);
+    let h = 0, m = 0;
+    if (/^\d{3,4}$/.test(str)) {
+      if (str.length === 3) { h = Number(str[0]); m = Number(str.slice(1, 3)); }
+      else { h = Number(str.slice(0, 2)); m = Number(str.slice(2, 4)); }
+    } else return null;
 
-  // 하루씩 순회
-  for (let d = new Date(startDate); d <= endDate; d.setUTCDate(d.getUTCDate() + 1)) {
-    const nightStart = new Date(d);
-    nightStart.setUTCHours(13, 0, 0, 0);
+    const date = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate(), h, m, 0));
+    if (nextDay !== 0) date.setUTCDate(date.getUTCDate() + nextDay);
+    return date;
+  };
 
-    const nightEnd = new Date(d);
-    nightEnd.setUTCHours(21, 0, 0, 0);
+  const ro = parseHHMMToUTCDate(stdHHMM, baseDate);
+  const ri = parseHHMMToUTCDate(staHHMM, baseDate);
+  if (!ro || !ri) return "00:00";
 
-    // 겹치는 구간 계산
-    const segmentStart = stdDate > nightStart ? stdDate : nightStart;
-    const segmentEnd = staDate < nightEnd ? staDate : nightEnd;
+  let totalNTMs = 0;
+  let cursor = new Date(ro);
 
-    const diff = (segmentEnd - segmentStart) / 1000 / 3600;
-    if (diff > 0) nt += diff;
+  while (cursor < ri) {
+    const ntStart = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate(), 13, 0, 0));
+    const ntEnd = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate(), 21, 0, 0));
+
+    const overlapStart = cursor > ntStart ? cursor : ntStart;
+    const overlapEnd = ri < ntEnd ? ri : ntEnd;
+
+    if (overlapEnd > overlapStart) totalNTMs += overlapEnd.getTime() - overlapStart.getTime();
+
+    // 다음 날 00:00로 이동
+    cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate() + 1, 0, 0, 0));
   }
 
-  return nt;
+  const totalMinutes = Math.floor(totalNTMs / 60000);
+  const hours = String(Math.floor(totalMinutes / 60)).padStart(2, "0");
+  const minutes = String(totalMinutes % 60).padStart(2, "0");
+
+  return `${hours}:${minutes}`;
 }
 
 // ------------------- 날짜 변환 -------------------
