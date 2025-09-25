@@ -148,7 +148,7 @@ if (!flutterflowUid || !firestoreAdminUid) {
 
   await browser.close();
 
-// ------------------- Firestore 업로드 -------------------
+  // ------------------- Firestore 업로드 -------------------
 console.log("🚀 Firestore 업로드 시작");
 const headerMapFirestore = { "C/I(L)":"CIL","C/O(L)":"COL","STD(L)":"STDL","STD(Z)":"STDZ","STA(L)":"STAL","STA(Z)":"STAZ" };
 
@@ -178,19 +178,17 @@ for (let i=1; i<values.length; i++){
 
   if (!docData.Activity || docData.Activity.trim() === "") continue;
 
-  // ------------------- BLH, ET, NT 계산 -------------------
+  // ------------------- ET, NT 계산 -------------------
+  // BLH는 roster.json에서 가져온 그대로 사용
   let std = docData.STDZ || "00:00";
   let sta = docData.STAZ || "00:00";
   let stdHour = timeStrToHour(std);
   let staHour = timeStrToHour(sta);
 
-  // BLH
-  let blh = staHour - stdHour;
-  if (blh < 0) blh += 24;
-  docData.BLH = hourToTimeStr(blh);
+  let blhHour = timeStrToHour(docData.BLH || "00:00"); // BLH 그대로
 
   // ET(Extended Time) -> 8시간 초과분
-  docData.ET = blh > 8 ? hourToTimeStr(blh - 8) : "00:00";
+  docData.ET = blhHour > 8 ? hourToTimeStr(blhHour - 8) : "00:00";
 
   // NT(Night Time) -> 13:00~21:00 Z시간 내 포함된 시간
   let nightStart = 13;
@@ -231,8 +229,7 @@ for (let i=1; i<values.length; i++){
   }
 }
 console.log("🎉 Firestore 업로드 완료!");
-
-  
+ 
   // ------------------- Date 변환 함수 -------------------
   function convertDate(input) {
     if (!input || typeof input !== "string") return input;
