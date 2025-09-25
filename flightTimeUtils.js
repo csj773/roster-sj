@@ -54,30 +54,30 @@ export function calculateET(blhStr) {
   return blh > 8 ? hourToTimeStr(blh - 8) : "00:00";
 }
 
-// NT: STD~STA 구간과 13:00~21:00 UTC 구간 겹치는 시간 계산
+// NT 계산: STD~STA 구간과 13:00~21:00 UTC 구간 겹치는 시간 계산
 export function calculateNT(stdDate, staDate) {
   if (!stdDate || !staDate) return 0;
 
   let nt = 0;
-  let cursor = new Date(stdDate);
 
-  while (cursor < staDate) {
-    // 당일 NT 구간
-    const nightStart = new Date(cursor);
+  // STD~STA 구간을 하루 단위로 나눠서 처리
+  const startDate = new Date(stdDate);
+  const endDate = new Date(staDate);
+
+  // 하루씩 순회
+  for (let d = new Date(startDate); d <= endDate; d.setUTCDate(d.getUTCDate() + 1)) {
+    const nightStart = new Date(d);
     nightStart.setUTCHours(13, 0, 0, 0);
 
-    const nightEnd = new Date(cursor);
+    const nightEnd = new Date(d);
     nightEnd.setUTCHours(21, 0, 0, 0);
 
-    const start = cursor > nightStart ? cursor : nightStart;
-    const end = staDate < nightEnd ? staDate : nightEnd;
+    // 겹치는 구간 계산
+    const segmentStart = stdDate > nightStart ? stdDate : nightStart;
+    const segmentEnd = staDate < nightEnd ? staDate : nightEnd;
 
-    const diff = (end - start) / 1000 / 3600;
+    const diff = (segmentEnd - segmentStart) / 1000 / 3600;
     if (diff > 0) nt += diff;
-
-    // 다음날로 이동
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
-    cursor.setUTCHours(0, 0, 0, 0);
   }
 
   return nt;
