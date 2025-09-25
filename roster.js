@@ -148,9 +148,23 @@ if (!flutterflowUid || !firestoreAdminUid) {
 
   await browser.close();
 
-  // ------------------- Firestore 업로드 -------------------
+// ------------------- Firestore 업로드 -------------------
 console.log("🚀 Firestore 업로드 시작");
 const headerMapFirestore = { "C/I(L)":"CIL","C/O(L)":"COL","STD(L)":"STDL","STD(Z)":"STDZ","STA(L)":"STAL","STA(Z)":"STAZ" };
+
+// 시간 문자열 "HH:MM" -> decimal hour
+function timeStrToHour(str) {
+  const [h, m] = str.split(":").map(Number);
+  return h + m/60;
+}
+
+// decimal hour -> "HH:MM"
+function hourToTimeStr(hour) {
+  const h = Math.floor(hour);
+  let m = Math.round((hour - h) * 60);
+  if (m === 60) { return hourToTimeStr(h+1); }
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+}
 
 for (let i=1; i<values.length; i++){
   const row = values[i];
@@ -162,16 +176,30 @@ for (let i=1; i<values.length; i++){
   docData.adminId = firestoreAdminUid;
   docData.pdc_user_name = username;
 
-  if (!docData.Activity || docData.Activity.trim() === "") {
-    // Activity 없으면 기존 flutterflowUid 문서 삭제
-    const querySnapshot = await db.collection(firestoreCollection)
-      .where("Date","==",docData.Date)
-      .where("userId","==",flutterflowUid).get();
-    for (const doc of querySnapshot.docs) await db.collection(firestoreCollection).doc(doc.id).delete();
-    continue;
-  }
+  if (!docData.Activity || docData.Activity.trim() === "") continue;
 
-  // 기존 문서 조회 (userId 제외)
+  // ------------------- BLH, ET, NT 계산 -------------------
+  let std = docData.STDZ || "00:00";
+  let sta = docData.STAZ || "00:00";
+  let stdHour = timeStrToHour(std);
+  let staHour = timeStrToHour(sta);
+
+  // BLH
+  let blh = staHour - stdHour;
+  if (blh < 0) blh += 24;
+  docData.BLH = hourToTimeStr(blh);
+
+  // ET(Extended Time) -> 8시간 초과분
+  docData.ET = blh > 8 ? hourToTimeStr(blh - 8) : "00:00";
+
+  // NT(Night Time) -> 13:00~21:00 Z시간 내 포함된 시간
+  let nightStart = 13;
+  let nightEnd = 21;
+  let nt = Math.min(staHour, nightEnd) - Math.max(stdHour, nightStart);
+  if (nt < 0) nt = 0;
+  docData.NT = hourToTimeStr(nt);
+
+  // ------------------- Firestore 기존 문서 조회 -------------------
   const querySnapshot = await db.collection(firestoreCollection)
     .where("Date","==",docData.Date)
     .where("DC","==",docData.DC)
@@ -183,7 +211,7 @@ for (let i=1; i<values.length; i++){
     .get();
 
   if (!querySnapshot.empty) {
-    // 같은 내용이 있는 경우, userId가 같은 것만 업데이트
+    // userId가 같은 문서만 업데이트
     let updated = false;
     for (const doc of querySnapshot.docs) {
       if (doc.data().userId === flutterflowUid) {
@@ -203,6 +231,8 @@ for (let i=1; i<values.length; i++){
   }
 }
 console.log("🎉 Firestore 업로드 완료!");
+
+  
   // ------------------- Date 변환 함수 -------------------
   function convertDate(input) {
     if (!input || typeof input !== "string") return input;
@@ -227,31 +257,39 @@ console.log("🎉 Firestore 업로드 완료!");
     return input;
   }
 
-  // ------------------- Google Sheets 업로드 -------------------
-  console.log("🚀 Google Sheets A1부터 덮어쓰기 시작...");
-  const spreadsheetId = "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
-  const sheetName = "Roster1";
+ // ------------------- Google Sheets 업로드 -------------------
+console.log("🚀 Google Sheets A1부터 덮어쓰기 시작...");
+const spreadsheetId = "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
+const sheetName = "Roster1";
 
-  const sheetValues = values.map((row, idx) => {
-    if (idx === 0) return row;
-    const newRow = [...row];
-    newRow[0] = convertDate(row[0]);
-    return newRow;
+// Crew 열까지 추출
+// headers 배열에서 Crew 열의 index 확인
+const crewIndex = headers.findIndex(h => h === "Crew");
+
+const sheetValues = values.map((row, idx) => {
+  // 헤더는 그대로
+  if (idx === 0) return row.slice(0, crewIndex + 1);
+
+  // 날짜 변환 후 Crew까지만 포함
+  const newRow = [...row];
+  newRow[0] = convertDate(row[0]);
+  return newRow.slice(0, crewIndex + 1);
+});
+
+try {
+  await sheetsApi.spreadsheets.values.update({
+    spreadsheetId,
+    range: `${sheetName}!A1`,
+    valueInputOption: "RAW",
+    requestBody: { values: sheetValues },
   });
-
-  try {
-    await sheetsApi.spreadsheets.values.update({
-      spreadsheetId,
-      range: `${sheetName}!A1`,
-      valueInputOption: "RAW",
-      requestBody: { values: sheetValues },
-    });
-    console.log("✅ Google Sheets A1부터 덮어쓰기 완료!");
-  } catch (err) {
-    console.error("❌ Google Sheets 업로드 실패:", err);
-  }
-
+  console.log("✅ Google Sheets A1부터 덮어쓰기 완료!");
+} catch (err) {
+  console.error("❌ Google Sheets 업로드 실패:", err);
+} 
 })();
+
+
 
 
 
