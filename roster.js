@@ -68,6 +68,8 @@ if (!flutterflowUid || !firestoreAdminUid) {
     page.waitForNavigation({ waitUntil: "networkidle0" }),
   ]);
 
+  console.log("✅ 로그인 성공");
+  
   // Roster 메뉴 클릭
   const rosterLink = await page.evaluateHandle(() => {
     const links = Array.from(document.querySelectorAll("a"));
