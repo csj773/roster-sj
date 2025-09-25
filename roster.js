@@ -218,8 +218,9 @@ for (let i=1; i<values.length; i++){
     const nextDay = staStr.includes("+1");
     const staDate = parseUTCDate(staStr.replace("+1",""), flightDate, nextDay);
 
-    const ntStart = new Date(flightDate); ntStart.setUTCHours(13,0,0,0);
-    const ntEnd = new Date(flightDate); ntEnd.setUTCHours(21,0,0,0);
+    // NT 구간: 13:00~21:00 UTC
+    const ntStart = new Date(stdDate); ntStart.setUTCHours(13,0,0,0);
+    const ntEnd = new Date(stdDate); ntEnd.setUTCHours(21,0,0,0);
 
     const overlapStart = stdDate > ntStart ? stdDate : ntStart;
     const overlapEnd = staDate < ntEnd ? staDate : ntEnd;
@@ -262,9 +263,8 @@ for (let i=1; i<values.length; i++){
     console.log(`✅ ${i}행 신규 업로드 완료`);
   }
 }
-console.log("🎉 Firestore 업로드 완료!");  
-
- 
+console.log("🎉 Firestore 업로드 완료!");
+   
   // ------------------- Date 변환 함수 -------------------
   function convertDate(input) {
     if (!input || typeof input !== "string") return input;
