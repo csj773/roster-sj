@@ -1,65 +1,74 @@
 // flightTimeUtils.js
 
-/**
- * BLH 문자열 "HH:MM" -> 소수 시간
- */
-export function blhStrToHour(blhStr) {
-  if (!blhStr || typeof blhStr !== "string") return 0;
-  const [h, m] = blhStr.split(":").map(Number);
-  if (isNaN(h) || isNaN(m)) return 0;
+// 문자열 "HHMM" 또는 "HH:MM" -> decimal hour
+export function blhStrToHour(str) {
+  if (!str) return 0;
+  let h = 0, m = 0;
+  if (str.includes(":")) {
+    [h, m] = str.split(":").map(Number);
+  } else if (/^\d{3,4}$/.test(str)) {
+    if (str.length === 3) { // e.g. "755"
+      h = Number(str[0]);
+      m = Number(str.slice(1, 3));
+    } else { // "1322"
+      h = Number(str.slice(0, 2));
+      m = Number(str.slice(2, 4));
+    }
+  }
   return h + m / 60;
 }
 
-/**
- * 소수 시간 -> "HH:MM" 문자열
- */
+// decimal hour -> "HH:MM"
 export function hourToTimeStr(hour) {
-  if (!hour || isNaN(hour)) return "00:00";
   const h = Math.floor(hour);
-  const m = Math.round((hour - h) * 60);
-  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+  let m = Math.round((hour - h) * 60);
+  if (m === 60) return hourToTimeStr(h + 1);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-/**
- * UTC 시간 문자열 "HHMM" 또는 "HHMM+1" -> Date 객체
- */
-export function parseUTCDate(timeStr, baseDate, nextDay = false) {
-  if (!timeStr || typeof timeStr !== "string") return new Date(baseDate);
-
-  let dayOffset = nextDay || timeStr.includes("+1") ? 1 : 0;
-  const cleanStr = timeStr.replace(/\+1$/, "").padStart(4, "0");
-  const h = parseInt(cleanStr.slice(0, 2), 10);
-  const m = parseInt(cleanStr.slice(2, 4), 10);
-
-  const date = new Date(Date.UTC(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate() + dayOffset, h, m, 0));
+// STD(Z), STA(Z) 문자열 -> Date 객체
+// nextDay = true 이면 다음날로 계산
+export function parseUTCDate(str, baseDate, nextDay = false) {
+  if (!str || !baseDate) return null;
+  const date = new Date(baseDate);
+  let h = 0, m = 0;
+  if (str.includes(":")) {
+    [h, m] = str.split(":").map(Number);
+  } else if (/^\d{3,4}$/.test(str)) {
+    if (str.length === 3) { // e.g. "755"
+      h = Number(str[0]);
+      m = Number(str.slice(1, 3));
+    } else {
+      h = Number(str.slice(0, 2));
+      m = Number(str.slice(2, 4));
+    }
+  }
+  date.setUTCHours(h, m, 0, 0);
+  if (nextDay) date.setUTCDate(date.getUTCDate() + 1);
   return date;
 }
 
-/**
- * BLH 기준 ET 계산 (8시간 초과분)
- */
+// ET: BLH 기준 8시간 초과분
 export function calculateET(blhStr) {
-  const blhHour = blhStrToHour(blhStr);
-  return blhHour > 8 ? hourToTimeStr(blhHour - 8) : "00:00";
+  const blh = blhStrToHour(blhStr);
+  return blh > 8 ? hourToTimeStr(blh - 8) : "00:00";
 }
 
-/**
- * NT 계산: flight 구간 중 13:00~21:00 UTC 포함 시간 (시간 단위 소수)
- */
+// NT: STD~STA 구간과 13:00~21:00 UTC 구간 겹치는 시간 계산
 export function calculateNT(stdDate, staDate) {
-  const nightStart = new Date(stdDate);
-  nightStart.setUTCHours(13, 0, 0, 0);
-  const nightEnd = new Date(stdDate);
-  nightEnd.setUTCHours(21, 0, 0, 0);
+  if (!stdDate || !staDate) return 0;
 
-  const flightStart = stdDate;
-  const flightEnd = staDate;
+  // NT 구간: 당일 13:00~21:00 UTC
+  const ntStart = new Date(stdDate);
+  ntStart.setUTCHours(13, 0, 0, 0);
 
-  const overlapStart = flightStart > nightStart ? flightStart : nightStart;
-  const overlapEnd = flightEnd < nightEnd ? flightEnd : nightEnd;
+  const ntEnd = new Date(stdDate);
+  ntEnd.setUTCHours(21, 0, 0, 0);
 
-  const overlapMs = overlapEnd - overlapStart;
-  if (overlapMs <= 0) return 0;
+  // STD~STA 구간과 NT 구간 겹치는 시간
+  const start = stdDate > ntStart ? stdDate : ntStart;
+  const end = staDate < ntEnd ? staDate : ntEnd;
+  const diff = (end - start) / 1000 / 3600; // 시간 단위
 
-  return overlapMs / 1000 / 60 / 60; // 소수 시간 단위 반환
+  return diff > 0 ? diff : 0;
 }
