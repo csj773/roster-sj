@@ -3,15 +3,14 @@
 // ------------------- BLH 문자열(HHMM 또는 HH:MM) → decimal hour -------------------
 export function blhStrToHour(str) {
   if (!str) return 0;
+  let h = 0, m = 0;
   if (str.includes(":")) {
-    const [h, m] = str.split(":").map(Number);
-    return h + m / 60;
-  } else if (str.length === 4) {
-    const h = Number(str.slice(0, 2));
-    const m = Number(str.slice(2, 4));
-    return h + m / 60;
+    [h, m] = str.split(":").map(Number);
+  } else if (/^\d{3,4}$/.test(str)) {
+    if (str.length === 3) { h = Number(str[0]); m = Number(str.slice(1, 3)); }
+    else { h = Number(str.slice(0, 2)); m = Number(str.slice(2, 4)); }
   }
-  return 0;
+  return h + m / 60;
 }
 
 // ------------------- decimal hour → "HH:MM" -------------------
@@ -23,13 +22,16 @@ export function hourToTimeStr(hour) {
 }
 
 // ------------------- UTC 시간 문자열 → Date 객체 -------------------
-export function parseUTCDate(timeStr, baseDate, nextDay = false) {
-  const [h, m] = timeStr.split(":").map(Number);
+export function parseUTCDate(str, baseDate, nextDay = false) {
+  if (!str || !baseDate) return null;
   const date = new Date(baseDate);
-  date.setUTCHours(h);
-  date.setUTCMinutes(m);
-  date.setUTCSeconds(0);
-  date.setUTCMilliseconds(0);
+  let h = 0, m = 0;
+  if (str.includes(":")) [h, m] = str.split(":").map(Number);
+  else if (/^\d{3,4}$/.test(str)) {
+    if (str.length === 3) { h = Number(str[0]); m = Number(str.slice(1, 3)); }
+    else { h = Number(str.slice(0, 2)); m = Number(str.slice(2, 4)); }
+  }
+  date.setUTCHours(h, m, 0, 0);
   if (nextDay) date.setUTCDate(date.getUTCDate() + 1);
   return date;
 }
@@ -42,6 +44,7 @@ export function calculateET(blhStr) {
 
 // ------------------- NT 계산 -------------------
 export function calculateNT(stdDate, staDate) {
+  if (!stdDate || !staDate) return 0;
   const nightStart = 13; // 13:00Z
   const nightEnd = 21;   // 21:00Z
 
@@ -76,9 +79,7 @@ export function convertDate(input) {
     sep: "09", oct: "10", nov: "11", dec: "12"
   };
   const tokenLower = token.toLowerCase();
-  if (months[tokenLower]) {
-    return `${year}.${months[tokenLower]}.${String(day).padStart(2, "0")}`;
-  }
+  if (months[tokenLower]) return `${year}.${months[tokenLower]}.${String(day).padStart(2, "0")}`;
 
   const weekdays = ["mon","tue","wed","thu","fri","sat","sun"];
   if (weekdays.includes(tokenLower)) {
