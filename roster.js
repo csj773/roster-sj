@@ -97,63 +97,64 @@ console.log("✅ UID 및 Config 로드 완료");
   console.log("✅ JSON/CSV 저장 완료");
   await browser.close();
 
-  // ------------------- Firestore 업로드 -------------------
-  console.log("🚀 Firestore 업로드 시작");
-  const headerMapFirestore = {"C/I(L)":"CIL","C/O(L)":"COL","STD(L)":"STDL","STD(Z)":"STDZ","STA(L)":"STAL","STA(Z)":"STAZ"};
+ // Firestore 업로드
+console.log("🚀 Firestore 업로드 시작");
+const headerMapFirestore = {
+  "C/I(L)": "CIL",
+  "C/O(L)": "COL",
+  "STD(L)": "STDL",
+  "STD(Z)": "STDZ",
+  "STA(L)": "STAL",
+  "STA(Z)": "STAZ",
+};
 
-  for (let i=1;i<values.length;i++){
-    const row = values[i];
-    const docData={};
-    headers.forEach((h,idx)=>{ docData[headerMapFirestore[h]||h]=row[idx]||""; });
-    docData.userId=flutterflowUid;
-    docData.adminId=firestoreAdminUid;
-    docData.pdc_user_name=username;
+for (let i = 1; i < values.length; i++) {
+  const row = values[i];
+  const docData = {};
+  headers.forEach((h, idx) => {
+    docData[headerMapFirestore[h] || h] = row[idx] || "";
+  });
+  docData.userId = flutterflowUid;
+  docData.adminId = firestoreAdminUid;
+  docData.pdc_user_name = username;
 
-    if(!docData.Activity || docData.Activity.trim()==="") continue;
+  if (!docData.Activity || docData.Activity.trim() === "") continue;
 
-    if(docData.From!==docData.To){
-      const flightDate = new Date(docData.Date);
-      const nextDaySTD = docData.STDZ.includes("+1");
-      const nextDaySTA = docData.STAZ.includes("+1");
-      const stdDate = parseUTCDate(docData.STDZ, flightDate, nextDaySTD);
-      const staDate = parseUTCDate(docData.STAZ, flightDate, nextDaySTA);
-      docData.ET = calculateET(docData.BLH);
-      const ntHours = calculateNT(stdDate, staDate);
-      docData.NT = hourToTimeStr(ntHours);
-    } else {
-      docData.ET="00:00";
-      docData.NT="00:00";
-    }
+  // ET 계산
+  docData.ET = calculateET(docData.BLH);
 
-    // Firestore 중복 제거 + 신규 저장
-    const querySnapshot = await db.collection(firestoreCollection)
-      .where("Date","==",docData.Date)
-      .where("DC","==",docData.DC)
-      .where("F","==",docData.F)
-      .where("From","==",docData.From)
-      .where("To","==",docData.To)
-      .where("AcReg","==",docData.AcReg)
-      .where("Crew","==",docData.Crew)
-      .get();
+  // NT 계산 (STD(Z), STA(Z) HHMM+1/-1 처리 포함)
+  if (docData.From !== docData.To) {
+    const flightDate = new Date(docData.Date);
+    docData.NT = calculateNT(docData.STDZ, docData.STAZ, flightDate);
+  } else {
+    docData.NT = "00:00";
+  }
 
-    if(!querySnapshot.empty){
-      let updated = false;
-      for(const doc of querySnapshot.docs){
-        if(doc.data().userId === flutterflowUid){
-          await db.collection(firestoreCollection).doc(doc.id).set(docData, {merge:true});
-          updated = true;
-          console.log(`🔄 ${i}행 문서 업데이트 완료: ${doc.id}`);
-        }
-      }
-      if(!updated){
-        const newDocRef = await db.collection(firestoreCollection).add(docData);
-        console.log(`✅ ${i}행 신규 업로드 완료: ${newDocRef.id}`);
-      }
-    } else {
-      const newDocRef = await db.collection(firestoreCollection).add(docData);
-      console.log(`✅ ${i}행 신규 업로드 완료: ${newDocRef.id}`);
+  // 중복 제거 후 신규 저장
+  const querySnapshot = await db
+    .collection(firestoreCollection)
+    .where("Date", "==", docData.Date)
+    .where("DC", "==", docData.DC)
+    .where("F", "==", docData.F)
+    .where("From", "==", docData.From)
+    .where("To", "==", docData.To)
+    .where("AcReg", "==", docData.AcReg)
+    .where("Crew", "==", docData.Crew)
+    .where("userId", "==", flutterflowUid)
+    .get();
+
+  if (!querySnapshot.empty) {
+    // 중복 문서 삭제 후 신규 저장
+    for (const doc of querySnapshot.docs) {
+      await db.collection(firestoreCollection).doc(doc.id).delete();
     }
   }
+
+  const newDocRef = await db.collection(firestoreCollection).add(docData);
+  console.log(`✅ ${i}행 신규 업로드 완료: ${newDocRef.id}, NT=${docData.NT}, ET=${docData.ET}`);
+}
+ 
 
   // ------------------- Google Sheets 업로드 (Crew까지만) -------------------
   console.log("🚀 Google Sheets 업로드 시작");
