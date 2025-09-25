@@ -148,9 +148,16 @@ if (!flutterflowUid || !firestoreAdminUid) {
 
   await browser.close();
 
-  // ------------------- Firestore 업로드 -------------------
+ // ------------------- Firestore 업로드 -------------------
 console.log("🚀 Firestore 업로드 시작");
-const headerMapFirestore = { "C/I(L)":"CIL","C/O(L)":"COL","STD(L)":"STDL","STD(Z)":"STDZ","STA(L)":"STAL","STA(Z)":"STAZ" };
+const headerMapFirestore = { 
+  "C/I(L)":"CIL",
+  "C/O(L)":"COL",
+  "STD(L)":"STDL",
+  "STD(Z)":"STDZ",
+  "STA(L)":"STAL",
+  "STA(Z)":"STAZ"
+};
 
 // BLH 문자열("HHMM" 또는 "HH:MM") -> decimal hour
 function blhStrToHour(str) {
@@ -174,6 +181,14 @@ function hourToTimeStr(hour) {
   return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
 }
 
+// "HH:MM" -> decimal hour
+function timeStrToHour(str) {
+  if (!str) return 0;
+  const [h, m] = str.split(":").map(Number);
+  if (isNaN(h) || isNaN(m)) return 0;
+  return h + m/60;
+}
+
 for (let i=1; i<values.length; i++){
   const row = values[i];
   const docData = {};
@@ -195,8 +210,6 @@ for (let i=1; i<values.length; i++){
   docData.ET = blhHour > 8 ? hourToTimeStr(blhHour - 8) : "00:00";
 
   // ------------------- NT (Night Time) -------------------
-  // BL 시간을 기준으로 NT 계산
-  // STDZ / STAZ 기준 시간
   const stdHour = timeStrToHour(docData.STDZ || "00:00");
   const staHour = timeStrToHour(docData.STAZ || "00:00");
   const nightStart = 13; // 13:00Z
@@ -217,7 +230,6 @@ for (let i=1; i<values.length; i++){
     .get();
 
   if (!querySnapshot.empty) {
-    // userId가 같은 문서만 업데이트
     let updated = false;
     for (const doc of querySnapshot.docs) {
       if (doc.data().userId === flutterflowUid) {
@@ -236,8 +248,9 @@ for (let i=1; i<values.length; i++){
   }
 }
 console.log("🎉 Firestore 업로드 완료!");
+
  
- 
+
   // ------------------- Date 변환 함수 -------------------
   function convertDate(input) {
     if (!input || typeof input !== "string") return input;
