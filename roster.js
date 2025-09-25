@@ -152,20 +152,6 @@ if (!flutterflowUid || !firestoreAdminUid) {
 console.log("🚀 Firestore 업로드 시작");
 const headerMapFirestore = { "C/I(L)":"CIL","C/O(L)":"COL","STD(L)":"STDL","STD(Z)":"STDZ","STA(L)":"STAL","STA(Z)":"STAZ" };
 
-// 시간 문자열 "HH:MM" -> decimal hour
-function timeStrToHour(str) {
-  const [h, m] = str.split(":").map(Number);
-  return h + m/60;
-}
-
-// decimal hour -> "HH:MM"
-function hourToTimeStr(hour) {
-  const h = Math.floor(hour);
-  let m = Math.round((hour - h) * 60);
-  if (m === 60) return hourToTimeStr(h+1);
-  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
-}
-
 // BLH 문자열 "HHMM" 또는 "HH:MM" -> decimal hour
 function blhStrToHour(str) {
   if (!str) return 0;
@@ -178,6 +164,29 @@ function blhStrToHour(str) {
     return h + m/60;
   }
   return 0;
+}
+
+// decimal hour -> "HH:MM"
+function hourToTimeStr(hour) {
+  const h = Math.floor(hour);
+  let m = Math.round((hour - h) * 60);
+  if (m === 60) return hourToTimeStr(h+1);
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+}
+
+// UTC 문자열 "HHMM" 또는 "HH:MM" -> Date 객체
+function parseUTCDate(dateStr, baseDate, nextDay=false) {
+  let h=0, m=0;
+  if (dateStr.includes(":")) {
+    [h,m] = dateStr.split(":").map(Number);
+  } else if (dateStr.length === 4) {
+    h = Number(dateStr.slice(0,2));
+    m = Number(dateStr.slice(2,4));
+  }
+  const d = new Date(baseDate);
+  d.setUTCHours(h, m, 0, 0);
+  if (nextDay) d.setUTCDate(d.getUTCDate()+1);
+  return d;
 }
 
 for (let i=1; i<values.length; i++){
@@ -197,15 +206,28 @@ for (let i=1; i<values.length; i++){
   docData.ET = blhHour > 8 ? hourToTimeStr(blhHour - 8) : "00:00";
 
   // ------------------- NT 계산 -------------------
-  const stdHour = timeStrToHour(docData.STDZ || "00:00"); // STD(Z) UTC
-  const staHour = timeStrToHour(docData.STAZ || "00:00"); // STA(Z) UTC
-  const nightStart = 13; // 13:00Z
-  const nightEnd = 21;   // 21:00Z
-  const ntOverlapStart = Math.max(stdHour, nightStart);
-  const ntOverlapEnd = Math.min(staHour, nightEnd);
-  let nt = ntOverlapEnd - ntOverlapStart;
-  if (nt < 0) nt = 0;
-  docData.NT = hourToTimeStr(nt);
+  // baseDate = 해당 비행일
+  const flightDate = new Date(docData.Date); // YYYY-MM-DD 형식 가정
+
+  // STD(Z)
+  const stdStr = docData.STDZ || "0000";
+  const stdDate = parseUTCDate(stdStr, flightDate);
+
+  // STA(Z)
+  const staStr = docData.STAZ || "0000";
+  let nextDay = staStr.includes("+1");
+  const staDate = parseUTCDate(staStr.replace("+1",""), flightDate, nextDay);
+
+  // NT 구간: 13:00~21:00 UTC
+  const ntStart = new Date(flightDate); ntStart.setUTCHours(13,0,0,0);
+  const ntEnd = new Date(flightDate); ntEnd.setUTCHours(21,0,0,0);
+
+  const overlapStart = stdDate > ntStart ? stdDate : ntStart;
+  const overlapEnd = staDate < ntEnd ? staDate : ntEnd;
+  let ntMs = overlapEnd - overlapStart;
+  if (ntMs < 0) ntMs = 0;
+  const ntHours = ntMs / (1000*60*60);
+  docData.NT = hourToTimeStr(ntHours);
 
   // ------------------- Firestore 기존 문서 조회 -------------------
   const querySnapshot = await db.collection(firestoreCollection)
@@ -219,7 +241,6 @@ for (let i=1; i<values.length; i++){
     .get();
 
   if (!querySnapshot.empty) {
-    // userId가 같은 문서만 업데이트
     let updated = false;
     for (const doc of querySnapshot.docs) {
       if (doc.data().userId === flutterflowUid) {
@@ -229,7 +250,6 @@ for (let i=1; i<values.length; i++){
       }
     }
     if (!updated) {
-      // userId가 다르면 새 문서 추가
       await db.collection(firestoreCollection).add(docData);
       console.log(`✅ ${i}행 신규 업로드 완료 (userId가 다름)`);
     }
@@ -239,6 +259,7 @@ for (let i=1; i<values.length; i++){
   }
 }
 console.log("🎉 Firestore 업로드 완료!");
+ 
  
 
   // ------------------- Date 변환 함수 -------------------
