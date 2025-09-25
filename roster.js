@@ -4,6 +4,13 @@ import path from "path";
 import "dotenv/config";
 import admin from "firebase-admin";
 import { google } from "googleapis";
+import {
+  blhStrToHour,
+  hourToTimeStr,
+  parseUTCDate,
+  calculateET,
+  calculateNT
+} from "./flightTimeUtils.js";
 
 // ------------------- Firebase 초기화 -------------------
 if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
@@ -58,20 +65,11 @@ if (!flutterflowUid || !firestoreAdminUid) {
   });
 
   const page = await browser.newPage();
-
-  console.log("👉 로그인 페이지 접속 중...");
-  await page.goto("https://pdc-web.premia.kr/CrewConnex/default.aspx", { waitUntil: "networkidle0" });
-
   const username = process.env.INPUT_PDC_USERNAME || process.env.PDC_USERNAME;
   const password = process.env.INPUT_PDC_PASSWORD || process.env.PDC_PASSWORD;
 
-  if (!username || !password) {
-    console.error("❌ PDC_USERNAME 또는 PDC_PASSWORD 환경변수가 없습니다.");
-    await browser.close();
-    process.exit(1);
-  }
-
-  console.log("👉 로그인 시도 중...");
+  console.log("👉 로그인 페이지 접속 중...");
+  await page.goto("https://pdc-web.premia.kr/CrewConnex/default.aspx", { waitUntil: "networkidle0" });
   await page.type("#ctl00_Main_userId_edit", username, { delay: 50 });
   await page.type("#ctl00_Main_password_edit", password, { delay: 50 });
   await Promise.all([
@@ -86,17 +84,17 @@ if (!flutterflowUid || !firestoreAdminUid) {
     return links.find(a => a.textContent.includes("Roster")) || null;
   });
 
-  if (rosterLink) {
-    await Promise.all([
-      rosterLink.click(),
-      page.waitForNavigation({ waitUntil: "networkidle0" }),
-    ]);
-    console.log("✅ Roster 메뉴 클릭 완료");
-  } else {
+  if (!rosterLink) {
     console.error("❌ Roster 링크를 찾지 못했습니다.");
     await browser.close();
     return;
   }
+
+  await Promise.all([
+    rosterLink.click(),
+    page.waitForNavigation({ waitUntil: "networkidle0" }),
+  ]);
+  console.log("✅ Roster 메뉴 클릭 완료");
 
   // Roster 테이블 추출
   await page.waitForSelector("table tr");
@@ -135,7 +133,6 @@ if (!flutterflowUid || !firestoreAdminUid) {
     seen.add(key);
     return true;
   });
-
   values.unshift(headers);
 
   // 파일 저장
@@ -148,75 +145,75 @@ if (!flutterflowUid || !firestoreAdminUid) {
 
   await browser.close();
 
-// ------------------- Firestore 업로드 -------------------
-import { blhStrToHour, hourToTimeStr, parseUTCDate, calculateNT, calculateET } from './flightTimeUtils.js';
+  // ------------------- Firestore 업로드 -------------------
+  console.log("🚀 Firestore 업로드 시작");
+  const headerMapFirestore = { "C/I(L)":"CIL","C/O(L)":"COL","STD(L)":"STDL","STD(Z)":"STDZ","STA(L)":"STAL","STA(Z)":"STAZ" };
 
-console.log("🚀 Firestore 업로드 시작");
-const headerMapFirestore = { "C/I(L)":"CIL","C/O(L)":"COL","STD(L)":"STDL","STD(Z)":"STDZ","STA(L)":"STAL","STA(Z)":"STAZ" };
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const docData = {};
+    headers.forEach((h, idx) => { docData[headerMapFirestore[h]||h] = row[idx]||""; });
 
-for (let i=1; i<values.length; i++){
-  const row = values[i];
-  const docData = {};
-  headers.forEach((h, idx) => { docData[headerMapFirestore[h]||h] = row[idx]||""; });
+    docData.userId = flutterflowUid;
+    docData.adminId = firestoreAdminUid;
+    docData.pdc_user_name = username;
 
-  // ✅ UID / Admin 적용
-  docData.userId = flutterflowUid;
-  docData.adminId = firestoreAdminUid;
-  docData.pdc_user_name = username;
+    if (!docData.Activity || docData.Activity.trim() === "") {
+      // Activity 없으면 기존 flutterflowUid 문서 삭제
+      const querySnapshot = await db.collection(firestoreCollection)
+        .where("Date","==",docData.Date)
+        .where("userId","==",flutterflowUid).get();
+      for (const doc of querySnapshot.docs) await db.collection(firestoreCollection).doc(doc.id).delete();
+      continue;
+    }
 
-  if (!docData.Activity || docData.Activity.trim() === "") continue;
+    // ET / NT 계산 (From !== To)
+    if (docData.From !== docData.To) {
+      docData.ET = calculateET(docData.BLH);
 
-  // ------------------- ET, NT 계산 -------------------
-  if (docData.From !== docData.To) {
-    // ET 계산
-    docData.ET = calculateET(docData.BLH);
+      const flightDate = new Date(docData.Date);
+      const nextDay = docData.STAZ.includes("+1");
+      const stdDate = parseUTCDate(docData.STDZ, flightDate);
+      const staDate = parseUTCDate(docData.STAZ, flightDate, nextDay);
+      const ntHours = calculateNT(stdDate, staDate);
+      docData.NT = hourToTimeStr(ntHours);
+    } else {
+      docData.ET = "00:00";
+      docData.NT = "00:00";
+    }
 
-    // NT 계산
-    const flightDate = new Date(docData.Date);
-    const stdDate = parseUTCDate(docData.STDZ, flightDate);
-    const nextDay = docData.STAZ.includes("+1");
-    const staDate = parseUTCDate(docData.STAZ.replace("+1",""), flightDate, nextDay);
-    const ntHours = calculateNT(stdDate, staDate);
-    docData.NT = hourToTimeStr(ntHours);
-  } else {
-    docData.ET = "00:00";
-    docData.NT = "00:00";
-  }
+    // Firestore 기존 문서 조회
+    const querySnapshot = await db.collection(firestoreCollection)
+      .where("Date","==",docData.Date)
+      .where("DC","==",docData.DC)
+      .where("F","==",docData.F)
+      .where("From","==",docData.From)
+      .where("To","==",docData.To)
+      .where("AcReg","==",docData.AcReg)
+      .where("Crew","==",docData.Crew)
+      .get();
 
-  // ------------------- Firestore 기존 문서 조회 -------------------
-  const querySnapshot = await db.collection(firestoreCollection)
-    .where("Date","==",docData.Date)
-    .where("DC","==",docData.DC)
-    .where("F","==",docData.F)
-    .where("From","==",docData.From)
-    .where("To","==",docData.To)
-    .where("AcReg","==",docData.AcReg)
-    .where("Crew","==",docData.Crew)
-    .get();
-
-  if (!querySnapshot.empty) {
-    let updated = false;
-    for (const doc of querySnapshot.docs) {
-      if (doc.data().userId === flutterflowUid) {
-        await db.collection(firestoreCollection).doc(doc.id).set(docData, { merge: true });
-        console.log(`🔄 ${i}행 기존 문서 업데이트 완료`);
-        updated = true;
+    if (!querySnapshot.empty) {
+      let updated = false;
+      for (const doc of querySnapshot.docs) {
+        if (doc.data().userId === flutterflowUid) {
+          await db.collection(firestoreCollection).doc(doc.id).set(docData, { merge: true });
+          console.log(`🔄 ${i}행 기존 문서 업데이트 완료`);
+          updated = true;
+        }
       }
-    }
-    if (!updated) {
+      if (!updated) {
+        await db.collection(firestoreCollection).add(docData);
+        console.log(`✅ ${i}행 신규 업로드 완료 (userId가 다름)`);
+      }
+    } else {
       await db.collection(firestoreCollection).add(docData);
-      console.log(`✅ ${i}행 신규 업로드 완료 (userId가 다름)`);
+      console.log(`✅ ${i}행 신규 업로드 완료`);
     }
-  } else {
-    await db.collection(firestoreCollection).add(docData);
-    console.log(`✅ ${i}행 신규 업로드 완료`);
   }
-}
+  console.log("🎉 Firestore 업로드 완료!");
 
-console.log("🎉 Firestore 업로드 완료!");
-
-   
-  // ------------------- Date 변환 함수 -------------------
+  // ------------------- Google Sheets 업로드 -------------------
   function convertDate(input) {
     if (!input || typeof input !== "string") return input;
     const s = input.trim();
@@ -240,38 +237,30 @@ console.log("🎉 Firestore 업로드 완료!");
     return input;
   }
 
- // ------------------- Google Sheets 업로드 -------------------
-console.log("🚀 Google Sheets A1부터 덮어쓰기 시작...");
-const spreadsheetId = "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
-const sheetName = "Roster1";
+  console.log("🚀 Google Sheets A1부터 덮어쓰기 시작...");
+  const spreadsheetId = "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
+  const sheetName = "Roster1";
 
-// Crew 열까지 추출
-// headers 배열에서 Crew 열의 index 확인
-const crewIndex = headers.findIndex(h => h === "Crew");
-
-const sheetValues = values.map((row, idx) => {
-  // 헤더는 그대로
-  if (idx === 0) return row.slice(0, crewIndex + 1);
-
-  // 날짜 변환 후 Crew까지만 포함
-  const newRow = [...row];
-  newRow[0] = convertDate(row[0]);
-  return newRow.slice(0, crewIndex + 1);
-});
-
-try {
-  await sheetsApi.spreadsheets.values.update({
-    spreadsheetId,
-    range: `${sheetName}!A1`,
-    valueInputOption: "RAW",
-    requestBody: { values: sheetValues },
+  const sheetValues = values.map((row, idx) => {
+    if (idx === 0) return row;
+    const newRow = [...row];
+    newRow[0] = convertDate(row[0]);
+    return newRow;
   });
-  console.log("✅ Google Sheets A1부터 덮어쓰기 완료!");
-} catch (err) {
-  console.error("❌ Google Sheets 업로드 실패:", err);
-} 
-})();
 
+  try {
+    await sheetsApi.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${sheetName}!A1`,
+      valueInputOption: "RAW",
+      requestBody: { values: sheetValues },
+    });
+    console.log("✅ Google Sheets A1부터 덮어쓰기 완료!");
+  } catch (err) {
+    console.error("❌ Google Sheets 업로드 실패:", err);
+  }
+
+})();
 
 
 
