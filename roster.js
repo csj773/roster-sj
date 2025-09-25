@@ -97,7 +97,7 @@ console.log("✅ UID 및 Config 로드 완료");
   console.log("✅ JSON/CSV 저장 완료");
   await browser.close();
 
-// ------------------- Firestore 업로드 -------------------
+ // Firestore 업로드
 console.log("🚀 Firestore 업로드 시작");
 const headerMapFirestore = {
   "C/I(L)": "CIL",
@@ -111,37 +111,27 @@ const headerMapFirestore = {
 for (let i = 1; i < values.length; i++) {
   const row = values[i];
   const docData = {};
-
-  // 헤더 매핑
   headers.forEach((h, idx) => {
     docData[headerMapFirestore[h] || h] = row[idx] || "";
   });
-
   docData.userId = flutterflowUid;
   docData.adminId = firestoreAdminUid;
   docData.pdc_user_name = username;
 
-  if (!docData.Activity || docData.Activity.trim() === "") {
-    console.log(`⚠️ ${i}행 Activity 없음, 스킵`);
-    continue;
-  }
+  if (!docData.Activity || docData.Activity.trim() === "") continue;
 
   // ET 계산
   docData.ET = calculateET(docData.BLH);
-  console.log(`🔹 ${i}행 ET 계산: ${docData.ET}`);
 
-  // NT 계산
+  // NT 계산 (STD(Z), STA(Z) HHMM+1/-1 처리 포함)
   if (docData.From !== docData.To) {
     const flightDate = new Date(docData.Date);
     docData.NT = calculateNT(docData.STDZ, docData.STAZ, flightDate);
-    console.log(`🔹 ${i}행 NT 계산: ${docData.NT}`);
   } else {
     docData.NT = "00:00";
-    console.log(`🔹 ${i}행 NT: 00:00 (국내편)`);
   }
 
-  // Firestore 중복 확인
-  console.log(`🔹 ${i}행 Firestore 중복 조회 시작`);
+  // 중복 제거 후 신규 저장
   const querySnapshot = await db
     .collection(firestoreCollection)
     .where("Date", "==", docData.Date)
@@ -155,21 +145,16 @@ for (let i = 1; i < values.length; i++) {
     .get();
 
   if (!querySnapshot.empty) {
-    console.log(`⚠️ ${i}행 중복 ${querySnapshot.size}건 발견, 삭제 진행`);
+    // 중복 문서 삭제 후 신규 저장
     for (const doc of querySnapshot.docs) {
       await db.collection(firestoreCollection).doc(doc.id).delete();
-      console.log(`  🗑 중복 문서 삭제: ${doc.id}`);
     }
-
-    // 업데이트 처리
-    const newDocRef = await db.collection(firestoreCollection).add(docData);
-    console.log(`🔄 ${i}행 업데이트 완료: ${newDocRef.id}, NT=${docData.NT}, ET=${docData.ET}`);
-  } else {
-    // 신규 추가
-    const newDocRef = await db.collection(firestoreCollection).add(docData);
-    console.log(`✅ ${i}행 신규 업로드 완료: ${newDocRef.id}, NT=${docData.NT}, ET=${docData.ET}`);
   }
+
+  const newDocRef = await db.collection(firestoreCollection).add(docData);
+  console.log(`✅ ${i}행 신규 업로드 완료: ${newDocRef.id}, NT=${docData.NT}, ET=${docData.ET}`);
 }
+ 
 
   // ------------------- Google Sheets 업로드 (Crew까지만) -------------------
   console.log("🚀 Google Sheets 업로드 시작");
