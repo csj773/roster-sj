@@ -210,7 +210,7 @@ for (let i=1; i<values.length; i++){
     docData.ET = hourToTimeStr(blhHour > 8 ? blhHour - 8 : 0);
 
     // NT 계산
-    const flightDate = new Date(docData.Date); // YYYY-MM-DD 형식 가정
+    const flightDate = new Date(docData.Date); // YYYY-MM-DD 기준
     const stdStr = docData.STDZ || "0000";
     const staStr = docData.STAZ || "0000";
 
@@ -218,10 +218,14 @@ for (let i=1; i<values.length; i++){
     const nextDay = staStr.includes("+1");
     const staDate = parseUTCDate(staStr.replace("+1",""), flightDate, nextDay);
 
-    // NT 구간: 13:00~21:00 UTC
-    const ntStart = new Date(stdDate); ntStart.setUTCHours(13,0,0,0);
-    const ntEnd = new Date(stdDate); ntEnd.setUTCHours(21,0,0,0);
+    // NT 구간: 13:00~21:00 UTC (비행 시작일 기준)
+    const ntStart = new Date(flightDate); ntStart.setUTCHours(13,0,0,0);
+    const ntEnd = new Date(flightDate); ntEnd.setUTCHours(21,0,0,0);
 
+    // STA가 다음 날이면 ntEnd도 다음 날로
+    if (nextDay) ntEnd.setUTCDate(ntEnd.getUTCDate() + 1);
+
+    // 겹치는 시간 계산
     const overlapStart = stdDate > ntStart ? stdDate : ntStart;
     const overlapEnd = staDate < ntEnd ? staDate : ntEnd;
     let ntMs = overlapEnd - overlapStart;
@@ -264,8 +268,6 @@ for (let i=1; i<values.length; i++){
   }
 }
 console.log("🎉 Firestore 업로드 완료!");
-  
- 
    
   // ------------------- Date 변환 함수 -------------------
   function convertDate(input) {
