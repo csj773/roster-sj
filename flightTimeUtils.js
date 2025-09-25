@@ -1,24 +1,20 @@
 // flightTimeUtils.js
 
-// 문자열 "HHMM" 또는 "HH:MM" -> decimal hour
+// ------------------- BLH 문자열(HHMM 또는 HH:MM) → decimal hour -------------------
 export function blhStrToHour(str) {
   if (!str) return 0;
-  let h = 0, m = 0;
   if (str.includes(":")) {
-    [h, m] = str.split(":").map(Number);
-  } else if (/^\d{3,4}$/.test(str)) {
-    if (str.length === 3) { // e.g. "755"
-      h = Number(str[0]);
-      m = Number(str.slice(1, 3));
-    } else { // "1322"
-      h = Number(str.slice(0, 2));
-      m = Number(str.slice(2, 4));
-    }
+    const [h, m] = str.split(":").map(Number);
+    return h + m / 60;
+  } else if (str.length === 4) {
+    const h = Number(str.slice(0, 2));
+    const m = Number(str.slice(2, 4));
+    return h + m / 60;
   }
-  return h + m / 60;
+  return 0;
 }
 
-// decimal hour -> "HH:MM"
+// ------------------- decimal hour → "HH:MM" -------------------
 export function hourToTimeStr(hour) {
   const h = Math.floor(hour);
   let m = Math.round((hour - h) * 60);
@@ -26,52 +22,69 @@ export function hourToTimeStr(hour) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-// STD(Z), STA(Z) 문자열 -> Date 객체
-// nextDay = true 이면 다음날로 계산
-export function parseUTCDate(str, baseDate, nextDay = false) {
-  if (!str || !baseDate) return null;
+// ------------------- UTC 시간 문자열 → Date 객체 -------------------
+export function parseUTCDate(timeStr, baseDate, nextDay = false) {
+  const [h, m] = timeStr.split(":").map(Number);
   const date = new Date(baseDate);
-  let h = 0, m = 0;
-  if (str.includes(":")) {
-    [h, m] = str.split(":").map(Number);
-  } else if (/^\d{3,4}$/.test(str)) {
-    if (str.length === 3) { // e.g. "755"
-      h = Number(str[0]);
-      m = Number(str.slice(1, 3));
-    } else {
-      h = Number(str.slice(0, 2));
-      m = Number(str.slice(2, 4));
-    }
-  }
-  date.setUTCHours(h, m, 0, 0);
+  date.setUTCHours(h);
+  date.setUTCMinutes(m);
+  date.setUTCSeconds(0);
+  date.setUTCMilliseconds(0);
   if (nextDay) date.setUTCDate(date.getUTCDate() + 1);
   return date;
 }
 
-// ET: BLH 기준 8시간 초과분
+// ------------------- ET 계산 -------------------
 export function calculateET(blhStr) {
-  const blh = blhStrToHour(blhStr);
-  return blh > 8 ? hourToTimeStr(blh - 8) : "00:00";
+  const blhHour = blhStrToHour(blhStr);
+  return blhHour > 8 ? hourToTimeStr(blhHour - 8) : "00:00";
 }
 
-// NT: STD~STA 구간과 13:00~21:00 UTC 구간 겹치는 시간 계산
+// ------------------- NT 계산 -------------------
 export function calculateNT(stdDate, staDate) {
-  if (!stdDate || !staDate) return 0;
+  const nightStart = 13; // 13:00Z
+  const nightEnd = 21;   // 21:00Z
 
-  // NT 구간: STD 날짜 기준 13:00~21:00
-  const ntStart = new Date(stdDate);
-  ntStart.setUTCHours(13, 0, 0, 0);
+  const stdHour = stdDate.getUTCHours() + stdDate.getUTCMinutes() / 60;
+  const staHour = staDate.getUTCHours() + staDate.getUTCMinutes() / 60;
 
-  const ntEnd = new Date(stdDate);
-  ntEnd.setUTCHours(21, 0, 0, 0);
+  let nt = Math.min(staHour, nightEnd) - Math.max(stdHour, nightStart);
+  if (nt < 0) nt = 0;
+  return nt;
+}
 
-  // STA가 다음 날이면 NT 계산 시 해당 날짜까지 확장
-  if (staDate > ntEnd) ntEnd.setUTCDate(staDate.getUTCDate());
+// ------------------- 날짜 변환 -------------------
+export function convertDate(input) {
+  if (!input || typeof input !== "string") return input;
+  const s = input.trim();
+  const parts = s.split(/\s+/);
+  if (parts.length !== 2) return input;
 
-  // STD~STA 구간과 NT 구간 겹치는 시간 계산
-  const start = stdDate > ntStart ? stdDate : ntStart;
-  const end = staDate < ntEnd ? staDate : ntEnd;
-  const diff = (end - start) / 1000 / 3600; // 시간 단위
+  const token = parts[0];
+  const dayStr = parts[1].replace(/^0+/, "") || "0";
+  if (!/^\d+$/.test(dayStr)) return input;
 
-  return diff > 0 ? diff : 0;
+  const day = parseInt(dayStr, 10);
+  if (day < 1 || day > 31) return input;
+
+  const now = new Date();
+  const year = now.getFullYear();
+
+  const months = {
+    jan: "01", feb: "02", mar: "03", apr: "04",
+    may: "05", jun: "06", jul: "07", aug: "08",
+    sep: "09", oct: "10", nov: "11", dec: "12"
+  };
+  const tokenLower = token.toLowerCase();
+  if (months[tokenLower]) {
+    return `${year}.${months[tokenLower]}.${String(day).padStart(2, "0")}`;
+  }
+
+  const weekdays = ["mon","tue","wed","thu","fri","sat","sun"];
+  if (weekdays.includes(tokenLower)) {
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    return `${year}.${month}.${String(day).padStart(2, "0")}`;
+  }
+
+  return input;
 }
