@@ -88,66 +88,63 @@ if (!flutterflowUid || !firestoreAdminUid) { console.error("❌ Firebase UID 또
   console.log("✅ JSON/CSV 저장 완료");
   await browser.close();
 
-  // ------------------- Firestore 업로드 (신규/업데이트 구분) -------------------
-  console.log("🚀 Firestore 업로드 시작");
-  const headerMapFirestore = {"C/I(L)":"CIL","C/O(L)":"COL","STD(L)":"STDL","STD(Z)":"STDZ","STA(L)":"STAL","STA(Z)":"STAZ"};
+ // ------------------- Firestore 업로드 (중복 하나만 남기고 신규 저장) -------------------
+console.log("🚀 Firestore 업로드 시작");
+const headerMapFirestore = {"C/I(L)":"CIL","C/O(L)":"COL","STD(L)":"STDL","STD(Z)":"STDZ","STA(L)":"STAL","STA(Z)":"STAZ"};
 
-  for (let i = 1; i < values.length; i++) {
-    const row = values[i];
-    const docData = {};
-    headers.forEach((h, idx) => { docData[headerMapFirestore[h] || h] = row[idx] || ""; });
-    docData.userId = flutterflowUid;
-    docData.adminId = firestoreAdminUid;
-    docData.pdc_user_name = username;
+for (let i = 1; i < values.length; i++) {
+  const row = values[i];
+  const docData = {};
+  headers.forEach((h, idx) => { docData[headerMapFirestore[h] || h] = row[idx] || ""; });
+  docData.userId = flutterflowUid;
+  docData.adminId = firestoreAdminUid;
+  docData.pdc_user_name = username;
 
-    if (!docData.Activity || docData.Activity.trim() === "") {
-      console.log(`🗑️ ${i}행 Activity 없음, 업로드 생략`);
-      continue;
-    }
-
-    if (docData.From !== docData.To) {
-      const flightDate = new Date(docData.Date);
-      const nextDaySTD = docData.STDZ.includes("+1");
-      const nextDaySTA = docData.STAZ.includes("+1");
-      const stdDate = parseUTCDate(docData.STDZ, flightDate, nextDaySTD);
-      const staDate = parseUTCDate(docData.STAZ, flightDate, nextDaySTA);
-      docData.ET = calculateET(docData.BLH);
-      const ntHours = calculateNT(stdDate, staDate);
-      docData.NT = hourToTimeStr(ntHours);
-    } else {
-      docData.ET = "00:00";
-      docData.NT = "00:00";
-    }
-
-    // 기존 문서 확인
-    const querySnapshot = await db.collection(firestoreCollection)
-      .where("Date", "==", docData.Date)
-      .where("DC", "==", docData.DC)
-      .where("F", "==", docData.F)
-      .where("From", "==", docData.From)
-      .where("To", "==", docData.To)
-      .where("AcReg", "==", docData.AcReg)
-      .where("Crew", "==", docData.Crew)
-      .get();
-
-    if (!querySnapshot.empty) {
-      let updated = false;
-      for (const doc of querySnapshot.docs) {
-        if (doc.data().userId === flutterflowUid) {
-          await db.collection(firestoreCollection).doc(doc.id).set(docData, { merge: true });
-          updated = true;
-          console.log(`🔄 ${i}행 Firestore 업데이트 완료 | Date: ${docData.Date} | ${docData.From}-${docData.To} | Activity: ${docData.Activity} | ET: ${docData.ET} | NT: ${docData.NT} | DocID: ${doc.id}`);
-        }
-      }
-      if (!updated) {
-        const newDocRef = await db.collection(firestoreCollection).add(docData);
-        console.log(`✅ ${i}행 신규 Firestore 업로드 완료 | Date: ${docData.Date} | ${docData.From}-${docData.To} | Activity: ${docData.Activity} | ET: ${docData.ET} | NT: ${docData.NT} | DocID: ${newDocRef.id}`);
-      }
-    } else {
-      const newDocRef = await db.collection(firestoreCollection).add(docData);
-      console.log(`✅ ${i}행 신규 Firestore 업로드 완료 | Date: ${docData.Date} | ${docData.From}-${docData.To} | Activity: ${docData.Activity} | ET: ${docData.ET} | NT: ${docData.NT} | DocID: ${newDocRef.id}`);
-    }
+  if (!docData.Activity || docData.Activity.trim() === "") {
+    console.log(`🗑️ ${i}행 Activity 없음, 업로드 생략`);
+    continue;
   }
+
+  if (docData.From !== docData.To) {
+    const flightDate = new Date(docData.Date);
+    const nextDaySTD = docData.STDZ.includes("+1");
+    const nextDaySTA = docData.STAZ.includes("+1");
+    const stdDate = parseUTCDate(docData.STDZ, flightDate, nextDaySTD);
+    const staDate = parseUTCDate(docData.STAZ, flightDate, nextDaySTA);
+    docData.ET = calculateET(docData.BLH);
+    const ntHours = calculateNT(stdDate, staDate);
+    docData.NT = hourToTimeStr(ntHours);
+  } else {
+    docData.ET = "00:00";
+    docData.NT = "00:00";
+  }
+
+  // 기존 문서 조회
+  const querySnapshot = await db.collection(firestoreCollection)
+    .where("Date", "==", docData.Date)
+    .where("DC", "==", docData.DC)
+    .where("F", "==", docData.F)
+    .where("From", "==", docData.From)
+    .where("To", "==", docData.To)
+    .where("AcReg", "==", docData.AcReg)
+    .where("Crew", "==", docData.Crew)
+    .get();
+
+  if (!querySnapshot.empty) {
+    const docs = querySnapshot.docs;
+    // 첫 번째 문서만 남기고 나머지는 삭제
+    for (let j = 1; j < docs.length; j++) {
+      await db.collection(firestoreCollection).doc(docs[j].id).delete();
+      console.log(`🗑️ 중복 문서 삭제: ${docs[j].id}`);
+    }
+    // 첫 번째 문서는 업데이트
+    await db.collection(firestoreCollection).doc(docs[0].id).set(docData, { merge: true });
+    console.log(`🔄 ${i}행 Firestore 업데이트 완료 | DocID: ${docs[0].id}`);
+  } else {
+    const newDocRef = await db.collection(firestoreCollection).add(docData);
+    console.log(`✅ ${i}행 신규 Firestore 업로드 완료 | DocID: ${newDocRef.id}`);
+  }
+}
 
   // ------------------- Google Sheets 업로드 (Crew까지만) -------------------
   console.log("🚀 Google Sheets 업로드 시작");
