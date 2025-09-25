@@ -112,70 +112,60 @@ if (!flutterflowUid || !firestoreAdminUid) {
   await browser.close();
 
   // ------------------- Firestore 업로드 -------------------
-const headerMapFirestore = { "C/I(L)":"CIL","C/O(L)":"COL","STD(L)":"STDL","STD(Z)":"STDZ","STA(L)":"STAL","STA(Z)":"STAZ" };
+  const headerMapFirestore = { "C/I(L)":"CIL","C/O(L)":"COL","STD(L)":"STDL","STD(Z)":"STDZ","STA(L)":"STAL","STA(Z)":"STAZ" };
 
-for (let i=1; i<values.length; i++) {
-  const row = values[i];
-  const docData = {};
-  headers.forEach((h, idx) => { docData[headerMapFirestore[h]||h] = row[idx]||""; });
+  for (let i=1; i<values.length; i++) {
+    const row = values[i];
+    const docData = {};
+    headers.forEach((h, idx) => { docData[headerMapFirestore[h]||h] = row[idx]||""; });
 
-  docData.userId = flutterflowUid;
-  docData.adminId = firestoreAdminUid;
-  docData.pdc_user_name = username;
+    docData.userId = flutterflowUid;
+    docData.adminId = firestoreAdminUid;
+    docData.pdc_user_name = username;
 
-  if (!docData.Activity || docData.Activity.trim() === "") {
+    if (!docData.Activity || docData.Activity.trim() === "") {
+      const querySnapshot = await db.collection(firestoreCollection).where("Date","==",docData.Date).where("userId","==",flutterflowUid).get();
+      for (const doc of querySnapshot.docs) await db.collection(firestoreCollection).doc(doc.id).delete();
+      continue;
+    }
+
+    // ------------------- ET, NT 계산 -------------------
+    if (docData.From !== docData.To) {
+      docData.ET = calculateET(docData.BLH);
+
+      const flightDate = new Date(docData.Date);
+      const nextDay = docData.STAZ.includes("+1");
+      const stdDate = parseUTCDate(docData.STDZ, flightDate);
+      const staDate = parseUTCDate(docData.STAZ, flightDate, nextDay);
+      const ntHours = calculateNT(stdDate, staDate);
+      docData.NT = hourToTimeStr(ntHours);
+    } else {
+      docData.ET = "00:00";
+      docData.NT = "00:00";
+    }
+
+    // Firestore 업로드
     const querySnapshot = await db.collection(firestoreCollection)
       .where("Date","==",docData.Date)
-      .where("userId","==",flutterflowUid).get();
-    for (const doc of querySnapshot.docs) {
-      await db.collection(firestoreCollection).doc(doc.id).delete();
-      console.log(`🗑️ ${i}행 Activity 없음, 기존 문서 삭제 완료`);
-    }
-    continue;
-  }
+      .where("DC","==",docData.DC)
+      .where("F","==",docData.F)
+      .where("From","==",docData.From)
+      .where("To","==",docData.To)
+      .where("AcReg","==",docData.AcReg)
+      .where("Crew","==",docData.Crew)
+      .get();
 
-  // ------------------- ET, NT 계산 -------------------
-  if (docData.From !== docData.To) {
-    docData.ET = calculateET(docData.BLH);
-    const flightDate = new Date(docData.Date);
-    const nextDay = docData.STAZ.includes("+1");
-    const stdDate = parseUTCDate(docData.STDZ, flightDate);
-    const staDate = parseUTCDate(docData.STAZ, flightDate, nextDay);
-    const ntHours = calculateNT(stdDate, staDate);
-    docData.NT = hourToTimeStr(ntHours);
-  } else {
-    docData.ET = "00:00";
-    docData.NT = "00:00";
-  }
-
-  // Firestore 업로드
-  const querySnapshot = await db.collection(firestoreCollection)
-    .where("Date","==",docData.Date)
-    .where("DC","==",docData.DC)
-    .where("F","==",docData.F)
-    .where("From","==",docData.From)
-    .where("To","==",docData.To)
-    .where("AcReg","==",docData.AcReg)
-    .where("Crew","==",docData.Crew)
-    .get();
-
-  if (!querySnapshot.empty) {
-    let updated = false;
-    for (const doc of querySnapshot.docs) {
-      if (doc.data().userId === flutterflowUid) {
-        await db.collection(firestoreCollection).doc(doc.id).set(docData, { merge: true });
-        console.log(`🔄 ${i}행 기존 문서 업데이트 완료`);
-        updated = true;
+    if (!querySnapshot.empty) {
+      let updated = false;
+      for (const doc of querySnapshot.docs) {
+        if (doc.data().userId === flutterflowUid) {
+          await db.collection(firestoreCollection).doc(doc.id).set(docData, { merge: true });
+          updated = true;
+        }
       }
-    }
-    if (!updated) {
-      await db.collection(firestoreCollection).add(docData);
-      console.log(`✅ ${i}행 신규 업로드 완료 (userId 다름)`);
-    }
-  } else {
-    await db.collection(firestoreCollection).add(docData);
-    console.log(`✅ ${i}행 신규 업로드 완료`);
- 
+      if (!updated) await db.collection(firestoreCollection).add(docData);
+    } else await db.collection(firestoreCollection).add(docData);
+  }
 
   // ------------------- Date 변환 함수 -------------------
   function convertDate(input) {
@@ -220,6 +210,4 @@ for (let i=1; i<values.length; i++) {
     console.error("❌ Google Sheets 업로드 실패:", err);
   }
 })();
-
-
-
+- [ ] 
