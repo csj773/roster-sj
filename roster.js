@@ -201,33 +201,35 @@ for (let i=1; i<values.length; i++){
 
   if (!docData.Activity || docData.Activity.trim() === "") continue;
 
-  // ------------------- ET 계산 -------------------
-  const blhHour = blhStrToHour(docData.BLH || "0000"); // BLH string 그대로 사용
-  docData.ET = blhHour > 8 ? hourToTimeStr(blhHour - 8) : "00:00";
+  // ------------------- ET, NT 계산 조건 -------------------
+  if (docData.From !== docData.To) {
+    // ET 계산
+    const blhHour = blhStrToHour(docData.BLH || "0000"); // BLH string 그대로 사용
+    docData.ET = blhHour > 8 ? hourToTimeStr(blhHour - 8) : "00:00";
 
-  // ------------------- NT 계산 -------------------
-  // baseDate = 해당 비행일
-  const flightDate = new Date(docData.Date); // YYYY-MM-DD 형식 가정
+    // NT 계산
+    const flightDate = new Date(docData.Date); // YYYY-MM-DD 형식 가정
+    const stdStr = docData.STDZ || "0000";
+    const staStr = docData.STAZ || "0000";
 
-  // STD(Z)
-  const stdStr = docData.STDZ || "0000";
-  const stdDate = parseUTCDate(stdStr, flightDate);
+    const stdDate = parseUTCDate(stdStr, flightDate);
+    let nextDay = staStr.includes("+1");
+    const staDate = parseUTCDate(staStr.replace("+1",""), flightDate, nextDay);
 
-  // STA(Z)
-  const staStr = docData.STAZ || "0000";
-  let nextDay = staStr.includes("+1");
-  const staDate = parseUTCDate(staStr.replace("+1",""), flightDate, nextDay);
+    const ntStart = new Date(flightDate); ntStart.setUTCHours(13,0,0,0);
+    const ntEnd = new Date(flightDate); ntEnd.setUTCHours(21,0,0,0);
 
-  // NT 구간: 13:00~21:00 UTC
-  const ntStart = new Date(flightDate); ntStart.setUTCHours(13,0,0,0);
-  const ntEnd = new Date(flightDate); ntEnd.setUTCHours(21,0,0,0);
-
-  const overlapStart = stdDate > ntStart ? stdDate : ntStart;
-  const overlapEnd = staDate < ntEnd ? staDate : ntEnd;
-  let ntMs = overlapEnd - overlapStart;
-  if (ntMs < 0) ntMs = 0;
-  const ntHours = ntMs / (1000*60*60);
-  docData.NT = hourToTimeStr(ntHours);
+    const overlapStart = stdDate > ntStart ? stdDate : ntStart;
+    const overlapEnd = staDate < ntEnd ? staDate : ntEnd;
+    let ntMs = overlapEnd - overlapStart;
+    if (ntMs < 0) ntMs = 0;
+    const ntHours = ntMs / (1000*60*60);
+    docData.NT = hourToTimeStr(ntHours);
+  } else {
+    // 동일 From/To인 경우 ET, NT는 0
+    docData.ET = "00:00";
+    docData.NT = "00:00";
+  }
 
   // ------------------- Firestore 기존 문서 조회 -------------------
   const querySnapshot = await db.collection(firestoreCollection)
@@ -259,9 +261,8 @@ for (let i=1; i<values.length; i++){
   }
 }
 console.log("🎉 Firestore 업로드 완료!");
+  
  
- 
-
   // ------------------- Date 변환 함수 -------------------
   function convertDate(input) {
     if (!input || typeof input !== "string") return input;
