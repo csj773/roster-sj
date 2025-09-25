@@ -149,47 +149,10 @@ if (!flutterflowUid || !firestoreAdminUid) {
   await browser.close();
 
 // ------------------- Firestore 업로드 -------------------
+import { blhStrToHour, hourToTimeStr, parseUTCDate, calculateNT, calculateET } from './flightTimeUtils.js';
+
 console.log("🚀 Firestore 업로드 시작");
 const headerMapFirestore = { "C/I(L)":"CIL","C/O(L)":"COL","STD(L)":"STDL","STD(Z)":"STDZ","STA(L)":"STAL","STA(Z)":"STAZ" };
-
-// BLH 문자열 "HHMM" 또는 "HH:MM" -> decimal hour
-function blhStrToHour(str) {
-  if (!str) return 0;
-  if (str.includes(":")) {
-    const [h,m] = str.split(":").map(Number);
-    return h + m/60;
-  } else if (str.length === 4) {
-    const h = Number(str.slice(0,2));
-    const m = Number(str.slice(2,4));
-    return h + m/60;
-  }
-  return 0;
-}
-
-// decimal hour -> "HH:MM"
-function hourToTimeStr(hour) {
-  if (isNaN(hour) || hour <= 0) return "00:00";
-  const h = Math.floor(hour);
-  let m = Math.round((hour - h) * 60);
-  if (m === 60) return hourToTimeStr(h+1);
-  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
-}
-
-// UTC 문자열 "HHMM" 또는 "HH:MM" -> Date 객체
-function parseUTCDate(dateStr, baseDate, nextDay=false) {
-  if (!dateStr) return new Date(baseDate);
-  let h=0, m=0;
-  if (dateStr.includes(":")) {
-    [h,m] = dateStr.split(":").map(Number);
-  } else if (dateStr.length === 4) {
-    h = Number(dateStr.slice(0,2));
-    m = Number(dateStr.slice(2,4));
-  }
-  const d = new Date(baseDate);
-  d.setUTCHours(h, m, 0, 0);
-  if (nextDay) d.setUTCDate(d.getUTCDate()+1);
-  return d;
-}
 
 for (let i=1; i<values.length; i++){
   const row = values[i];
@@ -203,37 +166,19 @@ for (let i=1; i<values.length; i++){
 
   if (!docData.Activity || docData.Activity.trim() === "") continue;
 
-  // ------------------- ET, NT 계산 조건 -------------------
+  // ------------------- ET, NT 계산 -------------------
   if (docData.From !== docData.To) {
     // ET 계산
-    const blhHour = blhStrToHour(docData.BLH || "0000"); // BLH string 그대로 사용
-    docData.ET = hourToTimeStr(blhHour > 8 ? blhHour - 8 : 0);
+    docData.ET = calculateET(docData.BLH);
 
     // NT 계산
-    const flightDate = new Date(docData.Date); // YYYY-MM-DD 기준
-    const stdStr = docData.STDZ || "0000";
-    const staStr = docData.STAZ || "0000";
-
-    const stdDate = parseUTCDate(stdStr, flightDate);
-    const nextDay = staStr.includes("+1");
-    const staDate = parseUTCDate(staStr.replace("+1",""), flightDate, nextDay);
-
-    // NT 구간: 13:00~21:00 UTC (비행 시작일 기준)
-    const ntStart = new Date(flightDate); ntStart.setUTCHours(13,0,0,0);
-    const ntEnd = new Date(flightDate); ntEnd.setUTCHours(21,0,0,0);
-
-    // STA가 다음 날이면 ntEnd도 다음 날로
-    if (nextDay) ntEnd.setUTCDate(ntEnd.getUTCDate() + 1);
-
-    // 겹치는 시간 계산
-    const overlapStart = stdDate > ntStart ? stdDate : ntStart;
-    const overlapEnd = staDate < ntEnd ? staDate : ntEnd;
-    let ntMs = overlapEnd - overlapStart;
-    if (ntMs < 0) ntMs = 0;
-    const ntHours = ntMs / (1000*60*60);
+    const flightDate = new Date(docData.Date);
+    const stdDate = parseUTCDate(docData.STDZ, flightDate);
+    const nextDay = docData.STAZ.includes("+1");
+    const staDate = parseUTCDate(docData.STAZ.replace("+1",""), flightDate, nextDay);
+    const ntHours = calculateNT(stdDate, staDate);
     docData.NT = hourToTimeStr(ntHours);
   } else {
-    // 동일 From/To인 경우 ET, NT는 00:00
     docData.ET = "00:00";
     docData.NT = "00:00";
   }
@@ -267,7 +212,9 @@ for (let i=1; i<values.length; i++){
     console.log(`✅ ${i}행 신규 업로드 완료`);
   }
 }
+
 console.log("🎉 Firestore 업로드 완료!");
+
    
   // ------------------- Date 변환 함수 -------------------
   function convertDate(input) {
