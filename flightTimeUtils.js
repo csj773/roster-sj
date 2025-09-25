@@ -26,21 +26,48 @@ export function hourToTimeStr(hour) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-// STD(Z), STA(Z) 문자열 -> Date 객체 (nextDay 처리 가능)
-export function parseUTCDate(str, baseDate, nextDay = false) {
-  if (!str || !baseDate) return null;
-  const date = new Date(baseDate);
-  let h = 0, m = 0;
-  if (str.includes(":")) {
-    [h, m] = str.split(":").map(Number);
-  } else if (/^\d{3,4}$/.test(str)) {
-    if (str.length === 3) { h = Number(str[0]); m = Number(str.slice(1, 3)); }
-    else { h = Number(str.slice(0, 2)); m = Number(str.slice(2, 4)); }
+// STD/STA HHMM(+1/-1) 문자열, flightDate: Date 객체 (해당 행 Date)
+export function calculateNT(stdStr, staStr, flightDate) {
+  if (!stdStr || !staStr) return "00:00";
+
+  // --- STD 처리 ---
+  let stdDate = new Date(flightDate);
+  let stdH = Number(stdStr.slice(0, 2));
+  let stdM = Number(stdStr.slice(2, 4));
+  stdDate.setUTCHours(stdH, stdM, 0, 0);
+  if (stdStr.includes("+1")) stdDate.setUTCDate(stdDate.getUTCDate() + 1);
+  if (stdStr.includes("-1")) stdDate.setUTCDate(stdDate.getUTCDate() - 1);
+
+  // --- STA 처리 ---
+  let staDate = new Date(flightDate);
+  let staH = Number(staStr.slice(0, 2));
+  let staM = Number(staStr.slice(2, 4));
+  staDate.setUTCHours(staH, staM, 0, 0);
+  if (staStr.includes("+1")) staDate.setUTCDate(staDate.getUTCDate() + 1);
+  if (staStr.includes("-1")) staDate.setUTCDate(staDate.getUTCDate() - 1);
+
+  // --- NT 누적 계산 ---
+  let totalNT = 0;
+  let cursor = new Date(stdDate);
+
+  while (cursor < staDate) {
+    const ntStart = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate(), 13, 0, 0));
+    const ntEnd = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate(), 21, 0, 0));
+
+    const overlapStart = cursor > ntStart ? cursor : ntStart;
+    const overlapEnd = staDate < ntEnd ? staDate : ntEnd;
+
+    const diff = (overlapEnd - overlapStart) / 1000 / 3600; // 시간 단위
+    if (diff > 0) totalNT += diff;
+
+    // 다음 날 00:00로 이동
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+    cursor.setUTCHours(0, 0, 0, 0);
   }
-  date.setUTCHours(h, m, 0, 0);
-  if (nextDay) date.setUTCDate(date.getUTCDate() + 1);
-  return date;
+
+  return hourToTimeStr(totalNT);
 }
+
 
 // ET: BLH 기준 8시간 초과분
 export function calculateET(blhStr) {
