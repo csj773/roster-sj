@@ -1,16 +1,10 @@
+
 import puppeteer from "puppeteer";
 import fs from "fs";
 import path from "path";
 import "dotenv/config";
 import admin from "firebase-admin";
 import { google } from "googleapis";
-import {
-  blhStrToHour,
-  hourToTimeStr,
-  parseUTCDate,
-  calculateET,
-  calculateNT
-} from "./flightTimeUtils.js";
 
 // ------------------- Firebase 초기화 -------------------
 if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
@@ -57,19 +51,81 @@ if (!flutterflowUid || !firestoreAdminUid) {
   process.exit(1);
 }
 
-// ------------------- Puppeteer 시작 -------------------
+// ------------------- 유틸 함수 -------------------
+function blhStrToHour(str) {
+  if (!str) return 0;
+  if (str.includes(":")) {
+    const [h, m] = str.split(":").map(Number);
+    return h + m / 60;
+  } else if (str.length === 4) {
+    const h = Number(str.slice(0, 2));
+    const m = Number(str.slice(2, 4));
+    return h + m / 60;
+  }
+  return 0;
+}
+
+function hourToTimeStr(hour) {
+  const h = Math.floor(hour);
+  let m = Math.round((hour - h) * 60);
+  if (m === 60) return hourToTimeStr(h + 1);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function timeStrToHour(str) {
+  if (!str) return 0;
+  const [h, m] = str.split(":").map(Number);
+  if (isNaN(h) || isNaN(m)) return 0;
+  return h + m / 60;
+}
+
+function convertDate(input) {
+  if (!input || typeof input !== "string") return input;
+  const s = input.trim();
+  const parts = s.split(/\s+/);
+  if (parts.length !== 2) return input;
+  const token = parts[0];
+  const dayStr = parts[1].replace(/^0+/, "") || "0";
+  if (!/^\d+$/.test(dayStr)) return input;
+  const day = parseInt(dayStr, 10);
+  if (day < 1 || day > 31) return input;
+  const now = new Date();
+  const year = now.getFullYear();
+  const months = {
+    jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
+    jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
+  };
+  const tokenLower = token.toLowerCase();
+  if (months[tokenLower]) return `${year}.${months[tokenLower]}.${String(day).padStart(2,"0")}`;
+  const weekdays = ["mon","tue","wed","thu","fri","sat","sun"];
+  if (weekdays.includes(tokenLower)) {
+    const month = String(now.getMonth()+1).padStart(2,"0");
+    return `${year}.${month}.${String(day).padStart(2,"0")}`;
+  }
+  return input;
+}
+
+// ------------------- 메인 실행 -------------------
 (async () => {
   const browser = await puppeteer.launch({
     headless: "new",
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
   });
-
   const page = await browser.newPage();
-  const username = process.env.INPUT_PDC_USERNAME || process.env.PDC_USERNAME;
-  const password = process.env.INPUT_PDC_PASSWORD || process.env.PDC_PASSWORD;
 
   console.log("👉 로그인 페이지 접속 중...");
   await page.goto("https://pdc-web.premia.kr/CrewConnex/default.aspx", { waitUntil: "networkidle0" });
+
+  const username = process.env.INPUT_PDC_USERNAME || process.env.PDC_USERNAME;
+  const password = process.env.INPUT_PDC_PASSWORD || process.env.PDC_PASSWORD;
+
+  if (!username || !password) {
+    console.error("❌ PDC_USERNAME 또는 PDC_PASSWORD 환경변수가 없습니다.");
+    await browser.close();
+    process.exit(1);
+  }
+
+  console.log("👉 로그인 시도 중...");
   await page.type("#ctl00_Main_userId_edit", username, { delay: 50 });
   await page.type("#ctl00_Main_password_edit", password, { delay: 50 });
   await Promise.all([
@@ -84,17 +140,17 @@ if (!flutterflowUid || !firestoreAdminUid) {
     return links.find(a => a.textContent.includes("Roster")) || null;
   });
 
-  if (!rosterLink) {
+  if (rosterLink) {
+    await Promise.all([
+      rosterLink.click(),
+      page.waitForNavigation({ waitUntil: "networkidle0" }),
+    ]);
+    console.log("✅ Roster 메뉴 클릭 완료");
+  } else {
     console.error("❌ Roster 링크를 찾지 못했습니다.");
     await browser.close();
     return;
   }
-
-  await Promise.all([
-    rosterLink.click(),
-    page.waitForNavigation({ waitUntil: "networkidle0" }),
-  ]);
-  console.log("✅ Roster 메뉴 클릭 완료");
 
   // Roster 테이블 추출
   await page.waitForSelector("table tr");
@@ -133,12 +189,12 @@ if (!flutterflowUid || !firestoreAdminUid) {
     seen.add(key);
     return true;
   });
+
   values.unshift(headers);
 
   // 파일 저장
   const publicDir = path.join(process.cwd(), "public");
   if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir);
-
   fs.writeFileSync(path.join(publicDir, "roster.json"), JSON.stringify({ values }, null, 2), "utf-8");
   fs.writeFileSync(path.join(publicDir, "roster.csv"), values.map(row => row.map(col => `"${(col||"").replace(/"/g,'""')}"`).join(",")).join("\n"), "utf-8");
   console.log("✅ roster.json / roster.csv 저장 완료");
@@ -149,38 +205,30 @@ if (!flutterflowUid || !firestoreAdminUid) {
   console.log("🚀 Firestore 업로드 시작");
   const headerMapFirestore = { "C/I(L)":"CIL","C/O(L)":"COL","STD(L)":"STDL","STD(Z)":"STDZ","STA(L)":"STAL","STA(Z)":"STAZ" };
 
-  for (let i = 1; i < values.length; i++) {
+  for (let i=1; i<values.length; i++){
     const row = values[i];
     const docData = {};
     headers.forEach((h, idx) => { docData[headerMapFirestore[h]||h] = row[idx]||""; });
 
+    // UID / Admin 적용
     docData.userId = flutterflowUid;
     docData.adminId = firestoreAdminUid;
     docData.pdc_user_name = username;
 
-    if (!docData.Activity || docData.Activity.trim() === "") {
-      // Activity 없으면 기존 flutterflowUid 문서 삭제
-      const querySnapshot = await db.collection(firestoreCollection)
-        .where("Date","==",docData.Date)
-        .where("userId","==",flutterflowUid).get();
-      for (const doc of querySnapshot.docs) await db.collection(firestoreCollection).doc(doc.id).delete();
-      continue;
-    }
+    if (!docData.Activity || docData.Activity.trim() === "") continue;
 
-    // ET / NT 계산 (From !== To)
-    if (docData.From !== docData.To) {
-      docData.ET = calculateET(docData.BLH);
+    // BL, ET, NT 계산
+    const blhHour = blhStrToHour(docData.BLH);
+    docData.BL = hourToTimeStr(blhHour);
+    docData.ET = blhHour > 8 ? hourToTimeStr(blhHour - 8) : "00:00";
 
-      const flightDate = new Date(docData.Date);
-      const nextDay = docData.STAZ.includes("+1");
-      const stdDate = parseUTCDate(docData.STDZ, flightDate);
-      const staDate = parseUTCDate(docData.STAZ, flightDate, nextDay);
-      const ntHours = calculateNT(stdDate, staDate);
-      docData.NT = hourToTimeStr(ntHours);
-    } else {
-      docData.ET = "00:00";
-      docData.NT = "00:00";
-    }
+    const stdHour = timeStrToHour(docData.STDZ || "00:00");
+    const staHour = timeStrToHour(docData.STAZ || "00:00");
+    const nightStart = 13; // 13:00Z
+    const nightEnd = 21;   // 21:00Z
+    let nt = Math.min(staHour, nightEnd) - Math.max(stdHour, nightStart);
+    if (nt < 0) nt = 0;
+    docData.NT = hourToTimeStr(nt);
 
     // Firestore 기존 문서 조회
     const querySnapshot = await db.collection(firestoreCollection)
@@ -214,38 +262,16 @@ if (!flutterflowUid || !firestoreAdminUid) {
   console.log("🎉 Firestore 업로드 완료!");
 
   // ------------------- Google Sheets 업로드 -------------------
-  function convertDate(input) {
-    if (!input || typeof input !== "string") return input;
-    const s = input.trim();
-    const parts = s.split(/\s+/);
-    if (parts.length !== 2) return input;
-    const token = parts[0];
-    const dayStr = parts[1].replace(/^0+/, "") || "0";
-    if (!/^\d+$/.test(dayStr)) return input;
-    const day = parseInt(dayStr, 10);
-    if (day < 1 || day > 31) return input;
-    const now = new Date();
-    const year = now.getFullYear();
-    const months = { jan:"01", feb:"02", mar:"03", apr:"04", may:"05", jun:"06", jul:"07", aug:"08", sep:"09", oct:"10", nov:"11", dec:"12" };
-    const tokenLower = token.toLowerCase();
-    if (months[tokenLower]) return `${year}.${months[tokenLower]}.${String(day).padStart(2,"0")}`;
-    const weekdays = ["mon","tue","wed","thu","fri","sat","sun"];
-    if (weekdays.includes(tokenLower)) {
-      const month = String(now.getMonth()+1).padStart(2,"0");
-      return `${year}.${month}.${String(day).padStart(2,"0")}`;
-    }
-    return input;
-  }
-
   console.log("🚀 Google Sheets A1부터 덮어쓰기 시작...");
   const spreadsheetId = "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
   const sheetName = "Roster1";
+  const crewIndex = headers.findIndex(h => h === "Crew");
 
   const sheetValues = values.map((row, idx) => {
-    if (idx === 0) return row;
+    if (idx === 0) return row.slice(0, crewIndex + 1);
     const newRow = [...row];
     newRow[0] = convertDate(row[0]);
-    return newRow;
+    return newRow.slice(0, crewIndex + 1);
   });
 
   try {
@@ -259,6 +285,4 @@ if (!flutterflowUid || !firestoreAdminUid) {
   } catch (err) {
     console.error("❌ Google Sheets 업로드 실패:", err);
   }
-
 })();
-
