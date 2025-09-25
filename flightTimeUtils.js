@@ -17,7 +17,10 @@ export function blhStrToHour(str) {
 export function hourToTimeStr(hour) {
   const h = Math.floor(hour);
   let m = Math.round((hour - h) * 60);
-  if (m === 60) return hourToTimeStr(h + 1);
+  if (m === 60) {
+    h++;
+    m = 0;
+  }
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
@@ -89,3 +92,4 @@ export function convertDate(input) {
 
   return input;
 }
+
