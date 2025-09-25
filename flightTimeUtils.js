@@ -1,6 +1,4 @@
-// flightTimeUtils.js
-
-// ------------------- BLH 문자열(HHMM 또는 HH:MM) → decimal hour -------------------
+// ------------------- 문자열 → 시간 변환 -------------------
 export function blhStrToHour(str) {
   if (!str) return 0;
   let h = 0, m = 0;
@@ -10,7 +8,7 @@ export function blhStrToHour(str) {
     if (str.length === 3) { // e.g. "755"
       h = Number(str[0]);
       m = Number(str.slice(1, 3));
-    } else { // e.g. "1322"
+    } else { // "1322"
       h = Number(str.slice(0, 2));
       m = Number(str.slice(2, 4));
     }
@@ -18,7 +16,7 @@ export function blhStrToHour(str) {
   return h + m / 60;
 }
 
-// ------------------- decimal hour → "HH:MM" -------------------
+// ------------------- 시간 → 문자열 변환 -------------------
 export function hourToTimeStr(hour) {
   const h = Math.floor(hour);
   let m = Math.round((hour - h) * 60);
@@ -26,62 +24,58 @@ export function hourToTimeStr(hour) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-// ------------------- STD/STA HHMM(+1/-1) → Date 객체 -------------------
-export function parseUTCDate(str, baseDate) {
-  if (!str || !baseDate) return null;
-  let nextDay = 0;
-
-  if (str.endsWith("+1")) { nextDay = 1; str = str.slice(0, -2); }
-  else if (str.endsWith("-1")) { nextDay = -1; str = str.slice(0, -2); }
-
-  let h = 0, m = 0;
-  if (/^\d{3,4}$/.test(str)) {
-    if (str.length === 3) { h = Number(str[0]); m = Number(str.slice(1, 3)); }
-    else { h = Number(str.slice(0, 2)); m = Number(str.slice(2, 4)); }
-  } else return null;
-
-  const date = new Date(Date.UTC(baseDate.getUTCFullYear(), baseDate.getUTCMonth(), baseDate.getUTCDate(), h, m, 0));
-  if (nextDay !== 0) date.setUTCDate(date.getUTCDate() + nextDay);
-  return date;
-}
-
 // ------------------- ET 계산 -------------------
-// BLH 기준 8시간 초과분
 export function calculateET(blhStr) {
   const blh = blhStrToHour(blhStr);
   return blh > 8 ? hourToTimeStr(blh - 8) : "00:00";
 }
 
-// ------------------- NT 계산 -------------------
-// STD~STA 구간에서 UTC 13:00~21:00 구간만 합산
-export function calculateNT(stdHHMM, staHHMM, flightDate) {
-  if (!stdHHMM || !staHHMM || !flightDate) return "00:00";
+// ------------------- NT 계산 (BLH 보정 포함) -------------------
+export function calculateNTFromSTDSTA(stdZ, staZ, flightDate, blhStr) {
+  if (!stdZ || !staZ) return "00:00";
 
-  const ro = parseUTCDate(stdHHMM, flightDate);
-  const ri = parseUTCDate(staHHMM, flightDate);
-  if (!ro || !ri) return "00:00";
+  // --- STD Date 객체 ---
+  let stdDate = new Date(flightDate);
+  let stdH = Number(stdZ.slice(0, 2));
+  let stdM = Number(stdZ.slice(2, 4));
+  stdDate.setUTCHours(stdH, stdM, 0, 0);
+  if (stdZ.includes("+1")) stdDate.setUTCDate(stdDate.getUTCDate() + 1);
+  if (stdZ.includes("-1")) stdDate.setUTCDate(stdDate.getUTCDate() - 1);
 
-  let totalNTMs = 0;
-  let cursor = new Date(ro);
+  // --- STA Date 객체 ---
+  let staDate = new Date(flightDate);
+  let staH = Number(staZ.slice(0, 2));
+  let staM = Number(staZ.slice(2, 4));
+  staDate.setUTCHours(staH, staM, 0, 0);
+  if (staZ.includes("+1")) staDate.setUTCDate(staDate.getUTCDate() + 1);
+  if (staZ.includes("-1")) staDate.setUTCDate(staDate.getUTCDate() - 1);
 
-  while (cursor < ri) {
+  // --- NT 계산 ---
+  let totalNT = 0;
+  let cursor = new Date(stdDate);
+
+  while (cursor < staDate) {
     const ntStart = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate(), 13, 0, 0));
-    const ntEnd = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate(), 21, 0, 0));
+    const ntEnd   = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate(), 21, 0, 0));
 
-    const overlapStart = cursor > ntStart ? cursor : ntStart;
-    const overlapEnd = ri < ntEnd ? ri : ntEnd;
+    const overlapStart = new Date(Math.max(stdDate, ntStart));
+    const overlapEnd   = new Date(Math.min(staDate, ntEnd));
 
-    if (overlapEnd > overlapStart) totalNTMs += overlapEnd.getTime() - overlapStart.getTime();
+    if (overlapStart < overlapEnd) {
+      totalNT += (overlapEnd - overlapStart) / 1000 / 3600;
+    }
 
-    // 다음 날 00:00로 이동
-    cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate() + 1, 0, 0, 0));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+    cursor.setUTCHours(0, 0, 0, 0);
   }
 
-  const totalMinutes = Math.floor(totalNTMs / 60000);
-  const hours = String(Math.floor(totalMinutes / 60)).padStart(2, "0");
-  const minutes = String(totalMinutes % 60).padStart(2, "0");
+  // --- BLH 보정 ---
+  const blhHour = blhStr ? blhStrToHour(blhStr) : null;
+  if (blhHour !== null && totalNT > blhHour) {
+    totalNT = blhHour;
+  }
 
-  return `${hours}:${minutes}`;
+  return hourToTimeStr(totalNT);
 }
 
 // ------------------- 날짜 변환 -------------------
@@ -118,3 +112,14 @@ export function convertDate(input) {
   return input;
 }
 
+// ------------------- Crew 문자열 파싱 -------------------
+// “긴최배**.." → ["김","최","배",...]
+export function parseCrewString(crewStr) {
+  if (!crewStr || typeof crewStr !== "string") return [];
+
+  // 성씨 + 1~2글자 이름 (총 2~3글자) 패턴 매칭
+  const regex = /(김|이|박|최|정|조|윤|장|임|한|오|서|신|권|황|안|송|류|홍|전|고|문|손|백|허|유|남|심|노|하|곽|성|차|주|우|구|민|진|지|엄|채|원|천|방|공|강)[가-힣]{1,2}/g;
+
+  const matches = crewStr.match(regex);
+  return matches ? matches : [];
+}
