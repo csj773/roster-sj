@@ -168,6 +168,7 @@ function blhStrToHour(str) {
 
 // decimal hour -> "HH:MM"
 function hourToTimeStr(hour) {
+  if (isNaN(hour) || hour <= 0) return "00:00";
   const h = Math.floor(hour);
   let m = Math.round((hour - h) * 60);
   if (m === 60) return hourToTimeStr(h+1);
@@ -176,6 +177,7 @@ function hourToTimeStr(hour) {
 
 // UTC 문자열 "HHMM" 또는 "HH:MM" -> Date 객체
 function parseUTCDate(dateStr, baseDate, nextDay=false) {
+  if (!dateStr) return new Date(baseDate);
   let h=0, m=0;
   if (dateStr.includes(":")) {
     [h,m] = dateStr.split(":").map(Number);
@@ -205,7 +207,7 @@ for (let i=1; i<values.length; i++){
   if (docData.From !== docData.To) {
     // ET 계산
     const blhHour = blhStrToHour(docData.BLH || "0000"); // BLH string 그대로 사용
-    docData.ET = blhHour > 8 ? hourToTimeStr(blhHour - 8) : "00:00";
+    docData.ET = hourToTimeStr(blhHour > 8 ? blhHour - 8 : 0);
 
     // NT 계산
     const flightDate = new Date(docData.Date); // YYYY-MM-DD 형식 가정
@@ -213,7 +215,7 @@ for (let i=1; i<values.length; i++){
     const staStr = docData.STAZ || "0000";
 
     const stdDate = parseUTCDate(stdStr, flightDate);
-    let nextDay = staStr.includes("+1");
+    const nextDay = staStr.includes("+1");
     const staDate = parseUTCDate(staStr.replace("+1",""), flightDate, nextDay);
 
     const ntStart = new Date(flightDate); ntStart.setUTCHours(13,0,0,0);
@@ -226,7 +228,7 @@ for (let i=1; i<values.length; i++){
     const ntHours = ntMs / (1000*60*60);
     docData.NT = hourToTimeStr(ntHours);
   } else {
-    // 동일 From/To인 경우 ET, NT는 0
+    // 동일 From/To인 경우 ET, NT는 00:00
     docData.ET = "00:00";
     docData.NT = "00:00";
   }
@@ -260,8 +262,8 @@ for (let i=1; i<values.length; i++){
     console.log(`✅ ${i}행 신규 업로드 완료`);
   }
 }
-console.log("🎉 Firestore 업로드 완료!");
-  
+console.log("🎉 Firestore 업로드 완료!");  
+
  
   // ------------------- Date 변환 함수 -------------------
   function convertDate(input) {
