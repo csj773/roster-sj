@@ -127,6 +127,27 @@ export function parseUTCDate(dateStr) {
   return new Date(Date.UTC(year, month - 1, day, h, m, 0));
 }
 
+// ------------------- 날짜 → Year/Month 파싱 -------------------
+
+// "Mon 01" 형식 → { Year: "2025", Month: "Sep" }
+export function parseYearMonthFromEeeDd(dateStr) {
+  if (!dateStr || typeof dateStr !== "string") return { Year: "", Month: "" };
+
+  const weekdays = ["mon","tue","wed","thu","fri","sat","sun"];
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const now = new Date();
+  const year = now.getFullYear();
+
+  const parts = dateStr.trim().split(/\s+/);
+  if (parts.length !== 2) return { Year: String(year), Month: "" };
+
+  const token = parts[0].toLowerCase();
+  if (!weekdays.includes(token)) return { Year: String(year), Month: "" };
+
+  const month = months[now.getMonth()]; // 현재 월을 Mmm 형태로 반환
+  return { Year: String(year), Month: month };
+}
+
 // ------------------- Crew 문자열 파싱 -------------------
 // “김최배**.." → ["김","최","배",...]
 export function parseCrewString(crewStr) {
