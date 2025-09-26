@@ -12,7 +12,8 @@ import {
   calculateET,
   calculateNTFromSTDSTA,
   convertDate,
-  parseCrewString
+  parseCrewString,
+  parseYearMonthFromEeeDd
 } from "./flightTimeUtils.js";
 
 // ------------------- Firebase 초기화 -------------------
@@ -127,6 +128,8 @@ console.log("✅ UID 및 Config 로드 완료");
   values.unshift(headers);
   console.log("✅ 중복 제거 완료. 최종 행 수:", values.length - 1);
 
+  await browser.close();
+
   // ------------------- JSON/CSV 파일 저장 -------------------
   console.log("🚀 JSON/CSV 저장");
   const publicDir = path.join(process.cwd(),"public");
@@ -139,88 +142,93 @@ console.log("✅ UID 및 Config 로드 완료");
   );
   console.log("✅ JSON/CSV 저장 완료");
 
-  await browser.close();
-
   // ------------------- Firestore 업로드 -------------------
-console.log("🚀 Firestore 업로드 시작");
-const headerMapFirestore = {
-  "C/I(L)": "CIL",
-  "C/O(L)": "COL",
-  "STD(L)": "STDL",
-  "STD(Z)": "STDZ",
-  "STA(L)": "STAL",
-  "STA(Z)": "STAZ",
-};
+  console.log("🚀 Firestore 업로드 시작");
+  const headerMapFirestore = {
+    "C/I(L)": "CIL",
+    "C/O(L)": "COL",
+    "STD(L)": "STDL",
+    "STD(Z)": "STDZ",
+    "STA(L)": "STAL",
+    "STA(Z)": "STAZ",
+  };
 
-for (let i = 1; i < values.length; i++) {
-  const row = values[i];
-  const docData = {};
-  headers.forEach((h, idx) => {
-    docData[h] = row[idx] || "";
-    docData[headerMapFirestore[h] || h] = row[idx] || "";
-  });
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const docData = {};
+    headers.forEach((h, idx) => {
+      docData[h] = row[idx] || "";
+      docData[headerMapFirestore[h] || h] = row[idx] || "";
+    });
 
-  docData.userId = flutterflowUid;
-  docData.adminId = firestoreAdminUid;
-  docData.pdc_user_name = username;
+    docData.userId = flutterflowUid;
+    docData.adminId = firestoreAdminUid;
+    docData.pdc_user_name = username;
 
-  if (!docData.Activity || docData.Activity.trim() === "") continue;
+    if (!docData.Activity || docData.Activity.trim() === "") continue;
 
-  // ET 계산
-  docData.ET = calculateET(docData.BLH);
+    // ET 계산
+    docData.ET = calculateET(docData.BLH);
 
-  // NT 계산 (STD(Z), STA(Z))
-  if (docData.From !== docData.To) {
-    const flightDate = new Date(convertDate(docData.Date));
-    docData.NT = calculateNTFromSTDSTA(docData.STDZ, docData.STAZ, flightDate);
-  } else {
-    docData.NT = "00:00";
-  }
-
-  // Crew 문자열 배열로 파싱
-  docData.CrewArray = parseCrewString(docData.Crew);
-
-  // Year / Month 자동 추가
-  const { Year, Month } = parseYearMonthFromEeeDd(docData.Date);
-  docData.Year = Year;
-  docData.Month = Month;
-
-  // 중복 제거 후 신규 저장 (Year/Month 제외)
-  const querySnapshot = await db
-    .collection(firestoreCollection)
-    .where("Date", "==", docData.Date)
-    .where("DC", "==", docData.DC)
-    .where("F", "==", docData.F)
-    .where("From", "==", docData.From)
-    .where("To", "==", docData.To)
-    .where("AcReg", "==", docData.AcReg)
-    .where("Crew", "==", docData.Crew)
-    .get();
-
-  if (!querySnapshot.empty) {
-    for (const doc of querySnapshot.docs) {
-      await db.collection(firestoreCollection).doc(doc.id).delete();
+    // NT 계산
+    if (docData.From !== docData.To) {
+      const flightDate = new Date(convertDate(docData.Date));
+      docData.NT = calculateNTFromSTDSTA(docData.STDZ, docData.STAZ, flightDate);
+    } else {
+      docData.NT = "00:00";
     }
+
+    // Crew 문자열 배열로 파싱
+    docData.CrewArray = parseCrewString(docData.Crew);
+
+    // Year / Month 자동 추가
+    const { Year, Month } = parseYearMonthFromEeeDd(docData.Date);
+    docData.Year = Year;
+    docData.Month = Month;
+
+    // 중복 제거 후 신규 저장
+    const querySnapshot = await db
+      .collection(firestoreCollection)
+      .where("Date", "==", docData.Date)
+      .where("DC", "==", docData.DC)
+      .where("F", "==", docData.F)
+      .where("From", "==", docData.From)
+      .where("To", "==", docData.To)
+      .where("AcReg", "==", docData.AcReg)
+      .where("Crew", "==", docData.Crew)
+      .get();
+
+    if (!querySnapshot.empty) {
+      for (const doc of querySnapshot.docs) {
+        await db.collection(firestoreCollection).doc(doc.id).delete();
+      }
+    }
+
+    const newDocRef = await db.collection(firestoreCollection).add(docData);
+    console.log(`✅ ${i}행 업로드 완료: ${newDocRef.id}, NT=${docData.NT}, ET=${docData.ET}, CrewCount=${docData.CrewArray.length}, Year=${docData.Year}, Month=${docData.Month}`);
   }
 
-  const newDocRef = await db.collection(firestoreCollection).add(docData);
-  console.log(`✅ ${i}행 신규 업로드 완료: ${newDocRef.id}, NT=${docData.NT}, ET=${docData.ET}, CrewCount=${docData.CrewArray.length}, Year=${docData.Year}, Month=${docData.Month}`);
-}
-  
   // ------------------- Google Sheets 업로드 (Crew까지만) -------------------
   console.log("🚀 Google Sheets 업로드 시작");
   const spreadsheetId="1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
   const sheetName="Roster1";
   const sheetValues = values.map((row,idx)=>{
-    if(idx===0) return row.slice(0,15); // Crew까지만
+    if(idx===0) return row.slice(0,15); 
     const newRow=[...row.slice(0,15)];
     newRow[0] = convertDate(row[0]);
     return newRow;
   });
 
-  try{
-    await sheetsApi.spreadsheets.values.update({spreadsheetId, range:`${sheetName}!A1`, valueInputOption:"RAW", requestBody:{values:sheetValues}});
+  try {
+    await sheetsApi.spreadsheets.values.update({
+      spreadsheetId,
+      range:`${sheetName}!A1`,
+      valueInputOption:"RAW",
+      requestBody:{values:sheetValues}
+    });
     console.log("✅ Google Sheets 업로드 완료");
-  }catch(err){ console.error("❌ Google Sheets 업로드 실패:",err); }
+  } catch(err) {
+    console.error("❌ Google Sheets 업로드 실패:",err);
+  }
 
 })();
