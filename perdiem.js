@@ -36,7 +36,7 @@ function parseHHMMOffset(str, baseDateStr) {
 }
 
 // ------------------- PerDiem 계산 -------------------
-export function calculatePerDiem(riDate, roDate, rate) {
+function calculatePerDiem(riDate, roDate, rate) {
   if (!riDate || !roDate || riDate >= roDate) return { StayHours: "0:00", Total: 0 };
   const diffHours = (roDate - riDate) / 1000 / 3600;
   const total = Math.round(diffHours * rate * 100) / 100;
@@ -46,70 +46,61 @@ export function calculatePerDiem(riDate, roDate, rate) {
 // ------------------- Roster.json → PerDiem 리스트 -------------------
 export function generatePerDiemList(rosterJsonPath) {
   const raw = JSON.parse(fs.readFileSync(rosterJsonPath, "utf-8"));
-  const rows = raw.values.slice(1);
+  const rows = raw.values.slice(1); // 헤더 제외
   const perdiemList = [];
   const now = new Date();
-  const Month = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][now.getMonth()];
   const Year = String(now.getFullYear());
+  const Month = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][now.getMonth()];
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const [DateStr,, , , Activity,, From,, STDZ, To,, STAZ] = row;
+    const [DateStr, DC, CIL, COL, Activity, F, From, STDL, STDZ, To, STAL, STAZ] = row;
     if (!Activity || !From || !To || From === To) continue;
 
     const DateFormatted = convertDate(DateStr);
     const Rate = PERDIEM_RATE[To] || 3;
 
-    // 이전 Flight의 RO를 RI로 사용
-    let riDate = null;
-    if (perdiemList.length > 0) {
-      const prevFlight = perdiemList[perdiemList.length - 1];
-      riDate = prevFlight.RO ? new Date(prevFlight.RO) : parseHHMMOffset(STAZ, DateFormatted);
-    } else {
-      riDate = parseHHMMOffset(STAZ, DateFormatted);
-    }
-
-    // 현재 Flight의 STD(Z)를 RO로 사용
+    // 이전 Flight의 RO(=STA(Z)) 사용
+    const riDate = i > 0 ? parseHHMMOffset(rows[i-1][11], convertDate(rows[i-1][0])) : parseHHMMOffset(STAZ, DateFormatted);
     const roDate = parseHHMMOffset(STDZ, DateFormatted);
 
-    // StayHours와 Total 계산
     const { StayHours, Total } = calculatePerDiem(riDate, roDate, Rate);
 
     perdiemList.push({
       Date: DateFormatted,
-      Activity: Activity,
+      Activity: "Flight",
       From,
-      STDZ,
       Destination: To,
-      STAZ,
-      Month,
-      Year,
       RI: riDate ? riDate.toISOString() : "",
       RO: roDate ? roDate.toISOString() : "",
       StayHours,
+      Rate,
       Total,
-      Rate
+      Month,
+      Year
     });
   }
 
   return perdiemList;
 }
 
-// ------------------- CSV 저장 (Flight 전용 헤더) -------------------
+// ------------------- CSV 저장 (Flight 전용) -------------------
 export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
-  const headers = ["Date","Activity","From","STD(Z)","To","STA(Z)"];
+  const headers = ["Date","Activity","From","RI","Destination","RO","StayHours","Rate","Total"];
   const csvRows = [headers.join(",")];
 
-  const flightRows = perdiemList.filter(p => p.From && p.To && p.From !== p.To);
-
-  for (const row of flightRows) {
+  for (const row of perdiemList) {
+    if (!row.From || !row.Destination || row.From === row.Destination) continue;
     const csvRow = [
       row.Date || "",
-      "Flight",
+      row.Activity || "",
       row.From || "",
       row.RI ? row.RI.slice(11,16) : "",
       row.Destination || "",
-      row.RO ? row.RO.slice(11,16) : ""
+      row.RO ? row.RO.slice(11,16) : "",
+      row.StayHours || "",
+      row.Rate || "",
+      row.Total || ""
     ];
     csvRows.push(csvRow.map(v => `"${v}"`).join(","));
   }
@@ -127,23 +118,29 @@ export async function uploadPerDiemFirestore(perdiemList, pdc_user_name) {
   const collection = db.collection("Perdiem");
 
   for (const row of perdiemList) {
-    if (!row.From || !row.To || row.From === row.To) continue; // Flight만 업로드
+    if (!row.Destination) continue;
 
-    const snapshot = await collection.where("Destination","==",row.Destination)
-                                     .where("Date","==",row.Date)
-                                     .get();
+    const snapshot = await collection
+      .where("Destination","==",row.Destination)
+      .where("Date","==",row.Date)
+      .get();
+
     if (!snapshot.empty) {
       for (const doc of snapshot.docs) await collection.doc(doc.id).delete();
     }
 
     await collection.add({
       Date: row.Date,
+      Activity: row.Activity,
+      From: row.From,
       Destination: row.Destination,
       RI: row.RI,
       RO: row.RO,
       StayHours: row.StayHours,
       Rate: row.Rate,
       Total: row.Total,
+      Month: row.Month,
+      Year: row.Year,
       pdc_user_name
     });
   }
