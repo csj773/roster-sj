@@ -3,7 +3,6 @@ import fs from "fs";
 import path from "path";
 import admin from "firebase-admin";
 import { parseUTCDate, hourToTimeStr } from "./flightTimeUtils.js";
-import csvParser from "csv-parse/lib/sync"; // CSV 파싱용
 
 // ------------------- 공항별 PER DIEM -------------------
 const PERDIEM_RATE = {
@@ -35,18 +34,12 @@ function convertDate(input) {
 
 // ------------------- PerDiem 계산 -------------------
 function calculatePerDiem(riUTC, roUTC, destination) {
-  if (PERDIEM_RATE[destination]) {
-    return { StayHours: "0:00", Rate: PERDIEM_RATE[destination], Total: PERDIEM_RATE[destination] };
-  }
-
   const start = parseUTCDate(riUTC);
   const end = parseUTCDate(roUTC);
   if (!start || !end || start >= end) return { StayHours: "0:00", Rate: 0, Total: 0 };
-
   const diffHours = (end - start) / 1000 / 3600;
-  const rate = 3; // 기본 rate
+  const rate = PERDIEM_RATE[destination] || 3; 
   const total = Math.round(diffHours * rate * 100) / 100;
-
   return { StayHours: hourToTimeStr(diffHours), Rate: rate, Total: total };
 }
 
@@ -63,7 +56,7 @@ export function generatePerDiemList(rosterJsonPath) {
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const [DateStr, DC, CIL, COL, Activity, F, From, STDL, STDZ, To, STAL, STAZ] = row;
-    if (!Activity || !From || !To || From === To) continue;
+    if (!Activity || !From || !To) continue;
 
     const DateFormatted = convertDate(DateStr);
     let riUTC = STAZ;
@@ -75,9 +68,8 @@ export function generatePerDiemList(rosterJsonPath) {
     // 해외공항 → ICN 구간 Stay 계산
     if (To === "ICN" && i > 0) {
       const prevRow = rows[i - 1];
-      const prevTo = prevRow[9]; // To
-      const prevSTA = prevRow[11]; // STA(Z)
-
+      const prevTo = prevRow[9]; 
+      const prevSTA = prevRow[11]; 
       if (prevTo !== "ICN") {
         const perd = calculatePerDiem(prevSTA, STAZ, prevTo);
         const prevDateFormatted = convertDate(prevRow[0]);
@@ -88,23 +80,31 @@ export function generatePerDiemList(rosterJsonPath) {
           existing.Total = perd.Total;
         }
       }
-
-      // ICN 도착 행
       StayHours = "0:00";
       Total = 0;
     }
 
-    perdiemList.push({
-      Date: DateFormatted,
-      Destination: To,
-      Month,
-      RI: riUTC,
-      RO: roUTC,
-      Rate,
-      StayHours,
-      Total,
-      Year
-    });
+    // 해외공항 → ICN 이전 구간 제외하고 From=ICN 행은 StayHours=0, Total=0
+    if (From === "ICN") {
+      StayHours = "0:00";
+      Total = 0;
+      Rate = 3; 
+    }
+
+    // From ≠ To 행만 저장
+    if (From !== To) {
+      perdiemList.push({
+        Date: DateFormatted,
+        Destination: To,
+        Month,
+        RI: riUTC,
+        RO: roUTC,
+        Rate,
+        StayHours,
+        Total,
+        Year
+      });
+    }
   }
 
   return perdiemList;
@@ -117,48 +117,41 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
   for (const row of perdiemList) {
     csvRows.push(headers.map(h => `"${row[h] || ""}"`).join(","));
   }
-
   const fullPath = path.join(process.cwd(), outputPath);
   fs.mkdirSync(path.dirname(fullPath), { recursive: true });
   fs.writeFileSync(fullPath, csvRows.join("\n"), "utf-8");
   console.log(`✅ CSV 저장 완료: ${fullPath}`);
 }
 
-// ------------------- CSV → Firestore 업로드 -------------------
-export async function uploadPerDiemCSVtoFirestore(csvPath, pdc_user_name) {
+// ------------------- Firestore 업로드 -------------------
+export async function uploadPerDiemFirestore(perdiemList, pdc_user_name) {
   if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.applicationDefault() });
   const db = admin.firestore();
   const collection = db.collection("Perdiem");
 
-  const csvContent = fs.readFileSync(path.join(process.cwd(), csvPath), "utf-8");
-  const records = csvParser(csvContent, { columns: true, skip_empty_lines: true });
-
-  for (const row of records) {
-    const data = {
-      Date: row.Date,
-      Destination: row.Destination,
-      Month: row.Month,
-      RI: row.RI,
-      RO: row.RO,
-      Rate: Number(row.Rate),
-      StayHours: Number(row.StayHours),
-      Total: Number(row.Total),
-      Year: row.Year,
-      pdc_user_name
-    };
-
-    // 중복 제거: Destination + Date
-    const snapshot = await collection.where("Destination","==",data.Destination)
-                                     .where("Date","==",data.Date)
+  for (const row of perdiemList) {
+    const snapshot = await collection.where("Destination","==",row.Destination)
+                                     .where("Date","==",row.Date)
                                      .get();
     if (!snapshot.empty) {
       for (const doc of snapshot.docs) await collection.doc(doc.id).delete();
     }
 
-    await collection.add(data);
+    await collection.add({
+      Date: row.Date,
+      Destination: row.Destination,
+      Month: row.Month,
+      RI: row.RI,
+      RO: row.RO,
+      Rate: row.Rate,
+      StayHours: row.StayHours,
+      Total: row.Total,
+      Year: row.Year,
+      pdc_user_name
+    });
   }
 
-  console.log(`✅ Firestore 업로드 완료 (${records.length} rows)`);
+  console.log("✅ Firestore 업로드 완료");
 }
 
 // ------------------- ES 모듈 Export -------------------
