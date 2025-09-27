@@ -63,10 +63,11 @@ export function generatePerDiemList(rosterJsonPath) {
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const [DateStr,, , , Activity,, From, , STDZ, To, , STAZ] = row;
+
     if (!Activity || !From || !To || From === To) continue;
 
     const DateFormatted = convertDate(DateStr);
-    let riDate = parseHHMMOffset(STAZ, DateFormatted);
+    let riDate = parseHHMMOffset(STAZ, DateFormatted) || null;
     let roDate = riDate; // 초기값
 
     let StayHours = "0:00";
@@ -82,27 +83,29 @@ export function generatePerDiemList(rosterJsonPath) {
 
       if (prevTo !== "ICN") {
         const prevRI = parseHHMMOffset(prevSTA, prevDateFormatted);
-        const perd = calculatePerDiem(prevRI, riDate, PERDIEM_RATE[prevTo] || 3);
-        // 이전 해외 출발편에 StayHours/Total 적용
-        const existing = perdiemList.find(p => p.Destination === prevTo && p.Date === prevDateFormatted);
-        if (existing) {
-          existing.StayHours = perd.StayHours;
-          existing.Total = perd.Total;
-          existing.Rate = PERDIEM_RATE[prevTo] || 3;
+        if (prevRI) {
+          const perd = calculatePerDiem(prevRI, riDate, PERDIEM_RATE[prevTo] || 3);
+          const existing = perdiemList.find(p => p.Destination === prevTo && p.Date === prevDateFormatted);
+          if (existing) {
+            existing.StayHours = perd.StayHours;
+            existing.Total = perd.Total;
+            existing.Rate = PERDIEM_RATE[prevTo] || 3;
+          }
         }
       }
 
-      // ICN 도착편
       StayHours = "0:00";
       Total = 0;
+      if (!riDate) riDate = new Date(); // 안전 처리
+      if (!roDate) roDate = riDate;
     }
 
     perdiemList.push({
       Date: DateFormatted,
       Destination: To,
       Month,
-      RI: riDate.toISOString(),
-      RO: roDate.toISOString(),
+      RI: riDate ? riDate.toISOString() : "",
+      RO: roDate ? roDate.toISOString() : "",
       Rate,
       StayHours,
       Total,
@@ -133,7 +136,6 @@ export async function uploadPerDiemFirestore(perdiemList, pdc_user_name) {
   const collection = db.collection("Perdiem");
 
   for (const row of perdiemList) {
-    // 중복 제거: Destination + Date
     const snapshot = await collection.where("Destination","==",row.Destination)
                                      .where("Date","==",row.Date)
                                      .get();
@@ -159,5 +161,6 @@ export async function uploadPerDiemFirestore(perdiemList, pdc_user_name) {
 }
 
 export { PERDIEM_RATE, convertDate, parseHHMMOffset, calculatePerDiem };
+
 
 
