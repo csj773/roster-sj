@@ -1,3 +1,4 @@
+// ========================= perdiem.js =========================
 import fs from "fs";
 import path from "path";
 import admin from "firebase-admin";
@@ -139,7 +140,7 @@ export async function uploadPerDiemFirestore(perdiemList, pdc_user_name) {
   console.log("✅ Firestore 업로드 완료");
 }
 
-// Helper function (convertDate) for date formatting
+// ------------------- Helper: Date 변환 -------------------
 function convertDate(input) {
   if (!input || typeof input !== "string") return input;
   const parts = input.trim().split(/\s+/); // ["Mon","01"]
@@ -150,3 +151,7 @@ function convertDate(input) {
   const year = now.getFullYear();
   return `${year}.${month}.${dayStr}`;
 }
+
+// ✅ 기존 함수 이름과 호환되도록 alias export
+export { generatePerDiemCSV as generatePerDiemList };
+export { generateRosterCSV as savePerDiemCSV };
