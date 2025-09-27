@@ -138,3 +138,15 @@ export async function uploadPerDiemFirestore(perdiemList, pdc_user_name) {
 
   console.log("✅ Firestore 업로드 완료");
 }
+
+// Helper function (convertDate) for date formatting
+function convertDate(input) {
+  if (!input || typeof input !== "string") return input;
+  const parts = input.trim().split(/\s+/); // ["Mon","01"]
+  if (parts.length !== 2) return input;
+  const dayStr = parts[1].padStart(2, "0");
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const year = now.getFullYear();
+  return `${year}.${month}.${dayStr}`;
+}
