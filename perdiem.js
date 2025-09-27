@@ -2,7 +2,6 @@
 import fs from "fs";
 import path from "path";
 import admin from "firebase-admin";
-import { parseUTCDate, hourToTimeStr } from "./flightTimeUtils.js";
 
 // ------------------- 공항별 PER DIEM -------------------
 const PERDIEM_RATE = {
@@ -15,9 +14,9 @@ const PERDIEM_RATE = {
   DAD: 2.01,
   SFO: 3.42,
   OSL: 3.24,
-  DAC: 30,
-  NRT: 30,
-  HKG: 30
+  DAC: 33,
+  NRT: 33,
+  HKG: 33
 };
 
 // ------------------- Date 변환 -------------------
@@ -38,14 +37,8 @@ function parseHHMMOffset(str, baseDateStr) {
   const match = str.match(/^(\d{2})(\d{2})([+-]\d+)?$/);
   if (!match) return null;
   const [, hh, mm, offset] = match;
-  const baseDateParts = baseDateStr.split("."); // YYYY.MM.DD
-  let date = new Date(
-    Number(baseDateParts[0]),
-    Number(baseDateParts[1]) - 1,
-    Number(baseDateParts[2]),
-    Number(hh),
-    Number(mm)
-  );
+  const [year, month, day] = baseDateStr.split(".").map(Number);
+  let date = new Date(year, month - 1, day, Number(hh), Number(mm));
   if (offset) date.setDate(date.getDate() + Number(offset));
   return date;
 }
@@ -55,66 +48,61 @@ function calculatePerDiem(riDate, roDate, rate) {
   if (!riDate || !roDate || riDate >= roDate) return { StayHours: "0:00", Total: 0 };
   const diffHours = (roDate - riDate) / 1000 / 3600;
   const total = Math.round(diffHours * rate * 100) / 100;
-  return { StayHours: hourToTimeStr(diffHours), Total: total };
+  return { StayHours: diffHours.toFixed(2), Total: total };
 }
 
 // ------------------- Roster.json → PerDiem 리스트 -------------------
 export function generatePerDiemList(rosterJsonPath) {
   const raw = JSON.parse(fs.readFileSync(rosterJsonPath, "utf-8"));
-  const rows = raw.values.slice(1); // 헤더 제외
+  const rows = raw.values.slice(1);
   const perdiemList = [];
-
   const now = new Date();
   const Year = String(now.getFullYear());
   const Month = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][now.getMonth()];
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const [DateStr, DC, CIL, COL, Activity, F, From, STDL, STDZ, To, STAL, STAZ] = row;
+    const [DateStr,, , , Activity,, From, , STDZ, To, , STAZ] = row;
     if (!Activity || !From || !To || From === To) continue;
 
     const DateFormatted = convertDate(DateStr);
+    let riDate = parseHHMMOffset(STAZ, DateFormatted);
+    let roDate = riDate; // 초기값
+
     let StayHours = "0:00";
     let Rate = PERDIEM_RATE[To] || 3;
     let Total = 0;
 
-    // 기본 RI/RO는 현재 편 STDZ/STA(Z)
-    let riDate = parseHHMMOffset(STAZ, DateFormatted);
-    let roDate = parseHHMMOffset(STAZ, DateFormatted);
-
-    // 해외공항 → ICN 구간 계산
+    // 해외공항 → ICN 구간 Stay 계산
     if (To === "ICN" && i > 0) {
       const prevRow = rows[i - 1];
       const prevTo = prevRow[9];
-      const prevDateFormatted = convertDate(prevRow[0]);
       const prevSTA = prevRow[11];
-      const prevRate = PERDIEM_RATE[prevTo] || 3;
+      const prevDateFormatted = convertDate(prevRow[0]);
 
       if (prevTo !== "ICN") {
         const prevRI = parseHHMMOffset(prevSTA, prevDateFormatted);
-        const currentRO = parseHHMMOffset(STAZ, DateFormatted);
-        const perd = calculatePerDiem(prevRI, currentRO, prevRate);
-
+        const perd = calculatePerDiem(prevRI, riDate, PERDIEM_RATE[prevTo] || 3);
+        // 이전 해외 출발편에 StayHours/Total 적용
         const existing = perdiemList.find(p => p.Destination === prevTo && p.Date === prevDateFormatted);
         if (existing) {
           existing.StayHours = perd.StayHours;
           existing.Total = perd.Total;
+          existing.Rate = PERDIEM_RATE[prevTo] || 3;
         }
       }
 
-      // ICN 도착 행
+      // ICN 도착편
       StayHours = "0:00";
       Total = 0;
-      riDate = parseHHMMOffset(STAZ, DateFormatted);
-      roDate = riDate;
     }
 
     perdiemList.push({
       Date: DateFormatted,
       Destination: To,
       Month,
-      RI: riDate ? riDate.toISOString() : "",
-      RO: roDate ? roDate.toISOString() : "",
+      RI: riDate.toISOString(),
+      RO: roDate.toISOString(),
       Rate,
       StayHours,
       Total,
@@ -126,22 +114,16 @@ export function generatePerDiemList(rosterJsonPath) {
 }
 
 // ------------------- CSV 저장 -------------------
-export function savePerDiemCSV(perdiemList, outputPath = null) {
+export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
   const headers = ["Date","Destination","Month","RI","RO","Rate","StayHours","Total","Year"];
   const csvRows = [headers.join(",")];
   for (const row of perdiemList) {
     csvRows.push(headers.map(h => `"${row[h] || ""}"`).join(","));
   }
-
-  // 기본 경로 처리
-  if (!outputPath) outputPath = path.join(process.cwd(), "public", "perdiem.csv");
-  else if (fs.existsSync(outputPath) && fs.lstatSync(outputPath).isDirectory()) {
-    outputPath = path.join(outputPath, "perdiem.csv");
-  }
-
-  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-  fs.writeFileSync(outputPath, csvRows.join("\n"), "utf-8");
-  console.log(`✅ CSV 저장 완료: ${outputPath}`);
+  const fullPath = path.join(process.cwd(), outputPath);
+  fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+  fs.writeFileSync(fullPath, csvRows.join("\n"), "utf-8");
+  console.log(`✅ CSV 저장 완료: ${fullPath}`);
 }
 
 // ------------------- Firestore 업로드 -------------------
@@ -151,6 +133,7 @@ export async function uploadPerDiemFirestore(perdiemList, pdc_user_name) {
   const collection = db.collection("Perdiem");
 
   for (const row of perdiemList) {
+    // 중복 제거: Destination + Date
     const snapshot = await collection.where("Destination","==",row.Destination)
                                      .where("Date","==",row.Date)
                                      .get();
@@ -168,13 +151,13 @@ export async function uploadPerDiemFirestore(perdiemList, pdc_user_name) {
       StayHours: row.StayHours,
       Total: row.Total,
       Year: row.Year,
-      pdc_user_name: pdc_user_name || ""
+      pdc_user_name
     });
   }
 
   console.log("✅ Firestore 업로드 완료");
 }
 
-export { PERDIEM_RATE, convertDate, calculatePerDiem };
+export { PERDIEM_RATE, convertDate, parseHHMMOffset, calculatePerDiem };
 
 
