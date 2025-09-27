@@ -6,9 +6,6 @@ import { parseUTCDate, hourToTimeStr, convertDate } from "./flightTimeUtils.js";
 
 // ------------------- 공항별 고정 Per Diem -------------------
 const PERDIEM_RATE = {
-  DAC: 30,
-  NRT: 30,
-  HKG: 30,
   LAX: 3.42,
   EWR: 3.44,
   HNL: 3.01,
@@ -17,25 +14,36 @@ const PERDIEM_RATE = {
   BKK: 2.14,
   DAD: 2.01,
   SFO: 3.42,
-  OSL: 3.24
+  OSL: 3.24,
+  DAC: 30,
+  NRT: 30,
+  HKG: 30,
+  HKT: 30,
+  ICN: 3 // 기본 ICN rate
 };
 
 // ------------------- Perdiem 계산 -------------------
 export function calculatePerDiem(riUTC, roUTC, destination) {
   if (PERDIEM_RATE[destination]) {
-    const total = PERDIEM_RATE[destination]; // 고정 rate인 경우 총액 = rate
-    return { StayHours: "0:00", Rate: PERDIEM_RATE[destination], Total: total };
+    const rate = PERDIEM_RATE[destination];
+    if (riUTC === roUTC) {
+      return { StayHours: "0:00", Rate: rate, Total: rate };
+    }
+    const start = parseUTCDate(riUTC);
+    const end = parseUTCDate(roUTC);
+    if (!start || !end || start >= end) return { StayHours: "0:00", Rate: rate, Total: 0 };
+    const diffHours = (end - start) / 1000 / 3600;
+    const total = Math.round(diffHours * rate * 100) / 100;
+    return { StayHours: hourToTimeStr(diffHours), Rate: rate, Total: total };
   }
 
+  // 기본 rate
   const start = parseUTCDate(riUTC);
   const end = parseUTCDate(roUTC);
-  if (!start || !end || start >= end) return { StayHours: "0:00", Rate: 0, Total: 0 };
-
+  if (!start || !end || start >= end) return { StayHours: "0:00", Rate: 3, Total: 0 };
   const diffHours = (end - start) / 1000 / 3600;
-  const rate = 3; // 기본 per diem rate
-  const total = Math.round(diffHours * rate * 100) / 100;
-
-  return { StayHours: hourToTimeStr(diffHours), Rate: rate, Total: total };
+  const total = Math.round(diffHours * 3 * 100) / 100;
+  return { StayHours: hourToTimeStr(diffHours), Rate: 3, Total: total };
 }
 
 // ------------------- Roster.json → Perdiem 리스트 -------------------
@@ -54,35 +62,41 @@ export function generatePerDiemList(rosterJsonPath) {
     if (!Activity || !From || !To) continue;
 
     const DateFormatted = convertDate(DateStr);
-    let riUTC = STAZ;
-    let roUTC = STAZ;
+
+    let riUTC = STAZ; // 기본 riUTC
+    let roUTC = STAZ; // 기본 roUTC
     let StayHours = "0:00";
     let Rate = PERDIEM_RATE[To] || 3;
     let Total = 0;
 
-    // 해외공항 → ICN 구간 계산
+    // 해외공항 출발 → ICN 도착 구간 Stay 계산
     if (To === "ICN" && i > 0) {
       const prevRow = rows[i - 1];
       const prevTo = prevRow[9]; // To
       const prevSTA = prevRow[11]; // STA(Z)
+      const prevDateFormatted = convertDate(prevRow[0]);
 
       if (prevTo !== "ICN") {
         const perd = calculatePerDiem(prevSTA, STAZ, prevTo);
-        // 이전 해외공항 출발 행에 StayHours/Total 업데이트
-        const prevDateFormatted = convertDate(prevRow[0]);
+        // 해외공항 출발 행 업데이트
         const existing = perdiemList.find(p => p.Destination === prevTo && p.Date === prevDateFormatted);
         if (existing) {
           existing.StayHours = perd.StayHours;
           existing.Rate = perd.Rate;
           existing.Total = perd.Total;
         }
+        // ICN 도착 행은 StayHours=0, Total=0
+        StayHours = "0:00";
+        Total = 0;
+        Rate = PERDIEM_RATE["ICN"] || 3;
       }
     }
 
-    // ICN 도착 행(From=ICN) StayHours=0, Total=0
+    // ICN 출발 행
     if (From === "ICN") {
       StayHours = "0:00";
       Total = 0;
+      Rate = PERDIEM_RATE[To] || 3;
     }
 
     perdiemList.push({
@@ -117,36 +131,34 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
 }
 
 // ------------------- Firestore 업로드 -------------------
-export async function uploadPerDiemFirestore(perdiemList) {
-  if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.applicationDefault() });
+export async function uploadPerDiemFirestore(perdiemList, userId, pdc_user_name) {
+  if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.applicationDefault(), ignoreUndefinedProperties: true });
   const db = admin.firestore();
   const collection = db.collection("Perdiem");
 
-  const userId = process.env.PERDIEM_USER_ID || process.env.USER_ID;
-  const pdc_user_name = process.env.PDC_USER_NAME || process.env.PDC_SECRET_NAME;
-
   for (const row of perdiemList) {
-    // 중복 확인: Destination + Date
-    const snapshot = await collection.where("Destination","==",row.Destination)
-                                     .where("Date","==",row.Date)
-                                     .get();
+    // 중복 확인
+    const snapshot = await collection
+      .where("Destination", "==", row.Destination)
+      .where("Date", "==", row.Date)
+      .get();
+
     if (!snapshot.empty) {
-      // 중복 존재 시 하나만 업데이트
+      // 기존 행 업데이트
       const doc = snapshot.docs[0];
       await collection.doc(doc.id).update({
         ...row,
         userId,
         pdc_user_name
       });
-      continue;
+    } else {
+      // 신규 추가
+      await collection.add({
+        ...row,
+        userId,
+        pdc_user_name
+      });
     }
-
-    // 신규 저장
-    await collection.add({
-      ...row,
-      userId,
-      pdc_user_name
-    });
   }
 
   console.log("✅ Firestore 업로드 완료");
