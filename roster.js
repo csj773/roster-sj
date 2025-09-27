@@ -142,6 +142,13 @@ console.log("✅ UID 및 Config 로드 완료");
   );
   console.log("✅ JSON/CSV 저장 완료");
 
+  // JSON/CSV 저장 완료 후
+import { generatePerDiemList, savePerDiemCSV, uploadPerDiemFirestore } from "./perdiem.js";
+
+const perdiemList = generatePerDiemList(path.join(publicDir,"roster.json"));
+savePerDiemCSV(perdiemList);          // CSV 저장
+await uploadPerDiemFirestore(perdiemList); // Firestore 업로드
+  
   // ------------------- Firestore 업로드 -------------------
   console.log("🚀 Firestore 업로드 시작");
   const headerMapFirestore = {
