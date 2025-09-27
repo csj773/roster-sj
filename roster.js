@@ -15,6 +15,7 @@ import {
   parseCrewString,
   parseYearMonthFromEeeDd
 } from "./flightTimeUtils.js";
+
 import { generatePerDiemList, savePerDiemCSV, uploadPerDiemFirestore } from "./perdiem.js";
 
 // ------------------- Firebase 초기화 -------------------
@@ -27,7 +28,6 @@ const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 if (serviceAccount.private_key) serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
 if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
-db.settings({ ignoreUndefinedProperties: true }); // undefined 안전 처리
 console.log("✅ Firebase 초기화 완료");
 
 // ------------------- Google Sheets 초기화 -------------------
@@ -136,8 +136,7 @@ console.log("✅ UID 및 Config 로드 완료");
   console.log("🚀 JSON/CSV 저장");
   const publicDir = path.join(process.cwd(),"public");
   if(!fs.existsSync(publicDir)) fs.mkdirSync(publicDir);
-  const rosterJsonPath = path.join(publicDir,"roster.json");
-  fs.writeFileSync(rosterJsonPath, JSON.stringify({values}, null, 2), "utf-8");
+  fs.writeFileSync(path.join(publicDir,"roster.json"), JSON.stringify({values}, null, 2), "utf-8");
   fs.writeFileSync(
     path.join(publicDir,"roster.csv"),
     values.map(row => row.map(col => `"${(col||"").replace(/"/g,'""')}"`).join(",")).join("\n"),
@@ -147,13 +146,12 @@ console.log("✅ UID 및 Config 로드 완료");
 
   // ------------------- PerDiem 처리 -------------------
   console.log("🚀 PerDiem 처리 시작");
-  const perdiemList = generatePerDiemList(rosterJsonPath);
-  savePerDiemCSV(perdiemList);               // CSV 저장
-  await uploadPerDiemFirestore(perdiemList); // Firestore 업로드
-  console.log("✅ PerDiem 처리 완료");
+  const perdiemList = generatePerDiemList(path.join(publicDir,"roster.json"));
+  savePerDiemCSV(perdiemList, publicDir);
+  await uploadPerDiemFirestore(perdiemList, flutterflowUid);
 
   // ------------------- Firestore 업로드 -------------------
-  console.log("🚀 Firestore 업로드 시작");
+  console.log("🚀 Roster Firestore 업로드 시작");
   const headerMapFirestore = {
     "C/I(L)": "CIL",
     "C/O(L)": "COL",
@@ -171,9 +169,9 @@ console.log("✅ UID 및 Config 로드 완료");
       docData[headerMapFirestore[h] || h] = row[idx] || "";
     });
 
-    docData.userId = flutterflowUid;
-    docData.adminId = firestoreAdminUid;
-    docData.pdc_user_name = username;
+    docData.userId = flutterflowUid || "";
+    docData.adminId = firestoreAdminUid || "";
+    docData.pdc_user_name = username || "";
 
     if (!docData.Activity || docData.Activity.trim() === "") continue;
 
@@ -196,16 +194,34 @@ console.log("✅ UID 및 Config 로드 완료");
     docData.Year = Year;
     docData.Month = Month;
 
-    // Firestore 업로드
-    try {
-      const newDocRef = await db.collection(firestoreCollection).add(docData);
-      console.log(`✅ ${i}행 업로드 완료: ${newDocRef.id}, NT=${docData.NT}, ET=${docData.ET}`);
-    } catch(err) {
-      console.error("❌ Firestore 업로드 실패:", err.message);
+    // undefined 값 제거
+    Object.keys(docData).forEach(key => {
+      if (docData[key] === undefined) delete docData[key];
+    });
+
+    // 중복 제거 후 신규 저장
+    const querySnapshot = await db
+      .collection(firestoreCollection)
+      .where("Date", "==", docData.Date)
+      .where("DC", "==", docData.DC)
+      .where("F", "==", docData.F)
+      .where("From", "==", docData.From)
+      .where("To", "==", docData.To)
+      .where("AcReg", "==", docData.AcReg)
+      .where("Crew", "==", docData.Crew)
+      .get();
+
+    if (!querySnapshot.empty) {
+      for (const doc of querySnapshot.docs) {
+        await db.collection(firestoreCollection).doc(doc.id).delete();
+      }
     }
+
+    const newDocRef = await db.collection(firestoreCollection).add(docData);
+    console.log(`✅ ${i}행 업로드 완료: ${newDocRef.id}, NT=${docData.NT}, ET=${docData.ET}, CrewCount=${docData.CrewArray.length}, Year=${docData.Year}, Month=${docData.Month}`);
   }
 
-  // ------------------- Google Sheets 업로드 -------------------
+  // ------------------- Google Sheets 업로드 (Crew까지만) -------------------
   console.log("🚀 Google Sheets 업로드 시작");
   const spreadsheetId="1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
   const sheetName="Roster1";
@@ -229,5 +245,6 @@ console.log("✅ UID 및 Config 로드 완료");
   }
 
 })();
+
 
 
