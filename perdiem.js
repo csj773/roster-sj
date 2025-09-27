@@ -35,12 +35,11 @@ function convertDate(input) {
 // ------------------- HHMM±Offset → Date 변환 -------------------
 function parseHHMMOffset(str, baseDateStr) {
   if (!str) return null;
-  // 예: "1939+1"
   const match = str.match(/^(\d{2})(\d{2})([+-]\d+)?$/);
   if (!match) return null;
   const [, hh, mm, offset] = match;
-  const baseDateParts = baseDateStr.split("."); // YYYY.MM.DD
-  let date = new Date(Number(baseDateParts[0]), Number(baseDateParts[1])-1, Number(baseDateParts[2]), Number(hh), Number(mm));
+  const [year, month, day] = baseDateStr.split(".").map(Number);
+  const date = new Date(year, month - 1, day, Number(hh), Number(mm));
   if (offset) date.setDate(date.getDate() + Number(offset));
   return date;
 }
@@ -74,23 +73,24 @@ export function generatePerDiemList(rosterJsonPath) {
     let Total = 0;
 
     // 기본 RI/RO는 현재 편 STDZ/STA(Z)
-    let riDate = parseHHMMOffset(STAZ, DateFormatted);
-    let roDate = parseHHMMOffset(STAZ, DateFormatted);
+    let riDate = parseHHMMOffset(STAL, DateFormatted); // previous 편 STA
+    let roDate = parseHHMMOffset(STDZ, DateFormatted); // present 편 STD
 
-    // 해외공항 → ICN 구간 계산
+    // 해외공항 → ICN 구간 처리
     if (To === "ICN" && i > 0) {
       const prevRow = rows[i - 1];
       const prevTo = prevRow[9];
-      const prevDateFormatted = convertDate(prevRow[0]);
-      const prevSTA = prevRow[11];
-      const prevRate = PERDIEM_RATE[prevTo] || 3;
+      if (prevTo && prevTo !== "ICN") {
+        const prevDateFormatted = convertDate(prevRow[0]);
+        const prevSTA = prevRow[11];
+        const prevSTD = prevRow[8];
+        const prevRate = PERDIEM_RATE[prevTo] || 3;
 
-      if (prevTo !== "ICN") {
         const prevRI = parseHHMMOffset(prevSTA, prevDateFormatted);
-        const currentRO = parseHHMMOffset(STAZ, DateFormatted);
+        const currentRO = parseHHMMOffset(STDZ, DateFormatted);
         const perd = calculatePerDiem(prevRI, currentRO, prevRate);
 
-        // 이전 편 (해외공항 출발) 데이터 찾아서 업데이트
+        // 이전 편 데이터 업데이트
         const existing = perdiemList.find(p => p.Destination === prevTo && p.Date === prevDateFormatted);
         if (existing) {
           existing.StayHours = perd.StayHours;
@@ -98,11 +98,11 @@ export function generatePerDiemList(rosterJsonPath) {
         }
       }
 
-      // ICN 도착 행
-      StayHours = "0:00";
-      Total = 0;
+      // ICN 도착 편 초기화
       riDate = parseHHMMOffset(STAZ, DateFormatted);
       roDate = riDate;
+      StayHours = "0:00";
+      Total = 0;
     }
 
     perdiemList.push({
@@ -129,19 +129,20 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
     csvRows.push(headers.map(h => `"${row[h] || ""}"`).join(","));
   }
 
-  const fullPath = path.join(process.cwd(), outputPath);
+  const fullPath = path.isAbsolute(outputPath) ? outputPath : path.join(process.cwd(), outputPath);
   fs.mkdirSync(path.dirname(fullPath), { recursive: true });
   fs.writeFileSync(fullPath, csvRows.join("\n"), "utf-8");
   console.log(`✅ CSV 저장 완료: ${fullPath}`);
 }
 
 // ------------------- Firestore 업로드 -------------------
-export async function uploadPerDiemFirestore(perdiemList, pdc_user_name) {
+export async function uploadPerDiemFirestore(perdiemList, pdcUserName) {
   if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.applicationDefault() });
   const db = admin.firestore();
   const collection = db.collection("Perdiem");
 
   for (const row of perdiemList) {
+    // 중복 제거
     const snapshot = await collection.where("Destination","==",row.Destination)
                                      .where("Date","==",row.Date)
                                      .get();
@@ -159,7 +160,7 @@ export async function uploadPerDiemFirestore(perdiemList, pdc_user_name) {
       StayHours: row.StayHours,
       Total: row.Total,
       Year: row.Year,
-      pdc_user_name
+      pdc_user_name: pdcUserName || ""
     });
   }
 
@@ -167,3 +168,4 @@ export async function uploadPerDiemFirestore(perdiemList, pdc_user_name) {
 }
 
 export { PERDIEM_RATE, convertDate, calculatePerDiem };
+
