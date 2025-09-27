@@ -1,6 +1,8 @@
+// ========================= perdiem.js =========================
 import fs from "fs";
 import path from "path";
 import admin from "firebase-admin";
+import { parseUTCDate, hourToTimeStr } from "./flightTimeUtils.js";
 
 // ------------------- 공항별 PER DIEM -------------------
 const PERDIEM_RATE = {
@@ -19,144 +21,134 @@ const PERDIEM_RATE = {
 };
 
 // ------------------- Date 변환 -------------------
-export function convertDate(input) {
+function convertDate(input) {
   if (!input || typeof input !== "string") return input;
   const parts = input.trim().split(/\s+/); // ["Mon","01"]
   if (parts.length !== 2) return input;
-  const dayStr = parts[1].padStart(2,"0");
+  const dayStr = parts[1].padStart(2, "0");
   const now = new Date();
-  const month = String(now.getMonth()+1).padStart(2,"0");
+  const month = String(now.getMonth() + 1).padStart(2, "0");
   const year = now.getFullYear();
   return `${year}.${month}.${dayStr}`;
 }
 
-// ------------------- HHMM±offset → Date 객체 변환 -------------------
-function parseHHMMOffset(hhmmStr, baseDateStr) {
-  // baseDateStr: YYYY.MM.DD
-  const [year, month, day] = baseDateStr.split(".").map(Number);
-  const match = hhmmStr.match(/^(\d{2,4})(?:\+(\d+))?$/); // e.g., 1939+1
-  if(!match) return null;
-
-  let hhmm = match[1].padStart(4,"0");
-  let hours = parseInt(hhmm.slice(0,2));
-  let minutes = parseInt(hhmm.slice(2,4));
-  let dayOffset = match[2] ? parseInt(match[2]) : 0;
-
-  return new Date(year, month-1, day + dayOffset, hours, minutes);
-}
-
-// ------------------- 시간 → HH:MM 문자열 -------------------
-function hourToTimeStr(hours) {
-  const h = Math.floor(hours);
-  const m = Math.round((hours - h)*60);
-  return `${h}:${m.toString().padStart(2,"0")}`;
+// ------------------- HHMM±Offset → Date 변환 -------------------
+function parseHHMMOffset(str, baseDateStr) {
+  if (!str) return null;
+  // 예: "1939+1"
+  const match = str.match(/^(\d{2})(\d{2})([+-]\d+)?$/);
+  if (!match) return null;
+  const [, hh, mm, offset] = match;
+  const baseDateParts = baseDateStr.split("."); // YYYY.MM.DD
+  let date = new Date(Number(baseDateParts[0]), Number(baseDateParts[1])-1, Number(baseDateParts[2]), Number(hh), Number(mm));
+  if (offset) date.setDate(date.getDate() + Number(offset));
+  return date;
 }
 
 // ------------------- PerDiem 계산 -------------------
-export function calculatePerDiem(riUTC, roUTC, destination) {
-  const diffHours = (roUTC - riUTC)/1000/3600;
-  const rate = PERDIEM_RATE[destination] || 3;
-  return { 
-    StayHours: hourToTimeStr(diffHours),
-    Rate: rate,
-    Total: Math.round(diffHours * rate * 100)/100
-  };
+function calculatePerDiem(riDate, roDate, rate) {
+  if (!riDate || !roDate || riDate >= roDate) return { StayHours: "0:00", Total: 0 };
+  const diffHours = (roDate - riDate) / 1000 / 3600;
+  const total = Math.round(diffHours * rate * 100) / 100;
+  return { StayHours: hourToTimeStr(diffHours), Total: total };
 }
 
 // ------------------- Roster.json → PerDiem 리스트 -------------------
 export function generatePerDiemList(rosterJsonPath) {
-  const raw = JSON.parse(fs.readFileSync(rosterJsonPath,"utf-8"));
-  const rows = raw.values.slice(1);
+  const raw = JSON.parse(fs.readFileSync(rosterJsonPath, "utf-8"));
+  const rows = raw.values.slice(1); // 헤더 제외
   const perdiemList = [];
 
   const now = new Date();
   const Year = String(now.getFullYear());
   const Month = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][now.getMonth()];
 
-  for(let i=0;i<rows.length;i++){
+  for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const [DateStr,, , , Activity, , From, , STDZ, To, , STAZ] = row;
-    if(!Activity || !From || !To || From === To) continue;
+    const [DateStr, DC, CIL, COL, Activity, F, From, STDL, STDZ, To, STAL, STAZ] = row;
+    if (!Activity || !From || !To || From === To) continue;
 
     const DateFormatted = convertDate(DateStr);
-
-    // 기본 StayHours/Rate/Total
-    let riUTC = parseHHMMOffset(STAZ, DateFormatted);
-    let roUTC = parseHHMMOffset(STAZ, DateFormatted);
     let StayHours = "0:00";
     let Rate = PERDIEM_RATE[To] || 3;
     let Total = 0;
 
-    // 해외공항 출발 → ICN 도착 구간 Stay 계산
-    if(To === "ICN" && i>0){
-      const prevRow = rows[i-1];
-      const prevFrom = prevRow[6];
+    // 기본 RI/RO는 현재 편 STDZ/STA(Z)
+    let riDate = parseHHMMOffset(STAZ, DateFormatted);
+    let roDate = parseHHMMOffset(STAZ, DateFormatted);
+
+    // 해외공항 → ICN 구간 계산
+    if (To === "ICN" && i > 0) {
+      const prevRow = rows[i - 1];
       const prevTo = prevRow[9];
-      const prevSTAZ = prevRow[11];
-      const prevDate = convertDate(prevRow[0]);
-      if(prevTo !== "ICN"){ 
-        const ri = parseHHMMOffset(prevSTAZ, prevDate);
-        const ro = parseHHMMOffset(STAZ, DateFormatted);
-        const perd = calculatePerDiem(ri, ro, prevTo);
-        // 이전 해외공항 출발편에 저장
-        const existing = perdiemList.find(p => p.Destination === prevTo && p.Date === prevDate);
-        if(existing){
+      const prevDateFormatted = convertDate(prevRow[0]);
+      const prevSTA = prevRow[11];
+      const prevRate = PERDIEM_RATE[prevTo] || 3;
+
+      if (prevTo !== "ICN") {
+        const prevRI = parseHHMMOffset(prevSTA, prevDateFormatted);
+        const currentRO = parseHHMMOffset(STAZ, DateFormatted);
+        const perd = calculatePerDiem(prevRI, currentRO, prevRate);
+
+        // 이전 편 (해외공항 출발) 데이터 찾아서 업데이트
+        const existing = perdiemList.find(p => p.Destination === prevTo && p.Date === prevDateFormatted);
+        if (existing) {
           existing.StayHours = perd.StayHours;
           existing.Total = perd.Total;
-          existing.Rate = perd.Rate;
         }
       }
-      // ICN 도착편
+
+      // ICN 도착 행
       StayHours = "0:00";
       Total = 0;
+      riDate = parseHHMMOffset(STAZ, DateFormatted);
+      roDate = riDate;
     }
-
-    // 해외공항 도착/ICN 출발 구간 이외
-    if(To !== "ICN") StayHours = "0:00"; // 다른 도착편 StayHours = 0
 
     perdiemList.push({
       Date: DateFormatted,
       Destination: To,
       Month,
-      RI: STAZ,
-      RO: STAZ,
+      RI: riDate ? riDate.toISOString() : "",
+      RO: roDate ? roDate.toISOString() : "",
       Rate,
       StayHours,
       Total,
       Year
     });
   }
+
   return perdiemList;
 }
 
 // ------------------- CSV 저장 -------------------
-export function savePerDiemCSV(perdiemList, outputPath="public/perdiem.csv"){
+export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
   const headers = ["Date","Destination","Month","RI","RO","Rate","StayHours","Total","Year"];
   const csvRows = [headers.join(",")];
-  for(const row of perdiemList){
-    csvRows.push(headers.map(h => `"${row[h]||""}"`).join(","));
+  for (const row of perdiemList) {
+    csvRows.push(headers.map(h => `"${row[h] || ""}"`).join(","));
   }
+
   const fullPath = path.join(process.cwd(), outputPath);
-  fs.mkdirSync(path.dirname(fullPath), {recursive:true});
-  fs.writeFileSync(fullPath, csvRows.join("\n"),"utf-8");
+  fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+  fs.writeFileSync(fullPath, csvRows.join("\n"), "utf-8");
   console.log(`✅ CSV 저장 완료: ${fullPath}`);
 }
 
 // ------------------- Firestore 업로드 -------------------
-export async function uploadPerDiemFirestore(perdiemList, pdc_user_name){
-  if(!admin.apps.length) admin.initializeApp({credential: admin.credential.applicationDefault()});
+export async function uploadPerDiemFirestore(perdiemList, pdc_user_name) {
+  if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.applicationDefault() });
   const db = admin.firestore();
   const collection = db.collection("Perdiem");
 
-  for(const row of perdiemList){
-    // 기존 중복 삭제
+  for (const row of perdiemList) {
     const snapshot = await collection.where("Destination","==",row.Destination)
                                      .where("Date","==",row.Date)
                                      .get();
-    if(!snapshot.empty){
-      for(const doc of snapshot.docs) await collection.doc(doc.id).delete();
+    if (!snapshot.empty) {
+      for (const doc of snapshot.docs) await collection.doc(doc.id).delete();
     }
-    // Firestore 저장
+
     await collection.add({
       Date: row.Date,
       Destination: row.Destination,
@@ -170,5 +162,8 @@ export async function uploadPerDiemFirestore(perdiemList, pdc_user_name){
       pdc_user_name
     });
   }
+
   console.log("✅ Firestore 업로드 완료");
 }
+
+export { PERDIEM_RATE, convertDate, calculatePerDiem };
