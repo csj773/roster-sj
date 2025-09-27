@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import admin from "firebase-admin";
 import { parseUTCDate, hourToTimeStr } from "./flightTimeUtils.js";
+import csvParser from "csv-parse/lib/sync"; // CSV 파싱용
 
 // ------------------- 공항별 PER DIEM -------------------
 const PERDIEM_RATE = {
@@ -123,37 +124,41 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
   console.log(`✅ CSV 저장 완료: ${fullPath}`);
 }
 
-// ------------------- Firestore 업로드 -------------------
-export async function uploadPerDiemFirestore(perdiemList, pdc_user_name) {
+// ------------------- CSV → Firestore 업로드 -------------------
+export async function uploadPerDiemCSVtoFirestore(csvPath, pdc_user_name) {
   if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.applicationDefault() });
   const db = admin.firestore();
   const collection = db.collection("Perdiem");
 
-  for (const row of perdiemList) {
-    // 중복 제거: Destination + Date
-    const snapshot = await collection.where("Destination","==",row.Destination)
-                                     .where("Date","==",row.Date)
-                                     .get();
-    if (!snapshot.empty) {
-      for (const doc of snapshot.docs) await collection.doc(doc.id).delete();
-    }
+  const csvContent = fs.readFileSync(path.join(process.cwd(), csvPath), "utf-8");
+  const records = csvParser(csvContent, { columns: true, skip_empty_lines: true });
 
-    // Firestore 저장: pdc_user_name만 포함
-    await collection.add({
+  for (const row of records) {
+    const data = {
       Date: row.Date,
       Destination: row.Destination,
       Month: row.Month,
       RI: row.RI,
       RO: row.RO,
-      Rate: row.Rate,
-      StayHours: row.StayHours,
-      Total: row.Total,
+      Rate: Number(row.Rate),
+      StayHours: Number(row.StayHours),
+      Total: Number(row.Total),
       Year: row.Year,
       pdc_user_name
-    });
+    };
+
+    // 중복 제거: Destination + Date
+    const snapshot = await collection.where("Destination","==",data.Destination)
+                                     .where("Date","==",data.Date)
+                                     .get();
+    if (!snapshot.empty) {
+      for (const doc of snapshot.docs) await collection.doc(doc.id).delete();
+    }
+
+    await collection.add(data);
   }
 
-  console.log("✅ Firestore 업로드 완료");
+  console.log(`✅ Firestore 업로드 완료 (${records.length} rows)`);
 }
 
 // ------------------- ES 모듈 Export -------------------
