@@ -1,4 +1,4 @@
-// ========================= Perdiem.js =========================
+// ========================= perdiem.js =========================
 import fs from "fs";
 import path from "path";
 import admin from "firebase-admin";
@@ -35,12 +35,9 @@ function convertDate(input) {
 // ------------------- PerDiem 계산 -------------------
 function calculatePerDiem(riUTC, roUTC, destination) {
   if (PERDIEM_RATE[destination]) {
-    return {
-      StayHours: "0:00",
-      Rate: PERDIEM_RATE[destination],
-      Total: PERDIEM_RATE[destination],
-    };
+    return { StayHours: "0:00", Rate: PERDIEM_RATE[destination], Total: PERDIEM_RATE[destination] };
   }
+
   const start = parseUTCDate(riUTC);
   const end = parseUTCDate(roUTC);
   if (!start || !end || start >= end) return { StayHours: "0:00", Rate: 0, Total: 0 };
@@ -53,9 +50,9 @@ function calculatePerDiem(riUTC, roUTC, destination) {
 }
 
 // ------------------- Roster.json → PerDiem 리스트 -------------------
-function generatePerDiemList(rosterJsonPath) {
+export function generatePerDiemList(rosterJsonPath) {
   const raw = JSON.parse(fs.readFileSync(rosterJsonPath, "utf-8"));
-  const rows = raw.values.slice(1);
+  const rows = raw.values.slice(1); // 헤더 제외
   const perdiemList = [];
 
   const now = new Date();
@@ -77,8 +74,8 @@ function generatePerDiemList(rosterJsonPath) {
     // 해외공항 → ICN 구간 Stay 계산
     if (To === "ICN" && i > 0) {
       const prevRow = rows[i - 1];
-      const prevTo = prevRow[9];
-      const prevSTA = prevRow[11];
+      const prevTo = prevRow[9]; // To
+      const prevSTA = prevRow[11]; // STA(Z)
 
       if (prevTo !== "ICN") {
         const perd = calculatePerDiem(prevSTA, STAZ, prevTo);
@@ -91,6 +88,7 @@ function generatePerDiemList(rosterJsonPath) {
         }
       }
 
+      // ICN 도착 행
       StayHours = "0:00";
       Total = 0;
     }
@@ -112,10 +110,9 @@ function generatePerDiemList(rosterJsonPath) {
 }
 
 // ------------------- CSV 저장 -------------------
-function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
+export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
   const headers = ["Date","Destination","Month","RI","RO","Rate","StayHours","Total","Year"];
   const csvRows = [headers.join(",")];
-
   for (const row of perdiemList) {
     csvRows.push(headers.map(h => `"${row[h] || ""}"`).join(","));
   }
@@ -127,12 +124,13 @@ function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
 }
 
 // ------------------- Firestore 업로드 -------------------
-async function uploadPerDiemFirestore(perdiemList, pdc_user_name) {
+export async function uploadPerDiemFirestore(perdiemList, pdc_user_name) {
   if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.applicationDefault() });
   const db = admin.firestore();
   const collection = db.collection("Perdiem");
 
   for (const row of perdiemList) {
+    // 중복 제거: Destination + Date
     const snapshot = await collection.where("Destination","==",row.Destination)
                                      .where("Date","==",row.Date)
                                      .get();
@@ -140,6 +138,7 @@ async function uploadPerDiemFirestore(perdiemList, pdc_user_name) {
       for (const doc of snapshot.docs) await collection.doc(doc.id).delete();
     }
 
+    // Firestore 저장: pdc_user_name만 포함
     await collection.add({
       Date: row.Date,
       Destination: row.Destination,
@@ -157,22 +156,5 @@ async function uploadPerDiemFirestore(perdiemList, pdc_user_name) {
   console.log("✅ Firestore 업로드 완료");
 }
 
-// ------------------- 실행 -------------------
-(async () => {
-  try {
-    const rosterJsonPath = path.join(process.cwd(), "roster.json");
-    const pdc_user_name = process.env.PDC_USER_NAME || process.env.SECRETS_PDC_USER_NAME || "UnknownUser";
-
-    // 1️⃣ PerDiem 리스트 생성
-    const perdiemList = generatePerDiemList(rosterJsonPath);
-
-    // 2️⃣ CSV 저장
-    savePerDiemCSV(perdiemList, "public/perdiem.csv");
-
-    // 3️⃣ Firestore 업로드
-    await uploadPerDiemFirestore(perdiemList, pdc_user_name);
-
-  } catch (error) {
-    console.error("실행 중 오류 발생:", error);
-  }
-})();
+// ------------------- ES 모듈 Export -------------------
+export { PERDIEM_RATE, convertDate, calculatePerDiem };
