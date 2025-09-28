@@ -216,7 +216,7 @@ export async function uploadPerDiemFirestore(perdiemList, userId) {
         Total: row.Total,
         Month: row.Month,
         Year: row.Year,
-        userId
+        owner
       });
     } catch (err) {
       console.error(`❌ Firestore 업로드 실패 (Destination: ${row.Destination}, Date: ${row.Date}):`, err);
