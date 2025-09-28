@@ -1,3 +1,4 @@
+// 9.29 per diem
 
 // ========================= perdiem.js =========================
 import fs from "fs";
@@ -15,12 +16,31 @@ export const PERDIEM_RATE = {
 // ------------------- Date 변환 -------------------
 export function convertDate(input) {
   if (!input || typeof input !== "string") return input;
+
   const parts = input.trim().split(/\s+/);
-  if (parts.length !== 2) return input;
-  const dayStr = parts[1].padStart(2, "0");
+  if (parts.length < 2) return input;
+
   const now = new Date();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
   const year = now.getFullYear();
+
+  // 월 문자열 매핑
+  const monthMap = {
+    Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",
+    Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12"
+  };
+
+  let month, dayStr;
+
+  if (monthMap[parts[0]]) {
+    // 입력이 "Sep 29" 같은 형식일 때
+    month = monthMap[parts[0]];
+    dayStr = parts[1].padStart(2, "0");
+  } else {
+    // 입력이 "Mon 29" 같이 요일만 있을 때
+    month = String(now.getMonth() + 1).padStart(2, "0");
+    dayStr = parts[1].padStart(2, "0");
+  }
+
   return `${year}.${month}.${dayStr}`;
 }
 
@@ -225,4 +245,3 @@ export async function uploadPerDiemFirestore(perdiemList, owner) {
 
   console.log("✅ PerDiem Firestore 업로드 완료");
 }
-
