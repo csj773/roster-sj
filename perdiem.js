@@ -151,7 +151,7 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
 }
 
 // ------------------- Firestore 업로드 -------------------
-export async function uploadPerDiemFirestore(perdiemList, userId) {
+export async function uploadPerDiemFirestore(perdiemList, owner) {
   if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.applicationDefault() });
   const db = admin.firestore();
   const collection = db.collection("Perdiem");
@@ -180,7 +180,7 @@ export async function uploadPerDiemFirestore(perdiemList, userId) {
       Total: row.Total,
       Month: row.Month,
       Year: row.Year,
-      userId
+      owner
     });
   }
   console.log("✅ PerDiem Firestore 업로드 완료");
