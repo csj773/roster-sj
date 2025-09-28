@@ -145,18 +145,20 @@ console.log("✅ UID 및 Config 로드 완료");
   console.log("✅ JSON/CSV 저장 완료");
 
   // ------------------- PerDiem 처리 -------------------
-  console.log("🚀 PerDiem 처리 시작");
-  const perdiemList = generatePerDiemList(path.join(publicDir,"roster.json"));
+console.log("🚀 PerDiem 처리 시작");
 
-  // Flight 행만 포함해서 CSV 저장
- const perdiemList = await generatePerDiemList(rosterJsonPath, userId); // 배열 받아오기
-savePerDiemCSV(
-  perdiemList.filter(p => p.Destination && p.RI && p.RO),
-  path.join(publicDir,"perdiem.csv")
-);
+// generatePerDiemList는 async 함수이므로 await 필요
+const perdiemList = await generatePerDiemList(path.join(publicDir, "roster.json"), flutterflowUid);
 
-  // Firestore 업로드
-  await uploadPerDiemFirestore(perdiemList, flutterflowUid);
+// Flight 행만 포함해서 CSV 저장
+const flightPerDiemList = perdiemList.filter(p => p.Destination && p.RI && p.RO);
+savePerDiemCSV(flightPerDiemList, path.join(publicDir, "perdiem.csv"));
+
+// Firestore 업로드
+await uploadPerDiemFirestore(flightPerDiemList, flutterflowUid);
+
+console.log("✅ PerDiem 처리 완료");
+
 
   // ------------------- Roster Firestore 업로드 -------------------
   console.log("🚀 Roster Firestore 업로드 시작");
