@@ -154,7 +154,7 @@ console.log("✅ UID 및 Config 로드 완료");
   , path.join(publicDir,"perdiem.csv"));
 
   // Firestore 업로드
-  await uploadPerDiemFirestore(perdiemList, Admin UID);
+  await uploadPerDiemFirestore(perdiemList, flutterflowUid);
 
   // ------------------- Roster Firestore 업로드 -------------------
   console.log("🚀 Roster Firestore 업로드 시작");
