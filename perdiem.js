@@ -146,12 +146,16 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
 
 // ------------------- CSV 저장 (Flight 전용) -------------------
 export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
-  if (!Array.isArray(perdiemList)) throw new Error("perdiemList must be an array");
+  if (!Array.isArray(perdiemList)) {
+    console.warn("❌ savePerDiemCSV: perdiemList가 배열이 아닙니다.");
+    return;
+  }
+
   const headers = ["Date","Activity","From","RI","Destination","RO","StayHours","Rate","Total"];
   const csvRows = [headers.join(",")];
 
   for (const row of perdiemList) {
-    if (!row.From || !row.Destination || row.From === row.Destination) continue;
+    if (!row || !row.From || !row.Destination || row.From === row.Destination) continue;
     const csvRow = [
       row.Date || "",
       row.Activity || "",
@@ -166,45 +170,60 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
     csvRows.push(csvRow.map(v => `"${v}"`).join(","));
   }
 
-  const fullPath = path.join(process.cwd(), outputPath);
-  fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-  fs.writeFileSync(fullPath, csvRows.join("\n"), "utf-8");
-  console.log(`✅ Flight 전용 CSV 저장 완료: ${fullPath}`);
+  try {
+    const fullPath = path.join(process.cwd(), outputPath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, csvRows.join("\n"), "utf-8");
+    console.log(`✅ Flight 전용 CSV 저장 완료: ${fullPath}`);
+  } catch (err) {
+    console.error("❌ CSV 저장 실패:", err);
+  }
 }
 
 // ------------------- Firestore 업로드 -------------------
 export async function uploadPerDiemFirestore(perdiemList, userId) {
-  if (!Array.isArray(perdiemList)) throw new Error("perdiemList must be an array");
+  if (!Array.isArray(perdiemList) || !userId) {
+    console.warn("❌ uploadPerDiemFirestore: perdiemList가 배열이 아니거나 userId가 없습니다.");
+    return;
+  }
+
   if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.applicationDefault() });
   const db = admin.firestore();
   const collection = db.collection("Perdiem");
 
   for (const row of perdiemList) {
-    if (!row.Destination) continue;
+    if (!row || !row.Destination) continue;
 
-    const snapshot = await collection
-      .where("Destination","==",row.Destination)
-      .where("Date","==",row.Date)
-      .get();
+    try {
+      const snapshot = await collection
+        .where("Destination","==",row.Destination)
+        .where("Date","==",row.Date)
+        .get();
 
-    if (!snapshot.empty) {
-      for (const doc of snapshot.docs) await collection.doc(doc.id).delete();
+      if (!snapshot.empty) {
+        for (const doc of snapshot.docs) await collection.doc(doc.id).delete();
+      }
+
+      await collection.add({
+        Date: row.Date,
+        Activity: row.Activity,
+        From: row.From,
+        Destination: row.Destination,
+        RI: row.RI,
+        RO: row.RO,
+        StayHours: row.StayHours,
+        Rate: row.Rate,
+        Total: row.Total,
+        Month: row.Month,
+        Year: row.Year,
+        userId
+      });
+    } catch (err) {
+      console.error(`❌ Firestore 업로드 실패 (Destination: ${row.Destination}, Date: ${row.Date}):`, err);
     }
-
-    await collection.add({
-      Date: row.Date,
-      Activity: row.Activity,
-      From: row.From,
-      Destination: row.Destination,
-      RI: row.RI,
-      RO: row.RO,
-      StayHours: row.StayHours,
-      Rate: row.Rate,
-      Total: row.Total,
-      Month: row.Month,
-      Year: row.Year,
-      userId
-    });
   }
+
   console.log("✅ PerDiem Firestore 업로드 완료");
 }
+
+
