@@ -181,7 +181,7 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
 }
 
 // ------------------- Firestore 업로드 -------------------
-export async function uploadPerDiemFirestore(perdiemList, userId) {
+export async function uploadPerDiemFirestore(perdiemList, owner) {
   if (!Array.isArray(perdiemList) || !userId) {
     console.warn("❌ uploadPerDiemFirestore: perdiemList가 배열이 아니거나 userId가 없습니다.");
     return;
