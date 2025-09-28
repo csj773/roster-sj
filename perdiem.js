@@ -1,5 +1,3 @@
-// 9.29 per diem
-
 // ========================= perdiem.js =========================
 import fs from "fs";
 import path from "path";
