@@ -54,7 +54,6 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
   const raw = JSON.parse(fs.readFileSync(rosterJsonPath, "utf-8"));
   const rows = raw.values.slice(1);
 
-  // Date 기준 오름차순 정렬
   rows.sort((a, b) => {
     const dateA = new Date(convertDate(a[0]));
     const dateB = new Date(convertDate(b[0]));
@@ -66,13 +65,11 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
   const Year = String(now.getFullYear());
   const Month = String(now.getMonth() + 1).padStart(2, "0");
 
-  // Firestore 연결 준비
   if (!admin.apps.length) {
     admin.initializeApp({ credential: admin.credential.applicationDefault() });
   }
   const db = admin.firestore();
 
-  // Flight 전용 배열 (From ≠ To)
   const flightRows = rows.filter(r => r[6] && r[9] && r[6] !== r[9]);
 
   for (let i = 0; i < flightRows.length; i++) {
@@ -80,13 +77,11 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
     const [DateStr,, , , Activity, , From, , STDZ, To, , STAZ] = row;
     const DateFormatted = convertDate(DateStr);
 
-    // Rate 결정
     const Rate = From === "ICN" ? 0 : PERDIEM_RATE[From] || 3;
 
     let riDate = null;
     let roDate = null;
 
-    // ------------------- [케이스1] 이번달 첫 행이 귀국편 -------------------
     if (i === 0 && To === "ICN" && From !== "ICN") {
       const prevMonth = (Number(Month) - 1 || 12).toString().padStart(2, "0");
       const prevYear = prevMonth === "12" ? String(Number(Year) - 1) : Year;
@@ -95,7 +90,7 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
         .where("userId", "==", userId)
         .where("Month", "==", prevMonth)
         .where("Year", "==", prevYear)
-        .where("Destination", "==", From) // 귀국편 출발지와 일치
+        .where("Destination", "==", From)
         .orderBy("Date", "desc")
         .limit(1)
         .get();
@@ -103,21 +98,17 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
       if (!prevSnapshot.empty) {
         const prevDoc = prevSnapshot.docs[0].data();
         if (prevDoc.RO) {
-          riDate = new Date(prevDoc.RO); // 지난달 해외 도착 시간
+          riDate = new Date(prevDoc.RO);
         }
       }
 
-      roDate = parseHHMMOffset(STDZ, DateFormatted); // 귀국편 해외 출발시간
-    }
-    // ------------------- [케이스2] 일반 -------------------
-    else {
+      roDate = parseHHMMOffset(STDZ, DateFormatted);
+    } else {
       if (Rate > 0) {
         for (let j = i - 1; j >= 0; j--) {
           const prevRow = flightRows[j];
-          const prevFrom = prevRow[6];
-          const prevTo = prevRow[9];
           const prevSTAZ = prevRow[11];
-          if (prevFrom && prevTo && prevFrom !== prevTo) {
+          if (prevRow[6] && prevRow[9] && prevRow[6] !== prevRow[9]) {
             const prevDate = convertDate(prevRow[0]);
             const tempRI = parseHHMMOffset(prevSTAZ, prevDate);
             if (tempRI instanceof Date && !isNaN(tempRI)) {
@@ -151,4 +142,67 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
   }
 
   return perdiemList;
+}
+
+// ------------------- CSV 저장 (Flight 전용) -------------------
+export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
+  const headers = ["Date","Activity","From","RI","Destination","RO","StayHours","Rate","Total"];
+  const csvRows = [headers.join(",")];
+
+  for (const row of perdiemList) {
+    if (!row.From || !row.Destination || row.From === row.Destination) continue;
+    const csvRow = [
+      row.Date || "",
+      row.Activity || "",
+      row.From || "",
+      row.RI ? row.RI.slice(11,16) : "",
+      row.Destination || "",
+      row.RO ? row.RO.slice(11,16) : "",
+      row.StayHours || "",
+      row.Rate || "",
+      row.Total || ""
+    ];
+    csvRows.push(csvRow.map(v => `"${v}"`).join(","));
+  }
+
+  const fullPath = path.join(process.cwd(), outputPath);
+  fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+  fs.writeFileSync(fullPath, csvRows.join("\n"), "utf-8");
+  console.log(`✅ Flight 전용 CSV 저장 완료: ${fullPath}`);
+}
+
+// ------------------- Firestore 업로드 -------------------
+export async function uploadPerDiemFirestore(perdiemList, userId) {
+  if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.applicationDefault() });
+  const db = admin.firestore();
+  const collection = db.collection("Perdiem");
+
+  for (const row of perdiemList) {
+    if (!row.Destination) continue;
+
+    const snapshot = await collection
+      .where("Destination","==",row.Destination)
+      .where("Date","==",row.Date)
+      .get();
+
+    if (!snapshot.empty) {
+      for (const doc of snapshot.docs) await collection.doc(doc.id).delete();
+    }
+
+    await collection.add({
+      Date: row.Date,
+      Activity: row.Activity,
+      From: row.From,
+      Destination: row.Destination,
+      RI: row.RI,
+      RO: row.RO,
+      StayHours: row.StayHours,
+      Rate: row.Rate,
+      Total: row.Total,
+      Month: row.Month,
+      Year: row.Year,
+      userId
+    });
+  }
+  console.log("✅ PerDiem Firestore 업로드 완료");
 }
