@@ -30,7 +30,13 @@ function parseHHMMOffset(str, baseDateStr) {
   if (!match) return null;
   const [, hh, mm, offset] = match;
   const baseDateParts = baseDateStr.split(".");
-  let date = new Date(Number(baseDateParts[0]), Number(baseDateParts[1])-1, Number(baseDateParts[2]), Number(hh), Number(mm));
+  let date = new Date(
+    Number(baseDateParts[0]),
+    Number(baseDateParts[1]) - 1,
+    Number(baseDateParts[2]),
+    Number(hh),
+    Number(mm)
+  );
   if (offset) date.setDate(date.getDate() + Number(offset));
   return date;
 }
@@ -67,22 +73,30 @@ export function generatePerDiemList(rosterJsonPath) {
     const row = flightRows[i];
     const [DateStr,, , , Activity, , From, , STDZ, To, , STAZ] = row;
     const DateFormatted = convertDate(DateStr);
-    const Rate = PERDIEM_RATE[From] || 3; // From 공항 기준
 
-    // 이전 Flight STA(Z) 찾기 (가장 가까운 이전 Flight)
+    // Rate 결정: ICN 출발이면 0, 그 외는 From 공항 기준
+    const Rate = From === "ICN" ? 0 : PERDIEM_RATE[From] || 3;
+
+    // 이전 Flight STA(Z) 탐색
     let riDate = null;
-    for (let j = i - 1; j >= 0; j--) {
-      const prevRow = flightRows[j];
-      const prevDate = convertDate(prevRow[0]);
-      const prevSTAZ = prevRow[11];
-      const tempRI = parseHHMMOffset(prevSTAZ, prevDate);
-      if (tempRI instanceof Date && !isNaN(tempRI)) {
-        riDate = tempRI;
-        break;
+    if (Rate > 0) {
+      for (let j = i - 1; j >= 0; j--) {
+        const prevRow = flightRows[j];
+        const prevFrom = prevRow[6];
+        const prevTo = prevRow[9];
+        const prevSTAZ = prevRow[11];
+        if (prevFrom && prevTo && prevFrom !== prevTo) {
+          const prevDate = convertDate(prevRow[0]);
+          const tempRI = parseHHMMOffset(prevSTAZ, prevDate);
+          if (tempRI instanceof Date && !isNaN(tempRI)) {
+            riDate = tempRI;
+            break;
+          }
+        }
       }
     }
 
-    // 이전 Flight 없으면 현재 Flight STAZ 사용
+    // 이전 Flight 없거나 ICN 출발 Flight는 현재 Flight STAZ 사용
     if (!riDate) riDate = parseHHMMOffset(STAZ, DateFormatted);
 
     const roDate = parseHHMMOffset(STDZ, DateFormatted);
@@ -93,7 +107,7 @@ export function generatePerDiemList(rosterJsonPath) {
 
     perdiemList.push({
       Date: DateFormatted,
-      Activity,   // Roster 원본 Activity 그대로 사용
+      Activity,
       From,
       Destination: To,
       RI: riValid ? riValid.toISOString() : "",
