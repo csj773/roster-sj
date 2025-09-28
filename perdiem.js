@@ -14,7 +14,7 @@ export const PERDIEM_RATE = {
 // ------------------- Date 변환 -------------------
 export function convertDate(input) {
   if (!input || typeof input !== "string") return input;
-  const parts = input.trim().split(/\s+/); // ["Mon","01"]
+  const parts = input.trim().split(/\s+/);
   if (parts.length !== 2) return input;
   const dayStr = parts[1].padStart(2, "0");
   const now = new Date();
@@ -46,23 +46,25 @@ function calculatePerDiem(riDate, roDate, rate) {
 // ------------------- Roster.json → PerDiem 리스트 -------------------
 export function generatePerDiemList(rosterJsonPath) {
   const raw = JSON.parse(fs.readFileSync(rosterJsonPath, "utf-8"));
-  const rows = raw.values.slice(1); // 헤더 제외
+  const rows = raw.values.slice(1);
   const perdiemList = [];
   const now = new Date();
   const Year = String(now.getFullYear());
-  const Month = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][now.getMonth()];
+  const Month = String(now.getMonth() + 1).padStart(2, "0");
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const [DateStr, DC, CIL, COL, Activity, F, From, STDL, STDZ, To, STAL, STAZ] = row;
+    const [DateStr, , , , Activity, , From, , STDZ, To, , STAZ] = row;
     if (!Activity || !From || !To || From === To) continue;
 
     const DateFormatted = convertDate(DateStr);
     const Rate = PERDIEM_RATE[To] || 3;
 
-    // 이전 Flight의 RO(=STA(Z)) 사용
-    const riDate = i > 0 ? parseHHMMOffset(rows[i-1][11], convertDate(rows[i-1][0])) : parseHHMMOffset(STAZ, DateFormatted);
-    const roDate = parseHHMMOffset(STDZ, DateFormatted);
+    const riDateRaw = i > 0 ? parseHHMMOffset(rows[i-1][11], convertDate(rows[i-1][0])) : parseHHMMOffset(STAZ, DateFormatted);
+    const roDateRaw = parseHHMMOffset(STDZ, DateFormatted);
+
+    const riDate = riDateRaw instanceof Date && !isNaN(riDateRaw) ? riDateRaw : null;
+    const roDate = roDateRaw instanceof Date && !isNaN(roDateRaw) ? roDateRaw : null;
 
     const { StayHours, Total } = calculatePerDiem(riDate, roDate, Rate);
 
@@ -144,6 +146,5 @@ export async function uploadPerDiemFirestore(perdiemList, pdc_user_name) {
       pdc_user_name
     });
   }
-
-  console.log("✅ Firestore 업로드 완료");
 }
+
