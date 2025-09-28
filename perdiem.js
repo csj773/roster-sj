@@ -47,6 +47,14 @@ function calculatePerDiem(riDate, roDate, rate) {
 export function generatePerDiemList(rosterJsonPath) {
   const raw = JSON.parse(fs.readFileSync(rosterJsonPath, "utf-8"));
   const rows = raw.values.slice(1);
+
+  // Date 기준 오름차순 정렬
+  rows.sort((a, b) => {
+    const dateA = new Date(convertDate(a[0]));
+    const dateB = new Date(convertDate(b[0]));
+    return dateA - dateB;
+  });
+
   const perdiemList = [];
   const now = new Date();
   const Year = String(now.getFullYear());
@@ -54,27 +62,47 @@ export function generatePerDiemList(rosterJsonPath) {
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const [DateStr, , , , Activity, , From, , STDZ, To, , STAZ] = row;
+    const [DateStr,, , , Activity, , From, , STDZ, To, , STAZ] = row;
     if (!Activity || !From || !To || From === To) continue;
 
     const DateFormatted = convertDate(DateStr);
     const Rate = PERDIEM_RATE[To] || 3;
 
-    const riDateRaw = i > 0 ? parseHHMMOffset(rows[i-1][11], convertDate(rows[i-1][0])) : parseHHMMOffset(STAZ, DateFormatted);
-    const roDateRaw = parseHHMMOffset(STDZ, DateFormatted);
+    // 이전 Flight 탐색: From ≠ To인 가장 최근 Flight의 STA(Z)
+    let riDate = null;
+    for (let j = i - 1; j >= 0; j--) {
+      const prevRow = rows[j];
+      const prevFrom = prevRow[6];
+      const prevTo = prevRow[9];
+      const prevSTAZ = prevRow[11];
+      if (prevFrom && prevTo && prevFrom !== prevTo) {
+        const prevDate = convertDate(prevRow[0]);
+        const tempRI = parseHHMMOffset(prevSTAZ, prevDate);
+        if (tempRI instanceof Date && !isNaN(tempRI)) {
+          riDate = tempRI;
+          break;
+        }
+      }
+    }
 
-    const riDate = riDateRaw instanceof Date && !isNaN(riDateRaw) ? riDateRaw : null;
-    const roDate = roDateRaw instanceof Date && !isNaN(roDateRaw) ? roDateRaw : null;
+    // 이전 Flight가 없으면 현재 Flight의 STAZ 사용
+    if (!riDate) {
+      riDate = parseHHMMOffset(STAZ, DateFormatted);
+    }
 
-    const { StayHours, Total } = calculatePerDiem(riDate, roDate, Rate);
+    const roDate = parseHHMMOffset(STDZ, DateFormatted);
+    const riValid = riDate instanceof Date && !isNaN(riDate) ? riDate : null;
+    const roValid = roDate instanceof Date && !isNaN(roDate) ? roDate : null;
+
+    const { StayHours, Total } = calculatePerDiem(riValid, roValid, Rate);
 
     perdiemList.push({
       Date: DateFormatted,
-      Activity: "Flight",
+      Activity,   // Roster 원본 Activity 그대로 사용
       From,
       Destination: To,
-      RI: riDate ? riDate.toISOString() : "",
-      RO: roDate ? roDate.toISOString() : "",
+      RI: riValid ? riValid.toISOString() : "",
+      RO: roValid ? roValid.toISOString() : "",
       StayHours,
       Rate,
       Total,
@@ -146,5 +174,6 @@ export async function uploadPerDiemFirestore(perdiemList, pdc_user_name) {
       pdc_user_name
     });
   }
+  console.log("✅ PerDiem Firestore 업로드 완료");
 }
 
