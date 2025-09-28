@@ -180,7 +180,7 @@ export async function uploadPerDiemFirestore(perdiemList, pdc_user_name) {
       Total: row.Total,
       Month: row.Month,
       Year: row.Year,
-      pdc_user_name
+      userId
     });
   }
   console.log("✅ PerDiem Firestore 업로드 완료");
