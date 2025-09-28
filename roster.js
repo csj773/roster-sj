@@ -149,9 +149,11 @@ console.log("✅ UID 및 Config 로드 완료");
   const perdiemList = generatePerDiemList(path.join(publicDir,"roster.json"));
 
   // Flight 행만 포함해서 CSV 저장
-  savePerDiemCSV(
-    perdiemList.filter(p => p.Destination && p.RI && p.RO)
-  , path.join(publicDir,"perdiem.csv"));
+ const perdiemList = await generatePerDiemList(rosterJsonPath, userId); // 배열 받아오기
+savePerDiemCSV(
+  perdiemList.filter(p => p.Destination && p.RI && p.RO),
+  path.join(publicDir,"perdiem.csv")
+);
 
   // Firestore 업로드
   await uploadPerDiemFirestore(perdiemList, flutterflowUid);
