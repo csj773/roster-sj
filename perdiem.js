@@ -60,35 +60,30 @@ export function generatePerDiemList(rosterJsonPath) {
   const Year = String(now.getFullYear());
   const Month = String(now.getMonth() + 1).padStart(2, "0");
 
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
+  // Flight 전용 배열 (From ≠ To)
+  const flightRows = rows.filter(r => r[6] && r[9] && r[6] !== r[9]);
+
+  for (let i = 0; i < flightRows.length; i++) {
+    const row = flightRows[i];
     const [DateStr,, , , Activity, , From, , STDZ, To, , STAZ] = row;
-    if (!Activity || !From || !To || From === To) continue;
-
     const DateFormatted = convertDate(DateStr);
-    const Rate = PERDIEM_RATE[To] || 3;
+    const Rate = PERDIEM_RATE[From] || 3; // From 공항 기준
 
-    // 이전 Flight 탐색: From ≠ To인 가장 최근 Flight의 STA(Z)
+    // 이전 Flight STA(Z) 찾기 (가장 가까운 이전 Flight)
     let riDate = null;
     for (let j = i - 1; j >= 0; j--) {
-      const prevRow = rows[j];
-      const prevFrom = prevRow[6];
-      const prevTo = prevRow[9];
+      const prevRow = flightRows[j];
+      const prevDate = convertDate(prevRow[0]);
       const prevSTAZ = prevRow[11];
-      if (prevFrom && prevTo && prevFrom !== prevTo) {
-        const prevDate = convertDate(prevRow[0]);
-        const tempRI = parseHHMMOffset(prevSTAZ, prevDate);
-        if (tempRI instanceof Date && !isNaN(tempRI)) {
-          riDate = tempRI;
-          break;
-        }
+      const tempRI = parseHHMMOffset(prevSTAZ, prevDate);
+      if (tempRI instanceof Date && !isNaN(tempRI)) {
+        riDate = tempRI;
+        break;
       }
     }
 
-    // 이전 Flight가 없으면 현재 Flight의 STAZ 사용
-    if (!riDate) {
-      riDate = parseHHMMOffset(STAZ, DateFormatted);
-    }
+    // 이전 Flight 없으면 현재 Flight STAZ 사용
+    if (!riDate) riDate = parseHHMMOffset(STAZ, DateFormatted);
 
     const roDate = parseHHMMOffset(STDZ, DateFormatted);
     const riValid = riDate instanceof Date && !isNaN(riDate) ? riDate : null;
