@@ -145,20 +145,12 @@ console.log("✅ UID 및 Config 로드 완료");
   console.log("✅ JSON/CSV 저장 완료");
 
   // ------------------- PerDiem 처리 -------------------
-console.log("🚀 PerDiem 처리 시작");
-
-// generatePerDiemList는 async 함수이므로 await 필요
-const perdiemList = await generatePerDiemList(path.join(publicDir, "roster.json"), flutterflowUid);
-
-// Flight 행만 포함해서 CSV 저장
-const flightPerDiemList = perdiemList.filter(p => p.Destination && p.RI && p.RO);
-savePerDiemCSV(flightPerDiemList, path.join(publicDir, "perdiem.csv"));
-
-// Firestore 업로드
-await uploadPerDiemFirestore(flightPerDiemList, flutterflowUid);
-
-console.log("✅ PerDiem 처리 완료");
-
+  console.log("🚀 PerDiem 처리 시작");
+  const perdiemList = await generatePerDiemList(path.join(publicDir, "roster.json"), flutterflowUid);
+  const flightPerDiemList = perdiemList.filter(p => p.Destination && p.RI && p.RO);
+  savePerDiemCSV(flightPerDiemList, path.join(publicDir, "perdiem.csv"));
+  await uploadPerDiemFirestore(flightPerDiemList, flutterflowUid);
+  console.log("✅ PerDiem 처리 완료");
 
   // ------------------- Roster Firestore 업로드 -------------------
   console.log("🚀 Roster Firestore 업로드 시작");
@@ -179,6 +171,11 @@ console.log("✅ PerDiem 처리 완료");
       docData[headerMapFirestore[h] || h] = row[idx] || "";
     });
 
+    // ==================== 최소 수정 부분 시작 ====================
+    docData.DateRaw = docData.Date;           // 원본 Date 저장
+    docData.Date = convertDate(docData.Date); // 변환된 Date 저장
+    // ==================== 최소 수정 부분 끝 ====================
+
     docData.userId = flutterflowUid || "";
     docData.adminId = firestoreAdminUid || "";
     docData.pdc_user_name = username || "";
@@ -190,7 +187,7 @@ console.log("✅ PerDiem 처리 완료");
 
     // NT 계산
     if (docData.From !== docData.To) {
-      const flightDate = new Date(convertDate(docData.Date));
+      const flightDate = new Date(docData.Date);
       docData.NT = calculateNTFromSTDSTA(docData.STDZ, docData.STAZ, flightDate);
     } else {
       docData.NT = "00:00";
@@ -199,8 +196,8 @@ console.log("✅ PerDiem 처리 완료");
     // Crew 문자열 배열로 파싱
     docData.CrewArray = parseCrewString(docData.Crew);
 
-    // Year / Month 자동 추가
-    const { Year, Month } = parseYearMonthFromEeeDd(docData.Date);
+    // Year / Month 자동 추가 (원본 기준)
+    const { Year, Month } = parseYearMonthFromEeeDd(docData.DateRaw);
     docData.Year = Year;
     docData.Month = Month;
 
@@ -255,6 +252,3 @@ console.log("✅ PerDiem 처리 완료");
   }
 
 })();
-
-
-
