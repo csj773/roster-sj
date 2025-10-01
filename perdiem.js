@@ -11,13 +11,11 @@ export const PERDIEM_RATE = {
   DAC: 33, NRT: 33, HKG: 33
 };
 
-// ------------------- Date 변환 -------------------
+// ------------------- Date 변환 (유연 처리) -------------------
 export function convertDate(input) {
   if (!input || typeof input !== "string") return input;
 
   const parts = input.trim().split(/\s+/);
-  if (parts.length < 2) return input;
-
   const now = new Date();
   const year = now.getFullYear();
 
@@ -26,17 +24,32 @@ export function convertDate(input) {
     Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12"
   };
 
-  let month, dayStr;
-
-  if (monthMap[parts[0]]) {
-    month = monthMap[parts[0]];
-    dayStr = parts[1].padStart(2, "0");
-  } else {
-    month = String(now.getMonth() + 1).padStart(2, "0");
-    dayStr = parts[1].padStart(2, "0");
+  // 1) Month Day 형식 (e.g., Oct 01)
+  if (parts.length >= 2 && monthMap[parts[0]]) {
+    const month = monthMap[parts[0]];
+    const dayStr = parts[1].padStart(2, "0");
+    return `${year}.${month}.${dayStr}`;
   }
 
-  return `${year}.${month}.${dayStr}`;
+  // 2) YYYY.MM.DD or YYYY/MM/DD
+  const sep = input.includes("/") ? "/" : ".";
+  const dateParts = input.split(sep);
+  if (dateParts.length === 3) {
+    const y = dateParts[0].padStart(4, "0");
+    const m = dateParts[1].padStart(2, "0");
+    const d = dateParts[2].padStart(2, "0");
+    return `${y}.${m}.${d}`;
+  }
+
+  // 3) MM.DD 형식
+  if (dateParts.length === 2) {
+    const m = dateParts[0].padStart(2, "0");
+    const d = dateParts[1].padStart(2, "0");
+    return `${year}.${m}.${d}`;
+  }
+
+  // fallback
+  return input.replace(/\//g, ".");
 }
 
 // ------------------- HHMM±Offset → Date 변환 -------------------
@@ -84,7 +97,7 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
   }
   const db = admin.firestore();
 
-  const flightRows = rows.filter(r => r[6] && r[9] && r[6] !== r[9]);
+  const flightRows = rows.filter(r => r[6] && r[9]); // From, To 존재 여부만 확인
   const QUICK_DESTS = ["NRT", "HKG", "DAC"];
 
   for (let i = 0; i < flightRows.length; i++) {
@@ -108,7 +121,6 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
     let riDate = null;
     let roDate = null;
 
-    // 이전달 귀국편 처리
     if (i === 0 && To === "ICN" && From !== "ICN") {
       const curMonthNum = Number(Month);
       const prevMonthNum = curMonthNum - 1 >= 1 ? curMonthNum - 1 : 12;
@@ -130,15 +142,13 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
       }
       roDate = parseHHMMOffset(STDZ, DateFormatted);
     } else {
-      if (Rate > 0) {
-        for (let j = i-1; j>=0; j--) {
-          const prevRow = flightRows[j];
-          if (prevRow[6] && prevRow[9] && prevRow[6] !== prevRow[9]) {
-            const tempRI = parseHHMMOffset(prevRow[11], convertDate(prevRow[0]));
-            if (tempRI instanceof Date && !isNaN(tempRI)) {
-              riDate = tempRI;
-              break;
-            }
+      for (let j = i-1; j>=0; j--) {
+        const prevRow = flightRows[j];
+        if (prevRow[6] && prevRow[9]) {
+          const tempRI = parseHHMMOffset(prevRow[11], convertDate(prevRow[0]));
+          if (tempRI instanceof Date && !isNaN(tempRI)) {
+            riDate = tempRI;
+            break;
           }
         }
       }
@@ -146,7 +156,7 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
       roDate = parseHHMMOffset(STDZ, DateFormatted);
     }
 
-    // Quick turn 귀국편 확인
+    // Quick turn 귀국편
     let isQuickTurnReturn = false;
     if (To === "ICN" && QUICK_DESTS.includes(From) && i > 0) {
       const prevRow = flightRows[i-1];
@@ -171,15 +181,9 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
 
     let { StayHours, Total: baseTotal } = calculatePerDiem(riValid, roValid, Rate);
 
-    // From이 ICN이면 StayHours 0
     if (From === "ICN") StayHours = "0:00";
-
-    // Quick turn 귀국편이면 Total 33 USD
-    let Total = baseTotal;
-    if (isQuickTurnReturn) {
-      Total = 33;
-      Rate = 33;
-    }
+    let Total = isQuickTurnReturn ? 33 : baseTotal;
+    if (isQuickTurnReturn) Rate = 33;
 
     perdiemList.push({
       Date: DateFormatted,
@@ -210,7 +214,7 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
   const csvRows = [headers.join(",")];
 
   for (const row of perdiemList) {
-    if (!row || !row.From || !row.Destination || row.From === row.Destination) continue;
+    if (!row || !row.From || !row.Destination) continue;
     const csvRow = [
       row.Date || "",
       row.Activity || "",
