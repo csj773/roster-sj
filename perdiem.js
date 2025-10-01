@@ -7,41 +7,52 @@ import { hourToTimeStr } from "./flightTimeUtils.js";
 // ------------------- 공항별 PER DIEM -------------------
 export const PERDIEM_RATE = {
   LAX: 3.42, EWR: 3.44, HNL: 3.01, FRA: 3.18, BCN: 3.11,
-  BKK: 2.14, DAD: 2.01, SFO: 3.42, OSL: 3.24,
-  DAC: 33, NRT: 33, HKG: 33
+  NRT: 3.05, ICN: 0.0
 };
 
-// ------------------- Date 변환 -------------------
+// ------------------- Date 변환 함수 -------------------
 export function convertDate(input) {
-  const now = new Date();
-  const fallback = `${now.getFullYear()}.${String(now.getMonth()+1).padStart(2,"0")}.${String(now.getDate()).padStart(2,"0")}`;
-
-  if (!input || typeof input !== "string") return fallback;
+  if (!input || typeof input !== "string") {
+    const now = new Date();
+    return `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, "0")}.${String(now.getDate()).padStart(2, "0")}`;
+  }
 
   const parts = input.trim().split(/\s+/);
-  if (parts.length < 2) return fallback;
+  if (parts.length < 2) {
+    const now = new Date();
+    return `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, "0")}.${String(now.getDate()).padStart(2, "0")}`;
+  }
 
-  const year = now.getFullYear();
+  const year = new Date().getFullYear();
   const monthMap = {
-    Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",
-    Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12"
+    Jan:"01",Feb:"02",Mar:"03",Apr:"04",May:"05",Jun:"06",
+    Jul:"07",Aug:"08",Sep:"09",Oct:"10",Nov:"11",Dec:"12"
   };
 
   let month, dayStr;
   if (monthMap[parts[0]]) {
-    // 입력이 "Sep 29"
     month = monthMap[parts[0]];
     dayStr = parts[1].padStart(2, "0");
   } else {
-    // 입력이 "Mon 29" 같이 요일일 경우
-    month = String(now.getMonth() + 1).padStart(2, "0");
+    month = String(new Date().getMonth() + 1).padStart(2, "0");
     dayStr = parts[1].padStart(2, "0");
   }
 
   return `${year}.${month}.${dayStr}`;
 }
 
-// ------------------- HHMM±Offset → Date 변환 -------------------
+// ------------------- YYYY.MM.DD → Date 객체 변환 -------------------
+export function parseUTCDate(str) {
+  if (!str) return null;
+  const parts = str.split(".");
+  if (parts.length < 3) return null;
+  const y = parseInt(parts[0], 10);
+  const m = parseInt(parts[1], 10) - 1;
+  const d = parseInt(parts[2], 10);
+  return new Date(Date.UTC(y, m, d));
+}
+
+// ------------------- HHMM ±offset → Date 변환 -------------------
 function parseHHMMOffset(str, baseDateStr) {
   if (!str) return null;
   const match = str.match(/^(\d{2})(\d{2})([+-]\d+)?$/);
@@ -59,241 +70,66 @@ function parseHHMMOffset(str, baseDateStr) {
   return date;
 }
 
-// ------------------- PerDiem 계산 -------------------
-function calculatePerDiem(riDate, roDate, rate) {
-  if (!riDate || !roDate || riDate >= roDate) return { StayHours: "0:00", Total: 0 };
-  const diffHours = (roDate - riDate) / 1000 / 3600;
-  const total = Math.round(diffHours * rate * 100) / 100;
-  return { StayHours: hourToTimeStr(diffHours), Total: total };
-}
+// ------------------- PER DIEM 계산 -------------------
+export function calculatePerDiem(rows) {
+  let results = [];
+  let prevDateObj = null;
+  let grandTotal = 0;
 
-// ------------------- Roster.json → PerDiem 리스트 -------------------
-export async function generatePerDiemList(rosterJsonPath, userId) {
-  const raw = JSON.parse(fs.readFileSync(rosterJsonPath, "utf-8"));
-  const rows = raw.values.slice(1);
+  for (const row of rows) {
+    let rawDate = row[0]?.trim();
+    let DateFormatted = convertDate(rawDate);         
+    let currentDateObj = parseUTCDate(DateFormatted); 
 
-  rows.sort((a, b) => {
-    const dateA = new Date(convertDate(a[0]));
-    const dateB = new Date(convertDate(b[0]));
-    return dateA - dateB;
-  });
-
-  const perdiemList = [];
-
-  if (!admin.apps.length) {
-    admin.initializeApp({ credential: admin.credential.applicationDefault() });
-  }
-  const db = admin.firestore();
-
-  const flightRows = rows.filter(r => r[6] && r[9] && r[6] !== r[9]);
-
-  for (let i = 0; i < flightRows.length; i++) {
-    const row = flightRows[i];
-    const [DateStr,, , , Activity, , From, , STDZ, To, , STAZ] = row;
-    let DateFormatted = convertDate(DateStr);
-
-    // --- DateRaw 누락 시 이전편의 Date 사용
-    if ((!DateFormatted || DateFormatted === "NaN.undefined.NaN") && i > 0) {
-      const prevRow = flightRows[i - 1];
-      const prevDate = convertDate(prevRow[0]);
-      if (prevDate) DateFormatted = prevDate;
+    // --- 롤오버 보정 ---
+    if (prevDateObj && currentDateObj < prevDateObj) {
+      currentDateObj.setMonth(currentDateObj.getMonth() + 1);
     }
-    if (!DateFormatted) {
-      const now = new Date();
-      DateFormatted = `${now.getFullYear()}.${String(now.getMonth()+1).padStart(2,"0")}.${String(now.getDate()).padStart(2,"0")}`;
-    }
+    DateFormatted = `${currentDateObj.getFullYear()}.${String(currentDateObj.getMonth() + 1).padStart(2,"0")}.${String(currentDateObj.getDate()).padStart(2,"0")}`;
+    prevDateObj = currentDateObj;
 
-    // --- Month/Year 안전 처리
-    let dfParts = (DateFormatted && DateFormatted.includes(".")) ? DateFormatted.split(".") : [];
-    let Year, Month;
-    if (dfParts.length === 3) {
-      Year = dfParts[0];
-      Month = dfParts[1].padStart(2, "0");
-    } else {
-      const now = new Date();
-      Year = String(now.getFullYear());
-      Month = String(now.getMonth() + 1).padStart(2, "0");
-      DateFormatted = `${Year}.${Month}.${String(now.getDate()).padStart(2,"0")}`;
+    // ------------------- 이후 로직 -------------------
+    const dfParts = DateFormatted.split(".");
+    const Year = dfParts[0];
+    const Month = dfParts[1];
+
+    const flightNo = row[1];
+    const From = row[2];
+    const To = row[3];
+    const STDZ = row[4]; // 출발시간
+    const STAZ = row[5]; // 도착시간
+
+    const rate = PERDIEM_RATE[To] ?? 0;
+
+    // --- RI, RO 계산 ---
+    const riDate = parseHHMMOffset(STAZ, DateFormatted);
+    const roDate = parseHHMMOffset(STDZ, DateFormatted);
+
+    let StayHours = "0:00";
+    let Total = 0;
+
+    if (riDate && roDate && riDate < roDate) {
+      const diffHours = (roDate - riDate) / 1000 / 3600;
+      StayHours = hourToTimeStr(diffHours);
+      Total = Math.round(diffHours * rate * 100) / 100;
     }
 
-    // Quick turn 대상 공항
-    const QUICK_DESTS = ["NRT", "HKG", "DAC"];
+    grandTotal += Total;
 
-    // 기본 Rate
-    const defaultRate = From === "ICN" ? 0 : PERDIEM_RATE[From] || 3;
-    let Rate = defaultRate;
-    let riDate = null;
-    let roDate = null;
-
-    // ----------------- 이전달 귀국편 처리 (첫 행이면서 귀국편인 경우)
-    if (i === 0 && To === "ICN" && From !== "ICN") {
-      const curMonthNum = Number(Month);
-      const prevMonthNum = curMonthNum - 1 >= 1 ? curMonthNum - 1 : 12;
-      const prevMonth = String(prevMonthNum).padStart(2, "0");
-      const prevYear = prevMonthNum === 12 ? String(Number(Year) - 1) : Year;
-
-      const prevSnapshot = await db.collection("Perdiem")
-        .where("userId", "==", userId)
-        .where("Month", "==", prevMonth)
-        .where("Year", "==", prevYear)
-        .where("Destination", "==", From)
-        .orderBy("Date", "desc")
-        .limit(1)
-        .get();
-
-      if (!prevSnapshot.empty) {
-        const prevDoc = prevSnapshot.docs[0].data();
-        if (prevDoc.RO) riDate = new Date(prevDoc.RO);
-      }
-
-      roDate = parseHHMMOffset(STDZ, DateFormatted);
-    } else {
-      if (Rate > 0) {
-        for (let j = i - 1; j >= 0; j--) {
-          const prevRow = flightRows[j];
-          if (prevRow[6] && prevRow[9] && prevRow[6] !== prevRow[9]) {
-            const prevDateStr = convertDate(prevRow[0]);
-            const tempRI = parseHHMMOffset(prevRow[11], prevDateStr);
-            if (tempRI instanceof Date && !isNaN(tempRI)) {
-              riDate = tempRI;
-              break;
-            }
-          }
-        }
-      }
-      if (!riDate) riDate = parseHHMMOffset(STAZ, DateFormatted);
-      roDate = parseHHMMOffset(STDZ, DateFormatted);
-    }
-
-    // --- Quick turn 귀국편 여부 확인
-    let isQuickTurnReturn = false;
-    if (To === "ICN" && QUICK_DESTS.includes(From) && i > 0) {
-      const prevRow = flightRows[i - 1];
-      const prevFrom = prevRow[6], prevTo = prevRow[9];
-      if (prevFrom === "ICN" && prevTo === From) {
-        const prevDate = convertDate(prevRow[0]);
-        const prevRI = parseHHMMOffset(prevRow[11], prevDate);
-        const curRO = parseHHMMOffset(STDZ, DateFormatted);
-        if (prevRI instanceof Date && !isNaN(prevRI) && curRO instanceof Date && !isNaN(curRO)) {
-          const diffHours = (curRO - prevRI) / 1000 / 3600;
-          if (diffHours <= 8 && diffHours > 0) {
-            isQuickTurnReturn = true;
-            riDate = prevRI;
-            if (!DateStr || !DateStr.trim()) {
-              DateFormatted = prevDate;
-            }
-          }
-        }
-      }
-    }
-
-    const riValid = riDate instanceof Date && !isNaN(riDate) ? riDate : null;
-    const roValid = roDate instanceof Date && !isNaN(roDate) ? roDate : null;
-    const { StayHours, Total: baseTotal } = calculatePerDiem(riValid, roValid, Rate);
-
-    // --- Quick turn 귀국편이면 Total, Rate 강제 33 USD
-    let Total = baseTotal;
-    if (isQuickTurnReturn) {
-      Total = 33;
-      Rate = 33;
-    }
-
-    perdiemList.push({
+    results.push({
       Date: DateFormatted,
-      Activity,
-      From,
-      Destination: To,
-      RI: riValid ? riValid.toISOString() : "",
-      RO: roValid ? roValid.toISOString() : "",
-      StayHours,
-      Rate,
-      Total,
+      Year,
       Month,
-      Year
+      flightNo,
+      From,
+      To,
+      RI: riDate ? riDate.toISOString() : "",
+      RO: roDate ? roDate.toISOString() : "",
+      StayHours,
+      Rate: rate,
+      Total
     });
   }
 
-  return perdiemList;
-}
-
-// ------------------- CSV 저장 (Flight 전용) -------------------
-export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
-  if (!Array.isArray(perdiemList)) {
-    console.warn("❌ savePerDiemCSV: perdiemList가 배열이 아닙니다.");
-    return;
-  }
-
-  const headers = ["Date","Activity","From","RI","Destination","RO","StayHours","Rate","Total"];
-  const csvRows = [headers.join(",")];
-
-  for (const row of perdiemList) {
-    if (!row || !row.From || !row.Destination || row.From === row.Destination) continue;
-    const csvRow = [
-      row.Date || "",
-      row.Activity || "",
-      row.From || "",
-      row.RI ? row.RI.slice(11,16) : "",
-      row.Destination || "",
-      row.RO ? row.RO.slice(11,16) : "",
-      row.StayHours || "",
-      row.Rate || "",
-      row.Total || ""
-    ];
-    csvRows.push(csvRow.map(v => `"${v}"`).join(","));
-  }
-
-  try {
-    const fullPath = path.join(process.cwd(), outputPath);
-    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-    fs.writeFileSync(fullPath, csvRows.join("\n"), "utf-8");
-    console.log(`✅ Flight 전용 CSV 저장 완료: ${fullPath}`);
-  } catch (err) {
-    console.error("❌ CSV 저장 실패:", err);
-  }
-}
-
-// ------------------- Firestore 업로드 -------------------
-export async function uploadPerDiemFirestore(perdiemList, owner) {
-  if (!Array.isArray(perdiemList) || !owner) {
-    console.warn("❌ uploadPerDiemFirestore: perdiemList가 배열이 아니거나 owner가 없습니다.");
-    return;
-  }
-
-  if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.applicationDefault() });
-  const db = admin.firestore();
-  const collection = db.collection("Perdiem");
-
-  for (const row of perdiemList) {
-    if (!row || !row.Destination) continue;
-
-    try {
-      const snapshot = await collection
-        .where("Destination","==",row.Destination)
-        .where("Date","==",row.Date)
-        .get();
-
-      if (!snapshot.empty) {
-        for (const doc of snapshot.docs) await collection.doc(doc.id).delete();
-      }
-
-      await collection.add({
-        Date: row.Date,
-        Activity: row.Activity,
-        From: row.From,
-        Destination: row.Destination,
-        RI: row.RI,
-        RO: row.RO,
-        StayHours: row.StayHours,
-        Rate: row.Rate,
-        Total: row.Total,
-        Month: row.Month,
-        Year: row.Year,
-        owner
-      });
-    } catch (err) {
-      console.error(`❌ Firestore 업로드 실패 (Destination: ${row.Destination}, Date: ${row.Date}):`, err);
-    }
-  }
-
-  console.log("✅ PerDiem Firestore 업로드 완료");
+  return { perdiemList: results, GrandTotal: Math.round(grandTotal * 100) / 100 };
 }
