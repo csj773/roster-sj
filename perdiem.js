@@ -13,28 +13,27 @@ export const PERDIEM_RATE = {
 
 // ------------------- Date 변환 -------------------
 export function convertDate(input) {
-  if (!input || typeof input !== "string") return input;
+  const now = new Date();
+  const fallback = `${now.getFullYear()}.${String(now.getMonth()+1).padStart(2,"0")}.${String(now.getDate()).padStart(2,"0")}`;
+
+  if (!input || typeof input !== "string") return fallback;
 
   const parts = input.trim().split(/\s+/);
-  if (parts.length < 2) return input;
+  if (parts.length < 2) return fallback;
 
-  const now = new Date();
   const year = now.getFullYear();
-
-  // 월 문자열 매핑
   const monthMap = {
     Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",
     Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12"
   };
 
   let month, dayStr;
-
   if (monthMap[parts[0]]) {
-    // 입력이 "Sep 29" 같은 형식일 때
+    // 입력이 "Sep 29"
     month = monthMap[parts[0]];
     dayStr = parts[1].padStart(2, "0");
   } else {
-    // 입력이 "Mon 29" 같이 요일만 있을 때
+    // 입력이 "Mon 29" 같이 요일일 경우
     month = String(now.getMonth() + 1).padStart(2, "0");
     dayStr = parts[1].padStart(2, "0");
   }
@@ -104,10 +103,18 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
       DateFormatted = `${now.getFullYear()}.${String(now.getMonth()+1).padStart(2,"0")}.${String(now.getDate()).padStart(2,"0")}`;
     }
 
-    // --- Month/Year은 현재 행의 DateFormatted에서 계산
-    const dfParts = DateFormatted.split(".");
-    const Year = dfParts[0];
-    const Month = dfParts[1].padStart(2, "0");
+    // --- Month/Year 안전 처리
+    let dfParts = (DateFormatted && DateFormatted.includes(".")) ? DateFormatted.split(".") : [];
+    let Year, Month;
+    if (dfParts.length === 3) {
+      Year = dfParts[0];
+      Month = dfParts[1].padStart(2, "0");
+    } else {
+      const now = new Date();
+      Year = String(now.getFullYear());
+      Month = String(now.getMonth() + 1).padStart(2, "0");
+      DateFormatted = `${Year}.${Month}.${String(now.getDate()).padStart(2,"0")}`;
+    }
 
     // Quick turn 대상 공항
     const QUICK_DESTS = ["NRT", "HKG", "DAC"];
