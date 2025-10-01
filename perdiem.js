@@ -80,9 +80,6 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
   });
 
   const perdiemList = [];
-  const now = new Date();
-  const Year = String(now.getFullYear());
-  const Month = String(now.getMonth() + 1).padStart(2, "0");
 
   if (!admin.apps.length) {
     admin.initializeApp({ credential: admin.credential.applicationDefault() });
@@ -94,17 +91,39 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
   for (let i = 0; i < flightRows.length; i++) {
     const row = flightRows[i];
     const [DateStr,, , , Activity, , From, , STDZ, To, , STAZ] = row;
-    const DateFormatted = convertDate(DateStr);
+    let DateFormatted = convertDate(DateStr);
 
-    const Rate = From === "ICN" ? 0 : PERDIEM_RATE[From] || 3;
+    // --- DateRaw 누락 시 이전편의 Date 사용
+    if ((!DateFormatted || DateFormatted === "NaN.undefined.NaN") && i > 0) {
+      const prevRow = flightRows[i - 1];
+      const prevDate = convertDate(prevRow[0]);
+      if (prevDate) DateFormatted = prevDate;
+    }
+    if (!DateFormatted) {
+      const now = new Date();
+      DateFormatted = `${now.getFullYear()}.${String(now.getMonth()+1).padStart(2,"0")}.${String(now.getDate()).padStart(2,"0")}`;
+    }
 
+    // --- Month/Year은 현재 행의 DateFormatted에서 계산
+    const dfParts = DateFormatted.split(".");
+    const Year = dfParts[0];
+    const Month = dfParts[1].padStart(2, "0");
+
+    // Quick turn 대상 공항
+    const QUICK_DESTS = ["NRT", "HKG", "DAC"];
+
+    // 기본 Rate
+    const defaultRate = From === "ICN" ? 0 : PERDIEM_RATE[From] || 3;
+    let Rate = defaultRate;
     let riDate = null;
     let roDate = null;
 
-    // 이전달 귀국편 처리
+    // ----------------- 이전달 귀국편 처리 (첫 행이면서 귀국편인 경우)
     if (i === 0 && To === "ICN" && From !== "ICN") {
-      const prevMonth = (Number(Month) - 1 || 12).toString().padStart(2, "0");
-      const prevYear = prevMonth === "12" ? String(Number(Year) - 1) : Year;
+      const curMonthNum = Number(Month);
+      const prevMonthNum = curMonthNum - 1 >= 1 ? curMonthNum - 1 : 12;
+      const prevMonth = String(prevMonthNum).padStart(2, "0");
+      const prevYear = prevMonthNum === 12 ? String(Number(Year) - 1) : Year;
 
       const prevSnapshot = await db.collection("Perdiem")
         .where("userId", "==", userId)
@@ -125,10 +144,9 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
       if (Rate > 0) {
         for (let j = i - 1; j >= 0; j--) {
           const prevRow = flightRows[j];
-          const prevSTAZ = prevRow[11];
           if (prevRow[6] && prevRow[9] && prevRow[6] !== prevRow[9]) {
-            const prevDate = convertDate(prevRow[0]);
-            const tempRI = parseHHMMOffset(prevSTAZ, prevDate);
+            const prevDateStr = convertDate(prevRow[0]);
+            const tempRI = parseHHMMOffset(prevRow[11], prevDateStr);
             if (tempRI instanceof Date && !isNaN(tempRI)) {
               riDate = tempRI;
               break;
@@ -140,9 +158,38 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
       roDate = parseHHMMOffset(STDZ, DateFormatted);
     }
 
+    // --- Quick turn 귀국편 여부 확인
+    let isQuickTurnReturn = false;
+    if (To === "ICN" && QUICK_DESTS.includes(From) && i > 0) {
+      const prevRow = flightRows[i - 1];
+      const prevFrom = prevRow[6], prevTo = prevRow[9];
+      if (prevFrom === "ICN" && prevTo === From) {
+        const prevDate = convertDate(prevRow[0]);
+        const prevRI = parseHHMMOffset(prevRow[11], prevDate);
+        const curRO = parseHHMMOffset(STDZ, DateFormatted);
+        if (prevRI instanceof Date && !isNaN(prevRI) && curRO instanceof Date && !isNaN(curRO)) {
+          const diffHours = (curRO - prevRI) / 1000 / 3600;
+          if (diffHours <= 8 && diffHours > 0) {
+            isQuickTurnReturn = true;
+            riDate = prevRI;
+            if (!DateStr || !DateStr.trim()) {
+              DateFormatted = prevDate;
+            }
+          }
+        }
+      }
+    }
+
     const riValid = riDate instanceof Date && !isNaN(riDate) ? riDate : null;
     const roValid = roDate instanceof Date && !isNaN(roDate) ? roDate : null;
-    const { StayHours, Total } = calculatePerDiem(riValid, roValid, Rate);
+    const { StayHours, Total: baseTotal } = calculatePerDiem(riValid, roValid, Rate);
+
+    // --- Quick turn 귀국편이면 Total, Rate 강제 33 USD
+    let Total = baseTotal;
+    if (isQuickTurnReturn) {
+      Total = 33;
+      Rate = 33;
+    }
 
     perdiemList.push({
       Date: DateFormatted,
