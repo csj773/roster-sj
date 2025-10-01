@@ -13,9 +13,10 @@ export const PERDIEM_RATE = {
 
 // ------------------- Date 변환 -------------------
 export function convertDate(input) {
-  if (!input || typeof input !== "string") return "";
+  if (!input || typeof input !== "string") return input;
+
   const parts = input.trim().split(/\s+/);
-  if (parts.length < 2) return "";
+  if (parts.length < 2) return input;
 
   const now = new Date();
   const year = now.getFullYear();
@@ -26,7 +27,6 @@ export function convertDate(input) {
   };
 
   let month, dayStr;
-
   if (monthMap[parts[0]]) {
     month = monthMap[parts[0]];
     dayStr = parts[1].padStart(2, "0");
@@ -40,12 +40,11 @@ export function convertDate(input) {
 
 // ------------------- HHMM±Offset → Date 변환 -------------------
 function parseHHMMOffset(str, baseDateStr) {
-  if (!str || !baseDateStr) return null;
+  if (!str) return null;
   const match = str.match(/^(\d{2})(\d{2})([+-]\d+)?$/);
   if (!match) return null;
   const [, hh, mm, offset] = match;
   const baseDateParts = baseDateStr.split(".");
-  if (baseDateParts.length < 3) return null;
   let date = new Date(
     Number(baseDateParts[0]),
     Number(baseDateParts[1]) - 1,
@@ -58,8 +57,10 @@ function parseHHMMOffset(str, baseDateStr) {
 }
 
 // ------------------- PerDiem 계산 -------------------
-function calculatePerDiem(riDate, roDate, rate) {
-  if (!riDate || !roDate || riDate >= roDate) return { StayHours: "0:00", Total: 0 };
+function calculatePerDiem(riDate, roDate, rate, fromICN = false) {
+  if (!riDate || !roDate || riDate >= roDate || fromICN) {
+    return { StayHours: "0:00", Total: 0 };
+  }
   const diffHours = (roDate - riDate) / 1000 / 3600;
   const total = Math.round(diffHours * rate * 100) / 100;
   return { StayHours: hourToTimeStr(diffHours), Total: total };
@@ -78,10 +79,10 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
 
   const perdiemList = [];
   const now = new Date();
+  const Year = String(now.getFullYear());
+  const Month = String(now.getMonth() + 1).padStart(2, "0");
 
-  if (!admin.apps.length) {
-    admin.initializeApp({ credential: admin.credential.applicationDefault() });
-  }
+  if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.applicationDefault() });
   const db = admin.firestore();
 
   const flightRows = rows.filter(r => r[6] && r[9] && r[6] !== r[9]);
@@ -89,41 +90,40 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
 
   for (let i = 0; i < flightRows.length; i++) {
     const row = flightRows[i];
-    let [DateStr,, , , Activity, , From, , STDZ, To, , STAZ] = row;
-
-    // ------------------- DateFormatted 안전 체크 -------------------
+    const [DateStr,, , , Activity, , From, , STDZ, To, , STAZ] = row;
     let DateFormatted = convertDate(DateStr);
-    if (!DateFormatted || !/^\d{4}\.\d{2}\.\d{2}$/.test(DateFormatted)) {
-      if (i > 0) {
-        const prevDate = convertDate(flightRows[i - 1][0]);
-        DateFormatted = /^\d{4}\.\d{2}\.\d{2}$/.test(prevDate) ? prevDate : `${now.getFullYear()}.${String(now.getMonth()+1).padStart(2,"0")}.${String(now.getDate()).padStart(2,"0")}`;
-      } else {
-        DateFormatted = `${now.getFullYear()}.${String(now.getMonth()+1).padStart(2,"0")}.${String(now.getDate()).padStart(2,"0")}`;
-      }
+
+    if ((!DateFormatted || DateFormatted === "NaN.undefined.NaN") && i > 0) {
+      const prevRow = flightRows[i - 1];
+      const prevDate = convertDate(prevRow[0]);
+      if (prevDate) DateFormatted = prevDate;
+    }
+    if (!DateFormatted) {
+      const now = new Date();
+      DateFormatted = `${now.getFullYear()}.${String(now.getMonth()+1).padStart(2,"0")}.${String(now.getDate()).padStart(2,"0")}`;
     }
 
     const dfParts = DateFormatted.split(".");
-    const Year = dfParts[0];
-    const Month = dfParts[1] || "01";
+    const YearRow = dfParts[0];
+    const MonthRow = dfParts[1]?.padStart(2, "0") || Month;
 
-    // ------------------- 기본 Rate -------------------
     const defaultRate = From === "ICN" ? 0 : PERDIEM_RATE[From] || 3;
     let Rate = defaultRate;
     let riDate = null;
     let roDate = null;
 
-    // ------------------- 이전달 귀국편 처리 -------------------
-    if (i === 0 && To === "ICN" && From !== "ICN") {
-      const curMonthNum = Number(Month);
+    // 이전달 귀국편 처리 (첫 ICN 귀국편 포함)
+    if (To === "ICN" && From !== "ICN") {
+      const curMonthNum = Number(MonthRow);
       const prevMonthNum = curMonthNum - 1 >= 1 ? curMonthNum - 1 : 12;
       const prevMonth = String(prevMonthNum).padStart(2, "0");
-      const prevYear = prevMonthNum === 12 ? String(Number(Year) - 1) : Year;
+      const prevYear = prevMonthNum === 12 ? String(Number(YearRow) - 1) : YearRow;
 
       const prevSnapshot = await db.collection("Perdiem")
         .where("userId", "==", userId)
         .where("Month", "==", prevMonth)
         .where("Year", "==", prevYear)
-        .where("Destination", "==", From)
+        .where("Destination", "==", "ICN")
         .orderBy("Date", "desc")
         .limit(1)
         .get();
@@ -135,15 +135,16 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
 
       roDate = parseHHMMOffset(STDZ, DateFormatted);
     } else {
-      // 이전편 RO 가져오기
-      for (let j = i - 1; j >= 0; j--) {
-        const prevRow = flightRows[j];
-        if (prevRow[6] && prevRow[9] && prevRow[6] !== prevRow[9]) {
-          const prevDateStr = convertDate(prevRow[0]);
-          const tempRI = parseHHMMOffset(prevRow[11], prevDateStr);
-          if (tempRI instanceof Date && !isNaN(tempRI)) {
-            riDate = tempRI;
-            break;
+      if (Rate > 0) {
+        for (let j = i - 1; j >= 0; j--) {
+          const prevRow = flightRows[j];
+          if (prevRow[6] && prevRow[9] && prevRow[6] !== prevRow[9]) {
+            const prevDate = convertDate(prevRow[0]);
+            const tempRI = parseHHMMOffset(prevRow[11], prevDate);
+            if (tempRI instanceof Date && !isNaN(tempRI)) {
+              riDate = tempRI;
+              break;
+            }
           }
         }
       }
@@ -151,7 +152,7 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
       roDate = parseHHMMOffset(STDZ, DateFormatted);
     }
 
-    // ------------------- Quick Turn 귀국편 확인 -------------------
+    // Quick turn 귀국편
     let isQuickTurnReturn = false;
     if (To === "ICN" && QUICK_DESTS.includes(From) && i > 0) {
       const prevRow = flightRows[i - 1];
@@ -159,15 +160,12 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
         const prevDate = convertDate(prevRow[0]);
         const prevRI = parseHHMMOffset(prevRow[11], prevDate);
         const curRO = parseHHMMOffset(STDZ, DateFormatted);
-        if (prevRI instanceof Date && curRO instanceof Date && !isNaN(prevRI) && !isNaN(curRO)) {
+        if (prevRI instanceof Date && !isNaN(prevRI) && curRO instanceof Date && !isNaN(curRO)) {
           const diffHours = (curRO - prevRI) / 1000 / 3600;
           if (diffHours <= 8 && diffHours > 0) {
             isQuickTurnReturn = true;
             riDate = prevRI;
-            if (!DateStr || !DateStr.trim()) {
-              DateFormatted = prevDate;
-            }
-            Rate = 33; // Total 강제 33 USD
+            if (!DateStr || !DateStr.trim()) DateFormatted = prevDate;
           }
         }
       }
@@ -175,9 +173,14 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
 
     const riValid = riDate instanceof Date && !isNaN(riDate) ? riDate : null;
     const roValid = roDate instanceof Date && !isNaN(roDate) ? roDate : null;
-    const { StayHours, Total: baseTotal } = calculatePerDiem(riValid, roValid, Rate);
 
-    const Total = isQuickTurnReturn ? 33 : baseTotal;
+    const { StayHours, Total: baseTotal } = calculatePerDiem(riValid, roValid, Rate, From === "ICN");
+    let Total = baseTotal;
+
+    if (isQuickTurnReturn) {
+      Total = 33;
+      Rate = 33;
+    }
 
     perdiemList.push({
       Date: DateFormatted,
@@ -189,8 +192,8 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
       StayHours,
       Rate,
       Total,
-      Month,
-      Year
+      Month: MonthRow,
+      Year: YearRow
     });
   }
 
@@ -199,10 +202,7 @@ export async function generatePerDiemList(rosterJsonPath, userId) {
 
 // ------------------- CSV 저장 -------------------
 export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
-  if (!Array.isArray(perdiemList)) {
-    console.warn("❌ savePerDiemCSV: perdiemList가 배열이 아닙니다.");
-    return;
-  }
+  if (!Array.isArray(perdiemList)) return console.warn("❌ perdiemList가 배열이 아닙니다.");
 
   const headers = ["Date","Activity","From","RI","Destination","RO","StayHours","Rate","Total"];
   const csvRows = [headers.join(",")];
@@ -235,10 +235,7 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
 
 // ------------------- Firestore 업로드 -------------------
 export async function uploadPerDiemFirestore(perdiemList, owner) {
-  if (!Array.isArray(perdiemList) || !owner) {
-    console.warn("❌ uploadPerDiemFirestore: perdiemList가 배열이 아니거나 owner가 없습니다.");
-    return;
-  }
+  if (!Array.isArray(perdiemList) || !owner) return console.warn("❌ owner 또는 perdiemList 없음");
 
   if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.applicationDefault() });
   const db = admin.firestore();
@@ -257,20 +254,7 @@ export async function uploadPerDiemFirestore(perdiemList, owner) {
         for (const doc of snapshot.docs) await collection.doc(doc.id).delete();
       }
 
-      await collection.add({
-        Date: row.Date,
-        Activity: row.Activity,
-        From: row.From,
-        Destination: row.Destination,
-        RI: row.RI,
-        RO: row.RO,
-        StayHours: row.StayHours,
-        Rate: row.Rate,
-        Total: row.Total,
-        Month: row.Month,
-        Year: row.Year,
-        owner
-      });
+      await collection.add({ ...row, owner });
     } catch (err) {
       console.error(`❌ Firestore 업로드 실패 (Destination: ${row.Destination}, Date: ${row.Date}):`, err);
     }
