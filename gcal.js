@@ -1,11 +1,11 @@
-// ==================== gcal.js v10.5 ====================
+// ==================== gcal.js ====================
 import fs from "fs";
 import path from "path";
-import { google } from "googleapis";
 import process from "process";
+import { google } from "googleapis";
 
 // ------------------- 환경변수 -------------------
-const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID;
+const CALENDAR_ID = process.env.CALENDAR_ID || process.env.GOOGLE_CALENDAR_ID;
 if (!CALENDAR_ID) {
   console.error(" GOOGLE_CALENDAR_ID 필요 (GitHub Secrets에 등록)");
   process.exit(1);
@@ -17,184 +17,111 @@ if (!GOOGLE_CALENDAR_CREDENTIALS) {
   process.exit(1);
 }
 
-let creds;
-try {
-  creds = GOOGLE_CALENDAR_CREDENTIALS.trim().startsWith("{")
-    ? JSON.parse(GOOGLE_CALENDAR_CREDENTIALS)
-    : JSON.parse(fs.readFileSync(GOOGLE_CALENDAR_CREDENTIALS, "utf-8"));
-} catch (e) {
-  console.error("❌ GOOGLE_CALENDAR_CREDENTIALS 파싱 실패:", e.message);
-  process.exit(1);
-}
-
-// ------------------- 공항 UTC 오프셋 -------------------
-const AIRPORT_OFFSETS = { ICN: 9, LAX: -7, SFO: -7, EWR: -4, NRT: 9, HKG: 8, DAC: 6 };
-
-// ------------------- 유틸 함수 -------------------
-function parseTimeStr(t) {
-  if (!t) return null;
-  const m = t.trim().match(/^(\d{1,2}):?(\d{2})?$/);
-  if (!m) return null;
-  return { hour: parseInt(m[1], 10), minute: m[2] ? parseInt(m[2], 10) : 0 };
-}
-
-function parseBLHtoMinutes(blh) {
-  if (!blh) return null;
-  const m = blh.trim().match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return null;
-  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
-}
-
-function localToUTCms({ year, month, day, hour, minute }, airport) {
-  const offset = AIRPORT_OFFSETS[airport] ?? AIRPORT_OFFSETS["ICN"];
-  return Date.UTC(year, month - 1, day, hour - offset, minute || 0, 0, 0);
-}
-
-function getSystemOffsetMs() {
-  return -new Date().getTimezoneOffset() * 60 * 1000;
-}
-
-function toISOLocalString(d) {
-  const pad = (n) => (n < 10 ? "0" + n : n);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
-}
-
-function parseRosterDate(dateStr) {
-  if (!dateStr) return null;
-  const m = dateStr.match(/\d{1,2}/);
-  if (!m) return null;
-  const day = parseInt(m[0], 10);
-  const now = new Date();
-  let year = now.getFullYear();
-  let month = now.getMonth() + 1;
-
-  // 날짜가 지난달로 넘어가는 경우
-  if (day < now.getDate() - 15) month += 1;
-  if (month > 12) {
-    month = 1;
-    year += 1;
-  }
-
-  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-}
-
-// ------------------- Google Calendar 초기화 -------------------
+// ------------------- Google 인증 -------------------
+const credentials = JSON.parse(GOOGLE_CALENDAR_CREDENTIALS);
 const auth = new google.auth.GoogleAuth({
-  credentials: creds,
+  credentials,
   scopes: ["https://www.googleapis.com/auth/calendar"],
 });
 const calendar = google.calendar({ version: "v3", auth });
 
-// ------------------- 메인 -------------------
-(async () => {
+// ------------------- 유틸 함수 -------------------
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+function toISOLocalString(date) {
+  const tzOffset = date.getTimezoneOffset() * 60000;
+  const localISO = new Date(date - tzOffset).toISOString().slice(0, 19);
+  return localISO;
+}
+
+function parseLocal(dateStr, timeStr) {
+  if (!dateStr || !timeStr) return null;
+  const [yyyy, mm, dd] = dateStr.split("-");
+  const [hh, min] = timeStr.split(":");
+  return new Date(yyyy, mm - 1, dd, hh, min);
+}
+
+// ------------------- 메인 함수 -------------------
+async function main() {
   console.log("🚀 Google Calendar 업로드 시작");
 
-  const rosterPath = path.join(process.cwd(), "public", "roster.json");
+  const rosterPath = path.join("public", "roster.json");
   if (!fs.existsSync(rosterPath)) {
-    console.error("❌ roster.json 없음");
+    console.error("❌ roster.json 파일이 존재하지 않습니다.");
     process.exit(1);
   }
 
-  const rosterRaw = JSON.parse(fs.readFileSync(rosterPath, "utf-8"));
-  const values = rosterRaw.values;
-  if (!Array.isArray(values) || values.length < 2) {
-    console.error("❌ 데이터 없음");
-    process.exit(1);
-  }
+  const roster = JSON.parse(fs.readFileSync(rosterPath, "utf-8"));
 
-  const headers = values[0];
-  const idx = {};
-  headers.forEach((h, i) => (idx[h] = i));
+  // 📆 기존 일정 조회 (향후 30일)
+  const now = new Date();
+  const future = new Date(now);
+  future.setDate(future.getDate() + 30);
 
-  for (let r = 1; r < values.length; r++) {
-    const row = values[r];
-    const activity = row[idx["Activity"]];
-    if (!activity || !activity.trim()) continue;
+  const { data: existing } = await calendar.events.list({
+    calendarId: CALENDAR_ID,
+    timeMin: now.toISOString(),
+    timeMax: future.toISOString(),
+    singleEvents: true,
+    orderBy: "startTime",
+  });
 
-    const isoDateStr = parseRosterDate(row[idx["Date"]]);
-    if (!isoDateStr) {
-      console.warn(`⚠️ 잘못된 날짜: ${row[idx["Date"]]} (행 ${r})`);
+  const existingEvents = existing.items || [];
+  console.log(`📋 기존 일정 ${existingEvents.length}건 확인`);
+
+  for (const item of roster) {
+    const { Activity, From, To, STDL, STAL, BLH, AcReg, CheckIn } = item;
+
+    if (!Activity || !From || !To) continue;
+
+    const startLocal = parseLocal(item.Date, STDL);
+    const endLocal = parseLocal(item.Date, STAL);
+    if (!startLocal || !endLocal) continue;
+
+    const startISO = toISOLocalString(startLocal);
+    const endISO = toISOLocalString(endLocal);
+
+    // 🧩 중복 일정 검사
+    const duplicate = existingEvents.some(
+      (ev) =>
+        ev.summary === Activity &&
+        ev.start?.dateTime?.startsWith(startISO.slice(0, 16))
+    );
+    if (duplicate) {
+      console.log(`⏩ 이미 존재: ${Activity} (${From}→${To})`);
       continue;
     }
-    const [year, month, day] = isoDateStr.split("-").map((n) => parseInt(n, 10));
 
-    const from = row[idx["From"]] || "ICN";
-    const to = row[idx["To"]] || "";
-    const std = parseTimeStr(row[idx["STD(L)"]]) || parseTimeStr(row[idx["STA(L)"]]);
-    const blh = row[idx["BLH"]] || "";
-
-    // All-day event (REST)
-    if (/REST/i.test(activity) || !std) {
-      await calendar.events.insert({
-        calendarId: CALENDAR_ID,
-        requestBody: {
-          summary: activity,
-          start: { date: isoDateStr },
-          end: { date: isoDateStr },
-          description: `Crew:${row[idx["Crew"]]}`
-        },
-      });
-      console.log(`✅ ALL-DAY 추가: ${activity} (${isoDateStr})`);
-      continue;
-    }
-
-    // Normal timed event
-    const startUtcMs = localToUTCms({ year, month, day, hour: std.hour, minute: std.minute }, from);
-    const durationMin = parseBLHtoMinutes(blh) || 120;
-    const endUtcMs = startUtcMs + durationMin * 60 * 1000;
-
-    const sysOffset = getSystemOffsetMs();
-    const startLocal = new Date(startUtcMs + sysOffset);
-    const endLocal = new Date(endUtcMs + sysOffset);
-
-    // ✅ 중복 제거 (ISO UTC 기준 비교)
-    const startDay = new Date(startLocal);
-    startDay.setHours(0, 0, 0, 0);
-    const endDay = new Date(startLocal);
-    endDay.setHours(23, 59, 59, 999);
-    const existing = (
-      await calendar.events.list({
-        calendarId: CALENDAR_ID,
-        timeMin: startDay.toISOString(),
-        timeMax: endDay.toISOString(),
-        singleEvents: true,
-        orderBy: "startTime",
-      })
-    ).data.items || [];
-
-    const startISO = new Date(startLocal).toISOString();
-    for (const ex of existing) {
-      const exStartISO = ex.start.dateTime
-        ? new Date(ex.start.dateTime).toISOString()
-        : new Date(ex.start.date + "T00:00:00Z").toISOString();
-
-      if (ex.summary === activity && exStartISO === startISO) {
-        await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: ex.id });
-        console.log(`🗑 삭제: ${ex.summary} (${startISO})`);
-      }
-    }
-
+    // ✈️ 새 일정 추가
     await calendar.events.insert({
       calendarId: CALENDAR_ID,
       requestBody: {
-        summary: activity,
-        location: from + " → " + to,
-        description: `AcReg:${row[idx["AcReg"]]} BLH:${blh} From:${from} To:${to}`,
+        summary: `${Activity} (${From}→${To})`,
+        description: `AcReg: ${AcReg || "-"}\nBLH: ${BLH || "-"}\nCheckIn: ${
+          CheckIn || "-"
+        }`,
         start: {
-          dateTime: toISOLocalString(startLocal),
+          dateTime: startLocal.toISOString(),
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         },
         end: {
-          dateTime: toISOLocalString(endLocal),
+          dateTime: endLocal.toISOString(),
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         },
       },
     });
-    console.log(`✅ 추가: ${activity} (${from}→${to}) [${toISOLocalString(startLocal)}]`);
+
+    console.log(`✅ 추가: ${Activity} (${From}→${To})`);
+    await sleep(500); // ⚡ 요청 간 0.5초 대기 (Rate Limit 보호)
   }
 
-  console.log("✅ Google Calendar 업로드 완료");
-})();
+  console.log("🎉 Google Calendar 업로드 완료");
+}
+
+main().catch((err) => {
+  console.error("❌ 오류 발생:", err.message);
+  process.exit(1);
+});
 
 
 
