@@ -1,4 +1,4 @@
-name: Update Roster
+name: Update Roster & Google Calendar
 on:
   schedule:
     - cron: "0 * * * *"
