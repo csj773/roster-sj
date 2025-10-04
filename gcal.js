@@ -1,4 +1,4 @@
-// ==================== gcal.js (fixed 10.17+) ====================
+// ==================== gcal.js (STD/STA/CI Local version) ====================
 import fs from "fs";
 import path from "path";
 import { google } from "googleapis";
@@ -7,13 +7,13 @@ import process from "process";
 // ------------------- 환경변수 -------------------
 const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID;
 if (!CALENDAR_ID) {
-  console.error("❌ GOOGLE_CALENDAR_ID 필요 (GitHub Secrets에 등록)");
+  console.error("❌ GOOGLE_CALENDAR_ID 필요");
   process.exit(1);
 }
 
 const GOOGLE_CALENDAR_CREDENTIALS = process.env.GOOGLE_CALENDAR_CREDENTIALS;
 if (!GOOGLE_CALENDAR_CREDENTIALS) {
-  console.error("❌ GOOGLE_CALENDAR_CREDENTIALS 필요 (GitHub Secrets에 등록)");
+  console.error("❌ GOOGLE_CALENDAR_CREDENTIALS 필요");
   process.exit(1);
 }
 
@@ -29,8 +29,19 @@ try {
 
 // ------------------- 공항 UTC 오프셋 -------------------
 const AIRPORT_OFFSETS = {
-  ICN: 9, LAX: -7, SFO: -7, EWR: -4,
-  NRT: 9, HKG: 8, DAC: 6
+  ICN: 9,
+  GMP: 9,
+  CJU: 9,
+  LAX: -7,
+  SFO: -7,
+  JFK: -4,
+  EWR: -4,
+  NRT: 9,
+  HND: 9,
+  HKG: 8,
+  BKK: 7,
+  SIN: 8,
+  DAC: 6,
 };
 
 // ------------------- Date 변환 -------------------
@@ -52,28 +63,21 @@ function convertDate(input) {
     month = String(now.getMonth() + 1).padStart(2, "0");
     dayStr = parts[1].padStart(2, "0");
   }
-  return `${year}-${month}-${dayStr}`; // ✅ FIX: Google Calendar는 YYYY-MM-DD 필요
+  return `${year}-${month}-${dayStr}`;
 }
 
-// ------------------- HHMM±Offset → Date 변환 (UTC → Local 포함) -------------------
-function parseHHMMOffset(str, baseDateStr, airport) {
-  if (!str) return null;
-  const match = str.match(/^(\d{2})(\d{2})([+-]\d+)?$/);
+// ------------------- HHMM ±offset → UTC Date 변환 -------------------
+function parseLocalToUTC(hhmm, baseDateStr, airport) {
+  if (!hhmm) return null;
+  const match = hhmm.match(/^(\d{2})(\d{2})([+-]\d+)?$/);
   if (!match) return null;
   const [, hh, mm, offset] = match;
-
-  const baseParts = baseDateStr.split("-");
-  let year = Number(baseParts[0]);
-  let month = Number(baseParts[1]) - 1;
-  let day = Number(baseParts[2]);
-
-  if (offset) day += Number(offset);
-
-  const airportOffset = AIRPORT_OFFSETS[airport] ?? AIRPORT_OFFSETS["ICN"];
-  const utcDate = new Date(Date.UTC(year, month, day, Number(hh) - airportOffset, Number(mm)));
-
-  const sysOffset = -new Date().getTimezoneOffset() * 60000;
-  return new Date(utcDate.getTime() + sysOffset);
+  const [year, month, day] = baseDateStr.split("-").map(Number);
+  let d = new Date(Date.UTC(year, month - 1, day, Number(hh), Number(mm)));
+  if (offset) d.setUTCDate(d.getUTCDate() + Number(offset));
+  const localOffset = AIRPORT_OFFSETS[airport] ?? 9;
+  d.setUTCHours(d.getUTCHours() - localOffset);
+  return d;
 }
 
 // ------------------- Google Calendar 초기화 -------------------
@@ -83,53 +87,43 @@ const auth = new google.auth.GoogleAuth({
 });
 const calendar = google.calendar({ version: "v3", auth });
 
-// ------------------- 기존 gcal.js 이벤트 삭제 -------------------
-async function deleteExistingGcalEvents() {
-  console.log("🗑 기존 gcal.js 이벤트 삭제 시작...");
+// ------------------- 기존 이벤트 로드 -------------------
+async function fetchExistingEvents() {
+  console.log("📥 기존 이벤트 불러오기...");
+  const events = [];
   let pageToken;
   do {
-    const eventsRes = await calendar.events.list({
+    const res = await calendar.events.list({
       calendarId: CALENDAR_ID,
       singleEvents: true,
       orderBy: "startTime",
+      timeMin: new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString(),
+      timeMax: new Date(Date.now() + 120 * 24 * 3600 * 1000).toISOString(),
       pageToken,
     });
-    const events = eventsRes.data.items || [];
-    for (const ev of events) {
-      if ((ev.description || "").includes("CREATED_BY_GCALJS")) {
-        try {
-          await calendar.events.delete({
-            calendarId: CALENDAR_ID,
-            eventId: ev.id,
-          });
-          console.log(`🗑 삭제: ${ev.summary}`);
-        } catch (e) {
-          if (e.code === 410) console.log(`⚠️ 이미 삭제됨: ${ev.summary}`);
-          else console.error("❌ 삭제 실패:", e.message);
-        }
-      }
-    }
-    pageToken = eventsRes.data.nextPageToken;
+    events.push(...(res.data.items || []));
+    pageToken = res.data.nextPageToken;
   } while (pageToken);
-  console.log("✅ 기존 gcal.js 이벤트 삭제 완료");
+  console.log(`✅ 기존 이벤트 ${events.length}건 로드됨`);
+  return events;
 }
 
-// ------------------- gcal.js 메인 -------------------
+// ------------------- 메인 -------------------
 (async () => {
   console.log("🚀 Google Calendar 업로드 시작");
 
-  await deleteExistingGcalEvents();
-
+  const existing = await fetchExistingEvents();
   const rosterPath = path.join(process.cwd(), "public", "roster.json");
+
   if (!fs.existsSync(rosterPath)) {
     console.error("❌ roster.json 없음");
     process.exit(1);
   }
 
-  const rosterRaw = JSON.parse(fs.readFileSync(rosterPath, "utf-8"));
-  const values = rosterRaw.values;
+  const roster = JSON.parse(fs.readFileSync(rosterPath, "utf-8"));
+  const values = roster.values;
   if (!Array.isArray(values) || values.length < 2) {
-    console.error("❌ 데이터 없음");
+    console.error("❌ roster 데이터 없음");
     process.exit(1);
   }
 
@@ -137,78 +131,102 @@ async function deleteExistingGcalEvents() {
   const idx = {};
   headers.forEach((h, i) => (idx[h] = i));
 
-  for (let r = 1; r < values.length; r++) {
-    const row = values[r];
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
     const activity = row[idx["Activity"]];
-    if (!activity || !activity.trim()) continue;
+    if (!activity) continue;
 
     const rawDate = row[idx["Date"]];
     const convDate = convertDate(rawDate);
-    if (!convDate) {
-      console.warn(`⚠️ 잘못된 날짜: ${rawDate} (행 ${r})`);
-      continue;
-    }
-
     const from = row[idx["From"]] || "ICN";
     const to = row[idx["To"]] || "";
+    const ci = row[idx["C/I(L)"]];
+    const std = row[idx["STD(L)"]];
+    const sta = row[idx["STA(L)"]];
+    const crew = row[idx["Crew"]] || "";
 
-    const stdZStr = row[idx["STD(Z)"]] || row[idx["STD(L)"]] || "0000";
-    const staZStr = row[idx["STA(Z)"]] || row[idx["STA(L)"]] || "0000";
+    const isAllDay = /REST|OFF|ETC/i.test(activity);
+    const summaryBase = `${activity} ${from}→${to}`;
 
-    // ------------------- ALL-DAY 이벤트 처리 -------------------
-    if (/REST|OFF|ETC/i.test(activity) || stdZStr === "0000" || staZStr === "0000") {
+    if (isAllDay) {
+      const dup = existing.find(ev => ev.summary === activity && ev.start?.date === convDate);
+      if (dup) {
+        console.log(`⚠️ 중복(ALL-DAY) 스킵: ${activity}`);
+        continue;
+      }
       await calendar.events.insert({
         calendarId: CALENDAR_ID,
         requestBody: {
           summary: activity,
-          start: { date: convDate }, // ✅ FIX: YYYY-MM-DD 형식 사용
-          end: { date: convDate },   // ✅ FIX: 동일 형식
-          description: `CREATED_BY_GCALJS\nCrew: ${row[idx["Crew"]] || ""}`,
+          start: { date: convDate },
+          end: { date: convDate },
+          description: `CREATED_BY_GCALJS\nCrew: ${crew}`,
         },
       });
-      console.log(`✅ ALL-DAY 추가: ${activity} (${convDate})`);
+      console.log(`✅ ALL-DAY 추가: ${activity}`);
       continue;
     }
 
-    // ------------------- 비행 일정 처리 -------------------
-    const startLocal = parseHHMMOffset(stdZStr, convDate, from);
-    let endLocal = parseHHMMOffset(staZStr, convDate, to);
-    if (!startLocal || !endLocal) continue;
+    const startUTC = parseLocalToUTC(std, convDate, from);
+    const endUTC = parseLocalToUTC(sta, convDate, to);
+    const ciUTC = parseLocalToUTC(ci, convDate, from);
 
-    if (endLocal <= startLocal) {
-      endLocal.setDate(endLocal.getDate() + 1);
+    if (!startUTC || !endUTC) continue;
+    if (endUTC <= startUTC) endUTC.setUTCDate(endUTC.getUTCDate() + 1);
+
+    const dupFlight = existing.find(ev =>
+      ev.summary === summaryBase && ev.start?.dateTime === startUTC.toISOString()
+    );
+    if (dupFlight) {
+      console.log(`⚠️ 중복(FLIGHT) 스킵: ${summaryBase}`);
+      continue;
     }
 
     const description = `
 CREATED_BY_GCALJS
 Activity: ${activity}
-Crew: ${row[idx["Crew"]] || ""}
+Crew: ${crew}
 From: ${from} To: ${to}
-STD(Z): ${stdZStr} STA(Z): ${staZStr}
-AcReg: ${row[idx["AcReg"]] || ""} Blockhours: ${row[idx["BLH"]] || ""}
+C/I(L): ${ci} STD(L): ${std} STA(L): ${sta}
 `.trim();
 
     await calendar.events.insert({
       calendarId: CALENDAR_ID,
       requestBody: {
-        summary: activity,
+        summary: summaryBase,
         location: `${from} → ${to}`,
         description,
-        start: {
-          dateTime: startLocal.toISOString(),
-          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        },
-        end: {
-          dateTime: endLocal.toISOString(),
-          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        },
+        start: { dateTime: startUTC.toISOString(), timeZone: "UTC" },
+        end: { dateTime: endUTC.toISOString(), timeZone: "UTC" },
       },
     });
+    console.log(`✅ 비행 추가: ${summaryBase}`);
 
-    console.log(`✅ 추가: ${activity} (${from}→${to}) [${startLocal.toISOString()}]`);
+    // ------------------- Check-in 추가 -------------------
+    if (ciUTC) {
+      const checkSummary = `Check-in ${from} ${activity}`;
+      const dupCheck = existing.find(
+        ev => ev.summary === checkSummary && ev.start?.dateTime === ciUTC.toISOString()
+      );
+      if (!dupCheck) {
+        await calendar.events.insert({
+          calendarId: CALENDAR_ID,
+          requestBody: {
+            summary: checkSummary,
+            description: `CREATED_BY_GCALJS\n${activity} ${from}→${to}`,
+            start: { dateTime: ciUTC.toISOString(), timeZone: "UTC" },
+            end: { dateTime: startUTC.toISOString(), timeZone: "UTC" },
+          },
+        });
+        console.log(`🕐 Check-in 추가: ${checkSummary}`);
+      } else {
+        console.log(`⚠️ 중복(Check-in) 스킵: ${checkSummary}`);
+      }
+    }
   }
 
   console.log("✅ Google Calendar 업로드 완료");
 })();
+
 
 
