@@ -1,10 +1,12 @@
-// ==================== roster.js (통합판) ====================
+// ==================== roster.js (통합판 + gcal 호출) ====================
 import puppeteer from "puppeteer";
 import fs from "fs";
 import path from "path";
 import "dotenv/config";
 import admin from "firebase-admin";
 import { google } from "googleapis";
+import { exec } from "child_process";
+
 import {
   blhStrToHour,
   hourToTimeStr,
@@ -152,7 +154,7 @@ console.log("✅ UID 및 Config 로드 완료");
   await uploadPerDiemFirestore(flightPerDiemList, flutterflowUid);
   console.log("✅ PerDiem 처리 완료");
 
-  // ------------------- Roster Firestore 업로드 (통합 Quick Turn + 중복 제거) -------------------
+  // ------------------- Roster Firestore 업로드 -------------------
   console.log("🚀 Roster Firestore 업로드 시작");
 
   const headerMapFirestore = { "C/I(L)":"CIL", "C/O(L)":"COL", "STD(L)":"STDL", "STD(Z)":"STDZ", "STA(L)":"STAL", "STA(Z)":"STAZ" };
@@ -211,7 +213,7 @@ console.log("✅ UID 및 Config 로드 완료");
 
   console.log("✅ Roster Firestore 업로드 완료");
 
-  // ------------------- Google Sheets 업로드 (Crew까지만) -------------------
+  // ------------------- Google Sheets 업로드 -------------------
   console.log("🚀 Google Sheets 업로드 시작");
   const spreadsheetId="1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
   const sheetName="Roster1";
@@ -233,5 +235,18 @@ console.log("✅ UID 및 Config 로드 완료");
   } catch(err) {
     console.error("❌ Google Sheets 업로드 실패:",err);
   }
+
+  // ------------------- Google Calendar 업로드 -------------------
+  console.log("🚀 Google Calendar 업로드 시작 (gcal.js)");
+  const gcalPath = path.join(process.cwd(),"gcal.js");
+  exec(`node "${gcalPath}"`, (error, stdout, stderr) => {
+    if(error){
+      console.error("❌ gcal.js 실행 실패:", error.message);
+      return;
+    }
+    if(stderr) console.error("stderr:", stderr);
+    console.log(stdout);
+    console.log("✅ Google Calendar 처리 완료");
+  });
 
 })();
