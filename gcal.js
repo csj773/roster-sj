@@ -1,4 +1,4 @@
-// ==================== gcal.js 10.15 ====================
+// ==================== gcal.js 10.16 ====================
 import fs from "fs";
 import path from "path";
 import { google } from "googleapis";
@@ -93,8 +93,13 @@ async function deleteExistingGcalEvents() {
     const events = eventsRes.data.items || [];
     for (const ev of events) {
       if ((ev.description || "").includes("CREATED_BY_GCALJS")) {
-        await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: ev.id });
-        console.log(`🗑 삭제: ${ev.summary}`);
+        try {
+          await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: ev.id });
+          console.log(`🗑 삭제: ${ev.summary}`);
+        } catch (err) {
+          if (err.code === 410) console.warn(`⚠️ 이미 삭제됨: ${ev.summary}`);
+          else console.error(`❌ 삭제 실패: ${ev.summary}`, err);
+        }
       }
     }
     pageToken = eventsRes.data.nextPageToken;
@@ -192,4 +197,5 @@ AcReg: ${row[idx["AcReg"]] || ""} Blockhours: ${row[idx["BLH"]] || ""}
 
   console.log("✅ Google Calendar 업로드 완료");
 })();
+
 
