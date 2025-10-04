@@ -1,4 +1,3 @@
-// ==================== gcal.js ====================
 import fs from "fs";
 import path from "path";
 import { google } from "googleapis";
@@ -40,8 +39,7 @@ function parseBLHtoMinutes(blh){
 }
 
 function localToUTCms({year,month,day,hour,minute}, airport){
-  const offset=AIRPORT_OFFSETS[airport];
-  if(offset===undefined) throw new Error(`Unknown airport offset: ${airport}`);
+  const offset=AIRPORT_OFFSETS[airport] ?? AIRPORT_OFFSETS["ICN"];
   return Date.UTC(year,month-1,day,hour-offset,minute||0,0,0);
 }
 
@@ -58,12 +56,12 @@ function parseRosterDate(dateStr){
   if(!m) return null;
   const day = parseInt(m[0],10);
   const now = new Date();
-  const year = now.getFullYear();
+  let year = now.getFullYear();
   let month = now.getMonth() + 1;
 
-  // 날짜가 지난달로 넘어가는 경우 고려 (선택 사항)
+  // 날짜가 지난달로 넘어가는 경우
   if(day < now.getDate() - 15) month += 1;
-  if(month > 12) month = 1;
+  if(month > 12){ month = 1; year += 1; }
 
   return `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
 }
@@ -91,7 +89,6 @@ const calendar = google.calendar({version:"v3", auth});
     const activity = row[idx["Activity"]];
     if(!activity || !activity.trim()) continue;
 
-    // ✅ PDC 날짜 → ISO 날짜
     const isoDateStr = parseRosterDate(row[idx["Date"]]);
     if(!isoDateStr){
       console.warn(`⚠️ 잘못된 날짜: ${row[idx["Date"]]} (행 ${r})`);
@@ -139,7 +136,7 @@ const calendar = google.calendar({version:"v3", auth});
     })).data.items||[];
 
     for(const ex of existing){
-      const exStartMs = ex.start.dateTime?new Date(ex.start.dateTime).getTime():new Date(ex.start.date+"T00:00:00").getTime();
+      const exStartMs = ex.start.dateTime ? new Date(ex.start.dateTime).getTime() : new Date(ex.start.date+"T00:00:00").getTime();
       if(ex.summary===activity && exStartMs===startLocal.getTime()){
         await calendar.events.delete({calendarId:CALENDAR_ID,eventId:ex.id});
         console.log(`🗑 삭제: ${ex.summary}`);
@@ -161,6 +158,7 @@ const calendar = google.calendar({version:"v3", auth});
 
   console.log("✅ Google Calendar 업로드 완료");
 })();
+
 
 
 
