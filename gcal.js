@@ -1,4 +1,4 @@
-// ==================== gcal.js 10.16 ====================
+// ==================== gcal.js 10.17 ====================
 import fs from "fs";
 import path from "path";
 import { google } from "googleapis";
@@ -58,19 +58,18 @@ function parseHHMMOffset(str, baseDateStr, airport) {
   const match = str.match(/^(\d{2})(\d{2})([+-]\d+)?$/);
   if (!match) return null;
   const [, hh, mm, offset] = match;
+
   const baseParts = baseDateStr.split(".");
   let year = Number(baseParts[0]);
   let month = Number(baseParts[1]) - 1;
   let day = Number(baseParts[2]);
 
-  // day offset 처리
+  // ±dayOffset 적용
   if (offset) day += Number(offset);
 
-  // UTC 기준
   const airportOffset = AIRPORT_OFFSETS[airport] ?? AIRPORT_OFFSETS["ICN"];
   const utcDate = new Date(Date.UTC(year, month, day, Number(hh) - airportOffset, Number(mm)));
 
-  // 시스템 로컬로 변환
   const sysOffset = -new Date().getTimezoneOffset() * 60000;
   return new Date(utcDate.getTime() + sysOffset);
 }
@@ -96,9 +95,12 @@ async function deleteExistingGcalEvents() {
         try {
           await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: ev.id });
           console.log(`🗑 삭제: ${ev.summary}`);
-        } catch (err) {
-          if (err.code === 410) console.warn(`⚠️ 이미 삭제됨: ${ev.summary}`);
-          else console.error(`❌ 삭제 실패: ${ev.summary}`, err);
+        } catch (e) {
+          if (e.code === 410) {
+            console.log(`⚠️ 이미 삭제됨: ${ev.summary}`);
+          } else {
+            console.error("❌ 삭제 실패:", e.message);
+          }
         }
       }
     }
@@ -135,7 +137,6 @@ async function deleteExistingGcalEvents() {
     const activity = row[idx["Activity"]];
     if (!activity || !activity.trim()) continue;
 
-    // 날짜 변환
     const rawDate = row[idx["Date"]];
     const convDate = convertDate(rawDate);
     if (!convDate) {
@@ -148,10 +149,6 @@ async function deleteExistingGcalEvents() {
 
     const stdZStr = row[idx["STD(Z)"]] || row[idx["STD(L)"]] || "0000";
     const staZStr = row[idx["STA(Z)"]] || row[idx["STA(L)"]] || "0000";
-
-    // day offset 추출
-    const dayOffsetMatch = stdZStr.match(/\+(\d)/);
-    const dayOffset = dayOffsetMatch ? Number(dayOffsetMatch[1]) : 0;
 
     // ALL-DAY 이벤트 처리
     if (/REST/i.test(activity) || stdZStr === "0000" || staZStr === "0000") {
@@ -169,8 +166,13 @@ async function deleteExistingGcalEvents() {
     }
 
     const startLocal = parseHHMMOffset(stdZStr, convDate, from);
-    const endLocal = parseHHMMOffset(staZStr, convDate, to);
+    let endLocal = parseHHMMOffset(staZStr, convDate, to);
     if (!startLocal || !endLocal) continue;
+
+    // start > end 시 다음 날로 보정
+    if (endLocal <= startLocal) {
+      endLocal.setDate(endLocal.getDate() + 1);
+    }
 
     const description = `
 CREATED_BY_GCALJS
@@ -197,5 +199,3 @@ AcReg: ${row[idx["AcReg"]] || ""} Blockhours: ${row[idx["BLH"]] || ""}
 
   console.log("✅ Google Calendar 업로드 완료");
 })();
-
-
