@@ -1,9 +1,9 @@
-name: Update Roster
+name: Update Roster & Google Calendar
 
 on:
   schedule:
-    - cron: "0 * * * *"
-  workflow_dispatch:
+    - cron: "0 * * * *"   # 매 시간마다 실행
+  workflow_dispatch:        # 수동 실행 가능
 
 permissions:
   contents: write
@@ -27,7 +27,7 @@ jobs:
       # 4. roster.js 실행
       - name: Run roster.js
         env:
-          CHROME_PATH: "/usr/bin/chromium-browser"  # Puppeteer 실행할 Chromium 경로
+          CHROME_PATH: "/usr/bin/chromium-browser"  # Puppeteer 실행 Chromium 경로
           INPUT_PDC_USERNAME: ${{ secrets.PDC_USERNAME }}
           INPUT_PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}
           INPUT_FIREBASE_UID: ${{ secrets.FLUTTERFLOW_UID }}
@@ -44,3 +44,11 @@ jobs:
           git add public/roster.json public/roster.csv
           git commit -m "Update roster data" || echo "No changes to commit"
           git push
+
+      # 6. gcal.js 실행 (Google Calendar 업로드)
+      - name: Run gcal.js
+        env:
+          CALENDAR_ID: ${{ secrets.CALENDAR_ID }}
+          GOOGLE_CALENDAR_CREDENTIALS: ${{ secrets.GOOGLE_CALENDAR_CREDENTIALS }}
+        run: node gcal.js
+
