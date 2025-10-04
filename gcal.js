@@ -1,4 +1,4 @@
-// ==================== gcal.js (fixed 10.17+ dedupe + local duplicate) ====================
+// ==================== gcal.js (fixed 10.17+ dedupe + timestamp 중복 방지) ====================
 import fs from "fs";
 import path from "path";
 import { google } from "googleapis";
@@ -55,25 +55,24 @@ function convertDate(input) {
   return `${year}-${month}-${dayStr}`;
 }
 
-// ------------------- HHMM±Offset → Date 변환 (UTC → Local 포함) -------------------
+// ------------------- HHMM±Offset → Date 변환 -------------------
 function parseHHMMOffset(str, baseDateStr, airport) {
   if (!str) return null;
   const match = str.match(/^(\d{2})(\d{2})([+-]\d+)?$/);
   if (!match) return null;
   const [, hh, mm, offset] = match;
 
-  const baseParts = baseDateStr.split("-");
-  let year = Number(baseParts[0]);
-  let month = Number(baseParts[1]) - 1;
-  let day = Number(baseParts[2]);
-
-  if (offset) day += Number(offset);
-
+  const [year, month, day] = baseDateStr.split("-").map(Number);
+  let dateObj = new Date(Date.UTC(year, month - 1, day, Number(hh), Number(mm)));
+  
+  // 공항 오프셋 적용
   const airportOffset = AIRPORT_OFFSETS[airport] ?? AIRPORT_OFFSETS["ICN"];
-  const utcDate = new Date(Date.UTC(year, month, day, Number(hh) - airportOffset, Number(mm)));
+  dateObj.setUTCHours(dateObj.getUTCHours() - airportOffset);
 
-  const sysOffset = -new Date().getTimezoneOffset() * 60000;
-  return new Date(utcDate.getTime() + sysOffset);
+  // offset ±일 적용
+  if (offset) dateObj.setUTCDate(dateObj.getUTCDate() + Number(offset));
+
+  return dateObj;
 }
 
 // ------------------- Google Calendar 초기화 -------------------
@@ -114,29 +113,29 @@ async function deleteExistingGcalEvents() {
   console.log("✅ 기존 gcal.js 이벤트 삭제 완료");
 }
 
-// ------------------- 이벤트 중복 체크 (로컬 + Google) -------------------
-const insertedEvents = new Set(); // summary|startISO|endISO|location 조합
+// ------------------- 이벤트 중복 체크 -------------------
+const insertedEvents = new Set();
 
-async function isDuplicateEvent(summary, startISO, endISO, location) {
-  const key = `${summary}|${startISO}|${endISO}|${location}`;
-  if (insertedEvents.has(key)) return true; // 이미 루프 안에서 삽입됨
+async function isDuplicateEvent(summary, startDate, endDate, location) {
+  const key = `${summary}|${startDate.getTime()}|${endDate.getTime()}|${location}`;
+  if (insertedEvents.has(key)) return true;
 
   const res = await calendar.events.list({
     calendarId: CALENDAR_ID,
-    timeMin: new Date(new Date(startISO).getTime() - 1 * 60000).toISOString(),
-    timeMax: new Date(new Date(endISO).getTime() + 1 * 60000).toISOString(),
+    timeMin: new Date(startDate.getTime() - 1 * 60000).toISOString(),
+    timeMax: new Date(endDate.getTime() + 1 * 60000).toISOString(),
     singleEvents: true,
   });
-  const items = res.data.items || [];
-  const duplicate = items.some(
-    ev =>
-      ev.summary === summary &&
-      ev.start?.dateTime === startISO &&
-      ev.end?.dateTime === endISO &&
-      (ev.location || "") === location
-  );
 
-  if (!duplicate) insertedEvents.add(key); // 삽입 예정 기록
+  const items = res.data.items || [];
+  const duplicate = items.some(ev => {
+    const evStart = ev.start?.dateTime ? new Date(ev.start.dateTime).getTime() : null;
+    const evEnd = ev.end?.dateTime ? new Date(ev.end.dateTime).getTime() : null;
+    const evLocation = ev.location || "";
+    return ev.summary === summary && evStart === startDate.getTime() && evEnd === endDate.getTime() && evLocation === location;
+  });
+
+  if (!duplicate) insertedEvents.add(key);
   return duplicate;
 }
 
@@ -181,21 +180,19 @@ async function isDuplicateEvent(summary, startISO, endISO, location) {
 
     // ------------------- ALL-DAY 이벤트 처리 -------------------
     if (/REST|OFF|ETC/i.test(activity) || stdLStr === "0000" || staLStr === "0000") {
-      const startISO = convDate;
-      const endISO = convDate;
+      const startISO = new Date(convDate);
+      const endISO = new Date(convDate);
       if (!(await isDuplicateEvent(activity, startISO, endISO, ""))) {
         await calendar.events.insert({
           calendarId: CALENDAR_ID,
           requestBody: {
             summary: activity,
-            start: { date: startISO },
-            end: { date: endISO },
+            start: { date: convDate },
+            end: { date: convDate },
             description: `CREATED_BY_GCALJS\nCrew: ${row[idx["Crew"]] || ""}`,
           },
         });
         console.log(`✅ ALL-DAY 추가: ${activity} (${convDate})`);
-      } else {
-        console.log(`⚠️ 중복 ALL-DAY 스킵: ${activity} (${convDate})`);
       }
       continue;
     }
@@ -204,8 +201,8 @@ async function isDuplicateEvent(summary, startISO, endISO, location) {
     if (ciLStr) {
       const checkInTime = parseHHMMOffset(ciLStr, convDate, from);
       if (checkInTime) {
-        const startISO = checkInTime.toISOString();
-        const endISO = new Date(checkInTime.getTime() + 30 * 60000).toISOString();
+        const startISO = checkInTime;
+        const endISO = new Date(checkInTime.getTime() + 30 * 60000);
         const summary = `Check-in ${from} ${activity}`;
         if (!(await isDuplicateEvent(summary, startISO, endISO, from))) {
           await calendar.events.insert({
@@ -214,8 +211,8 @@ async function isDuplicateEvent(summary, startISO, endISO, location) {
               summary,
               location: from,
               description: `CREATED_BY_GCALJS\nCrew: ${row[idx["Crew"]] || ""}`,
-              start: { dateTime: startISO, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
-              end: { dateTime: endISO, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+              start: { dateTime: startISO.toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+              end: { dateTime: endISO.toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
             },
           });
           console.log(`🕐 Check-in 추가: ${from} ${activity}`);
@@ -229,10 +226,7 @@ async function isDuplicateEvent(summary, startISO, endISO, location) {
     if (!startLocal || !endLocal) continue;
     if (endLocal <= startLocal) endLocal.setDate(endLocal.getDate() + 1);
 
-    const startISO = startLocal.toISOString();
-    const endISO = endLocal.toISOString();
-    const location = `${from} → ${to}`;
-    if (!(await isDuplicateEvent(activity, startISO, endISO, location))) {
+    if (!(await isDuplicateEvent(activity, startLocal, endLocal, `${from} → ${to}`))) {
       const description = `
 CREATED_BY_GCALJS
 Activity: ${activity}
@@ -246,15 +240,13 @@ AcReg: ${row[idx["AcReg"]] || ""} Blockhours: ${row[idx["BLH"]] || ""}
         calendarId: CALENDAR_ID,
         requestBody: {
           summary: activity,
-          location,
+          location: `${from} → ${to}`,
           description,
-          start: { dateTime: startISO, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
-          end: { dateTime: endISO, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+          start: { dateTime: startLocal.toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+          end: { dateTime: endLocal.toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
         },
       });
-      console.log(`✅ 비행 추가: ${activity} (${from}→${to}) [${startISO}]`);
-    } else {
-      console.log(`⚠️ 중복 비행 스킵: ${activity} (${from}→${to}) [${startISO}]`);
+      console.log(`✅ 비행 추가: ${activity} (${from}→${to}) [${startLocal.toISOString()}]`);
     }
   }
 
