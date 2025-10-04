@@ -129,7 +129,7 @@ function delay(ms){ return new Promise(res=>setTimeout(res,ms)); }
     const to = row[idx["To"]] || "";
     const stdLStr = row[idx["STD(L)"]] || "0000";
     const staLStr = row[idx["STA(L)"]] || "0000";
-    const ciLStr  = row[idx["CI(L)"]] || "0000";
+    const ciLStr  = row[idx["C/I(L)"]] || "0000";
     const blhStr  = row[idx["BLH"]]   || "00:00";
 
     // ALL-DAY 이벤트
@@ -160,7 +160,7 @@ Activity: ${activity}
 Crew: ${row[idx["Crew"]]||""}
 From: ${from} To: ${to}
 STD(L): ${stdLStr} STA(L): ${staLStr}
-CI(L): ${ciLStr}
+C/I(L): ${ciLStr}
 AcReg: ${row[idx["AcReg"]]||""} Blockhours: ${blhStr}
     `.trim();
 
