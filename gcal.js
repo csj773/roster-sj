@@ -1,4 +1,4 @@
-// ==================== gcal.js (fixed 10.17+ dedupe) ====================
+// ==================== gcal.js (fixed 10.17+ dedupe + local duplicate) ====================
 import fs from "fs";
 import path from "path";
 import { google } from "googleapis";
@@ -114,8 +114,13 @@ async function deleteExistingGcalEvents() {
   console.log("✅ 기존 gcal.js 이벤트 삭제 완료");
 }
 
-// ------------------- 이벤트 중복 체크 -------------------
+// ------------------- 이벤트 중복 체크 (로컬 + Google) -------------------
+const insertedEvents = new Set(); // summary|startISO|endISO|location 조합
+
 async function isDuplicateEvent(summary, startISO, endISO, location) {
+  const key = `${summary}|${startISO}|${endISO}|${location}`;
+  if (insertedEvents.has(key)) return true; // 이미 루프 안에서 삽입됨
+
   const res = await calendar.events.list({
     calendarId: CALENDAR_ID,
     timeMin: new Date(new Date(startISO).getTime() - 1 * 60000).toISOString(),
@@ -123,13 +128,16 @@ async function isDuplicateEvent(summary, startISO, endISO, location) {
     singleEvents: true,
   });
   const items = res.data.items || [];
-  return items.some(
+  const duplicate = items.some(
     ev =>
       ev.summary === summary &&
       ev.start?.dateTime === startISO &&
       ev.end?.dateTime === endISO &&
       (ev.location || "") === location
   );
+
+  if (!duplicate) insertedEvents.add(key); // 삽입 예정 기록
+  return duplicate;
 }
 
 // ------------------- gcal.js 메인 -------------------
@@ -197,12 +205,13 @@ async function isDuplicateEvent(summary, startISO, endISO, location) {
       const checkInTime = parseHHMMOffset(ciLStr, convDate, from);
       if (checkInTime) {
         const startISO = checkInTime.toISOString();
-        const endISO = new Date(checkInTime.getTime() + 30 * 60000).toISOString(); // 체크인 30분
-        if (!(await isDuplicateEvent(`Check-in ${from} ${activity}`, startISO, endISO, from))) {
+        const endISO = new Date(checkInTime.getTime() + 30 * 60000).toISOString();
+        const summary = `Check-in ${from} ${activity}`;
+        if (!(await isDuplicateEvent(summary, startISO, endISO, from))) {
           await calendar.events.insert({
             calendarId: CALENDAR_ID,
             requestBody: {
-              summary: `Check-in ${from} ${activity}`,
+              summary,
               location: from,
               description: `CREATED_BY_GCALJS\nCrew: ${row[idx["Crew"]] || ""}`,
               start: { dateTime: startISO, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
@@ -251,8 +260,3 @@ AcReg: ${row[idx["AcReg"]] || ""} Blockhours: ${row[idx["BLH"]] || ""}
 
   console.log("✅ Google Calendar 업로드 완료");
 })();
-
-
-
-
-
