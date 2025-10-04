@@ -1,5 +1,4 @@
 // ==================== gcal.js 10.7 ====================
-// ==================== gcal.js ====================
 import fs from "fs";
 import path from "path";
 import { google } from "googleapis";
@@ -46,20 +45,9 @@ function parseBLHtoMinutes(blh) {
   return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
 }
 
-/**
- * 로컬 시각 → UTC milliseconds 변환
- */
-function localToUTCms(dt, airport) {
+function localToUTCms({ year, month, day, hour, minute }, airport) {
   const offset = AIRPORT_OFFSETS[airport] ?? AIRPORT_OFFSETS["ICN"];
-  return Date.UTC(
-    dt.year,
-    dt.month - 1,
-    dt.day,
-    dt.hour - offset,
-    dt.minute,
-    0,
-    0
-  );
+  return Date.UTC(year, month - 1, day, hour - offset, minute || 0, 0, 0);
 }
 
 function getSystemOffsetMs() {
@@ -79,9 +67,14 @@ function parseRosterDate(dateStr) {
   const now = new Date();
   let year = now.getFullYear();
   let month = now.getMonth() + 1;
+
   if (day < now.getDate() - 15) month += 1;
-  if (month > 12) { month = 1; year += 1; }
-  return { year, month, day };
+  if (month > 12) {
+    month = 1;
+    year += 1;
+  }
+
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 // ------------------- Google Calendar 초기화 -------------------
@@ -93,62 +86,70 @@ const calendar = google.calendar({ version: "v3", auth });
   console.log("🚀 Google Calendar 업로드 시작");
 
   const rosterPath = path.join(process.cwd(), "public", "roster.json");
-  if (!fs.existsSync(rosterPath)) { console.error("❌ roster.json 없음"); process.exit(1); }
+  if (!fs.existsSync(rosterPath)) {
+    console.error("❌ roster.json 없음");
+    process.exit(1);
+  }
 
   const rosterRaw = JSON.parse(fs.readFileSync(rosterPath, "utf-8"));
   const values = rosterRaw.values;
-  if (!Array.isArray(values) || values.length < 2) { console.error("❌ 데이터 없음"); process.exit(1); }
+  if (!Array.isArray(values) || values.length < 2) {
+    console.error("❌ 데이터 없음");
+    process.exit(1);
+  }
 
   const headers = values[0];
   const idx = {};
-  headers.forEach((h, i) => idx[h] = i);
+  headers.forEach((h, i) => (idx[h] = i));
 
   for (let r = 1; r < values.length; r++) {
     const row = values[r];
     const activity = row[idx["Activity"]];
     if (!activity || !activity.trim()) continue;
 
-    const rosterDate = parseRosterDate(row[idx["Date"]]);
-    if (!rosterDate) continue;
-    const { year, month, day } = rosterDate;
+    const isoDateStr = parseRosterDate(row[idx["Date"]]);
+    if (!isoDateStr) {
+      console.warn(`⚠️ 잘못된 날짜: ${row[idx["Date"]]} (행 ${r})`);
+      continue;
+    }
+    const [year, month, day] = isoDateStr.split("-").map((n) => parseInt(n, 10));
 
     const from = row[idx["From"]] || "ICN";
     const to = row[idx["To"]] || "";
-    const std = parseTimeStr(row[idx["STD(L)"]]) || parseTimeStr(row[idx["STA(L)"]]);
-    const blh = row[idx["BLH"]] || "";
 
-    // All-day event (REST 등)
-    if (/REST/i.test(activity) || !std) {
+    const stdL = parseTimeStr(row[idx["STD(L)"]]);
+    const stdZ = parseTimeStr(row[idx["STD(Z)"]]);
+    const dayOffset = (row[idx["STD(Z)"]] || "").includes("+1") ? 1 : (row[idx["STD(Z)"]] || "").includes("+2") ? 2 : 0;
+
+    const blh = row[idx["BLH"]] || "00:00"; // BLH 없으면 00:00
+
+    // All-day event (REST)
+    if (/REST/i.test(activity) || !stdL) {
       await calendar.events.insert({
         calendarId: CALENDAR_ID,
         requestBody: {
           summary: activity,
-          start: { date: `${year}-${month}-${day}` },
-          end: { date: `${year}-${month}-${day}` },
-          description: `Crew:${row[idx["Crew"]] || "-"}`
+          start: { date: isoDateStr },
+          end: { date: isoDateStr },
+          description: `Crew:${row[idx["Crew"]]}`
         }
       });
+      console.log(`✅ ALL-DAY 추가: ${activity} (${isoDateStr})`);
       continue;
     }
 
-    // Normal timed event
-    let dayRollover = 0;
-    if (/\+(\d)/.test(row[idx["STD(Z)"]])) {
-      dayRollover = parseInt(row[idx["STD(Z)"]].match(/\+(\d)/)[1], 10);
-    }
-    const startUtcMs =
-      localToUTCms({ year, month, day, hour: std.hour, minute: std.minute }, from) +
-      dayRollover * 24 * 60 * 60 * 1000;
-    const durationMin = parseBLHtoMinutes(blh) || 120;
+    // STD(Z)+N 을 KST 기기시간으로 변환
+    const startUtcMs = localToUTCms({ year, month, day, hour: stdZ.hour, minute: stdZ.minute }, from) + dayOffset * 24 * 60 * 60 * 1000;
+    const durationMin = parseBLHtoMinutes(blh) || 0;
     const endUtcMs = startUtcMs + durationMin * 60 * 1000;
 
     const sysOffset = getSystemOffsetMs();
     const startLocal = new Date(startUtcMs + sysOffset);
     const endLocal = new Date(endUtcMs + sysOffset);
 
-    // 중복 제거
-    const startDay = new Date(startLocal); startDay.setHours(0,0,0,0);
-    const endDay = new Date(startLocal); endDay.setHours(23,59,59,999);
+    // 중복 제거 (activity + 기기 시간 기준)
+    const startDay = new Date(startLocal); startDay.setHours(0, 0, 0, 0);
+    const endDay = new Date(startLocal); endDay.setHours(23, 59, 59, 999);
     const existing = (await calendar.events.list({
       calendarId: CALENDAR_ID,
       timeMin: startDay.toISOString(),
@@ -161,29 +162,23 @@ const calendar = google.calendar({ version: "v3", auth });
       const exStartMs = ex.start.dateTime ? new Date(ex.start.dateTime).getTime() : new Date(ex.start.date + "T00:00:00").getTime();
       if (ex.summary === activity && exStartMs === startLocal.getTime()) {
         await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: ex.id });
+        console.log(`🗑 삭제: ${ex.summary}`);
       }
     }
 
+    // 캘린더 이벤트 삽입
     await calendar.events.insert({
       calendarId: CALENDAR_ID,
       requestBody: {
         summary: activity,
         location: from + " → " + to,
-        description: `AcReg:${row[idx["AcReg"]] || "-"} BLH:${blh} From:${from} To:${to}`,
+        description: `AcReg:${row[idx["AcReg"]]} BLH:${blh} From:${from} To:${to}`,
         start: { dateTime: toISOLocalString(startLocal), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
         end: { dateTime: toISOLocalString(endLocal), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }
       }
     });
-    console.log(`✅ 추가: ${activity} (${from}→${to})`);
+    console.log(`✅ 추가: ${activity} (${from}→${to}) [${toISOLocalString(startLocal)}]`);
   }
 
-  console.log("🎉 Google Calendar 업로드 완료");
+  console.log("✅ Google Calendar 업로드 완료");
 })();
-
-
-
-
-
-
-
-
