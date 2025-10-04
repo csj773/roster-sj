@@ -1,4 +1,4 @@
-// ==================== gcal.js 10.14 ====================
+// ==================== gcal.js 10.15 ====================
 import fs from "fs";
 import path from "path";
 import { google } from "googleapis";
@@ -71,11 +71,14 @@ async function deleteExistingGcalEvents(){
 }
 
 // ------------------- 중복 체크 -------------------
-const insertedDailyActivities = new Set();
-function isDailyDuplicate(activity,dateStr){ 
-  const key = `${dateStr}|${activity}`;
-  if(insertedDailyActivities.has(key)) return true;
-  insertedDailyActivities.add(key);
+const insertedEvents = new Set();
+function makeEventKey(activity, dateStr, from, to){
+  return `${activity}|${dateStr}|${from}→${to}`;
+}
+function isDuplicate(activity, dateStr, from, to){
+  const key = makeEventKey(activity, dateStr, from, to);
+  if(insertedEvents.has(key)) return true;
+  insertedEvents.add(key);
   return false;
 }
 
@@ -120,17 +123,17 @@ function delay(ms){ return new Promise(res=>setTimeout(res,ms)); }
     if(!convDate) continue;
     const eventDateStr = convDate;
 
-    if(isDailyDuplicate(activity,eventDateStr)){
-      console.log(`⚠️ 중복 Activity 스킵: ${activity} (${eventDateStr})`);
-      continue;
-    }
-
     const from = row[idx["From"]] || "ICN";
     const to = row[idx["To"]] || "";
     const stdLStr = row[idx["STD(L)"]] || "0000";
     const staLStr = row[idx["STA(L)"]] || "0000";
     const ciLStr  = row[idx["C/I(L)"]] || "0000";
     const blhStr  = row[idx["BLH"]]   || "00:00";
+
+    if(isDuplicate(activity,eventDateStr,from,to)){
+      console.log(`⚠️ 중복 이벤트 스킵: ${activity} (${from}→${to})`);
+      continue;
+    }
 
     // ALL-DAY 이벤트
     if(/REST|OFF|ETC/i.test(activity) || stdLStr==="0000" || staLStr==="0000"){
