@@ -11,34 +11,30 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      CHROME_PATH: "/usr/bin/chromium-browser"  # Puppeteer 실행 Chromium 경로
 
     steps:
       # 1. 코드 체크아웃
       - uses: actions/checkout@v4
 
-      # 2. Node.js 설치 및 캐시
+      # 2. Node.js 설치
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
 
-      # 3. npm 의존성 설치
-      - run: npm ci
+      # 3. 의존성 설치
+      - run: npm install
 
-      # 4. roster.js 실행 (Puppeteer)
+      # 4. roster.js 실행
       - name: Run roster.js
         env:
+          CHROME_PATH: "/usr/bin/chromium-browser"  # Puppeteer 실행 Chromium 경로
           INPUT_PDC_USERNAME: ${{ secrets.PDC_USERNAME }}
           INPUT_PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}
           INPUT_FIREBASE_UID: ${{ secrets.FLUTTERFLOW_UID }}
           INPUT_ADMIN_FIREBASE_UID: ${{ secrets.FIRESTORE_ADMIN_UID }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
-          CHROME_PATH: ${{ env.CHROME_PATH }}
-        run: |
-          node -r dotenv/config roster.js || { echo "❌ roster.js failed"; exit 1; }
+        run: node -r dotenv/config roster.js
 
       # 5. 변경된 파일 커밋 & 푸시
       - name: Commit & Push roster.json & roster.csv
@@ -54,13 +50,6 @@ jobs:
         env:
           CALENDAR_ID: ${{ secrets.CALENDAR_ID }}
           GOOGLE_CALENDAR_CREDENTIALS: ${{ secrets.GOOGLE_CALENDAR_CREDENTIALS }}
-          TZ: "Asia/Seoul"  # 필요 시 시간대 지정
-        run: |
-          node gcal.js || { echo "❌ gcal.js failed"; exit 1; }
-
-      # 7. 실패 시 메시지 (예: Slack/Email 통합 가능)
-      - name: Notify failure
-        if: failure()
-        run: echo "🚨 Workflow failed! Check logs."
+        run: node gcal.js
 
 
