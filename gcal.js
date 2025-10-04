@@ -1,4 +1,4 @@
-// ==================== gcal.js 10.13 ====================
+// ==================== gcal.js 10.13 안정화 ====================
 import fs from "fs";
 import path from "path";
 import { google } from "googleapis";
@@ -7,16 +7,17 @@ import process from "process";
 // ------------------- 환경변수 -------------------
 const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID;
 if (!CALENDAR_ID) {
-  console.error(" GOOGLE_CALENDAR_ID 필요 (GitHub Secrets에 등록)");
+  console.error("❌ GOOGLE_CALENDAR_ID 필요 (GitHub Secrets에 등록)");
   process.exit(1);
 }
 
 const GOOGLE_CALENDAR_CREDENTIALS = process.env.GOOGLE_CALENDAR_CREDENTIALS;
 if (!GOOGLE_CALENDAR_CREDENTIALS) {
-  console.error(" GOOGLE_CALENDAR_CREDENTIALS 필요 (GitHub Secrets에 등록)");
+  console.error("❌ GOOGLE_CALENDAR_CREDENTIALS 필요 (GitHub Secrets에 등록)");
   process.exit(1);
 }
 
+// ------------------- Credentials 파싱 -------------------
 let creds;
 try {
   creds = GOOGLE_CALENDAR_CREDENTIALS.trim().startsWith("{")
@@ -68,10 +69,7 @@ function parseRosterDate(dateStr) {
   let year = now.getFullYear();
   let month = now.getMonth() + 1;
   if (day < now.getDate() - 15) month += 1;
-  if (month > 12) {
-    month = 1;
-    year += 1;
-  }
+  if (month > 12) { month = 1; year += 1; }
   return { year, month, day };
 }
 
@@ -131,7 +129,14 @@ async function deleteExistingGcalEvents() {
     const activity = row[idx["Activity"]];
     if (!activity || !activity.trim()) continue;
 
-    const { year, month, day } = parseRosterDate(row[idx["Date"]]);
+    // ------------------- 날짜 파싱 -------------------
+    const rosterDate = parseRosterDate(row[idx["Date"]]);
+    if (!rosterDate) {
+      console.warn(`⚠️ 잘못된 날짜: ${row[idx["Date"]]} (행 ${r})`);
+      continue;
+    }
+    const { year, month, day } = rosterDate;
+
     const from = row[idx["From"]] || "ICN";
     const to = row[idx["To"]] || "";
 
