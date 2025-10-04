@@ -13,7 +13,9 @@ if(!GOOGLE_CALENDAR_CREDENTIALS){ console.error("❌ GOOGLE_CALENDAR_CREDENTIALS
 
 let creds;
 try {
-  creds = GOOGLE_CALENDAR_CREDENTIALS.trim().startsWith("{") ? JSON.parse(GOOGLE_CALENDAR_CREDENTIALS) : JSON.parse(fs.readFileSync(GOOGLE_CALENDAR_CREDENTIALS, "utf-8"));
+  creds = GOOGLE_CALENDAR_CREDENTIALS.trim().startsWith("{") 
+    ? JSON.parse(GOOGLE_CALENDAR_CREDENTIALS) 
+    : JSON.parse(fs.readFileSync(GOOGLE_CALENDAR_CREDENTIALS, "utf-8"));
 } catch(e){
   console.error("❌ GOOGLE_CALENDAR_CREDENTIALS 파싱 실패:", e.message);
   process.exit(1);
@@ -44,7 +46,27 @@ function localToUTCms({year,month,day,hour,minute}, airport){
 }
 
 function getSystemOffsetMs(){ return -new Date().getTimezoneOffset()*60*1000; }
-function toISOLocalString(d){ const pad=n=>n<10?"0"+n:n; return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`; }
+function toISOLocalString(d){ 
+  const pad=n=>n<10?"0"+n:n; 
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`; 
+}
+
+// ------------------- PDC 날짜 → ISO 날짜 변환 -------------------
+function parseRosterDate(dateStr){
+  if(!dateStr) return null;
+  const m = dateStr.match(/\d{1,2}/);
+  if(!m) return null;
+  const day = parseInt(m[0],10);
+  const now = new Date();
+  const year = now.getFullYear();
+  let month = now.getMonth() + 1;
+
+  // 날짜가 지난달로 넘어가는 경우 고려 (선택 사항)
+  if(day < now.getDate() - 15) month += 1;
+  if(month > 12) month = 1;
+
+  return `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+}
 
 // ------------------- Google Calendar 초기화 -------------------
 const auth = new google.auth.GoogleAuth({ credentials: creds, scopes:["https://www.googleapis.com/auth/calendar"] });
@@ -69,15 +91,13 @@ const calendar = google.calendar({version:"v3", auth});
     const activity = row[idx["Activity"]];
     if(!activity || !activity.trim()) continue;
 
-    // 날짜 파싱
-    const dateStr = row[idx["Date"]];
-    if(!dateStr || !dateStr.includes("-")){
-      console.warn(`⚠️ 잘못된 날짜: ${dateStr} (행 ${r})`);
+    // ✅ PDC 날짜 → ISO 날짜
+    const isoDateStr = parseRosterDate(row[idx["Date"]]);
+    if(!isoDateStr){
+      console.warn(`⚠️ 잘못된 날짜: ${row[idx["Date"]]} (행 ${r})`);
       continue;
     }
-
-    const dateParts = dateStr.split("-").map(n=>parseInt(n,10));
-    const year=dateParts[0], month=dateParts[1], day=dateParts[2];
+    const [year,month,day] = isoDateStr.split("-").map(n=>parseInt(n,10));
 
     const from=row[idx["From"]]||"ICN", to=row[idx["To"]]||"";
     const std=parseTimeStr(row[idx["STD(L)"]])||parseTimeStr(row[idx["STA(L)"]]);
@@ -85,17 +105,16 @@ const calendar = google.calendar({version:"v3", auth});
 
     // All-day event (REST)
     if(/REST/i.test(activity) || !std){
-      const dayStr=`${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
       await calendar.events.insert({
         calendarId:CALENDAR_ID,
         requestBody:{
           summary:activity,
-          start:{date:dayStr},
-          end:{date:dayStr},
+          start:{date:isoDateStr},
+          end:{date:isoDateStr},
           description:`Crew:${row[idx["Crew"]]}`
         }
       });
-      console.log(`✅ ALL-DAY 추가: ${activity} (${dayStr})`);
+      console.log(`✅ ALL-DAY 추가: ${activity} (${isoDateStr})`);
       continue;
     }
 
@@ -108,16 +127,9 @@ const calendar = google.calendar({version:"v3", auth});
     const startLocal=new Date(startUtcMs+sysOffset);
     const endLocal=new Date(endUtcMs+sysOffset);
 
-    // 날짜 유효성 체크
-    if(isNaN(startLocal.getTime()) || isNaN(endLocal.getTime())){
-      console.warn(`⚠️ 유효하지 않은 날짜/시간: Activity=${activity}, Date=${dateStr}, STD=${row[idx["STD(L)"]]}`);
-      continue;
-    }
-
-    // 중복 제거: summary+start.dateTime 같은 이벤트 삭제
+    // 중복 제거
     const startDay = new Date(startLocal); startDay.setHours(0,0,0,0);
     const endDay = new Date(startLocal); endDay.setHours(23,59,59,999);
-
     const existing = (await calendar.events.list({
       calendarId:CALENDAR_ID,
       timeMin:startDay.toISOString(),
@@ -149,5 +161,6 @@ const calendar = google.calendar({version:"v3", auth});
 
   console.log("✅ Google Calendar 업로드 완료");
 })();
+
 
 
