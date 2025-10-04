@@ -32,21 +32,19 @@ jobs:
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
         run: node -r dotenv/config roster.js
 
-     
-      - name: Run gcal.js
-        env:
-          GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
-          GOOGLE_CALENDAR_CREDENTIALS: ${{ secrets.GOOGLE_CALENDAR_CREDENTIALS }}
-        run: node gcal.js
-
-
-     - name: Commit & Push roster.json & roster.csv
+      - name: Commit & Push roster.json & roster.csv
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add public/roster.json public/roster.csv
           git commit -m "Update roster data" || echo "No changes to commit"
           git push
+
+      - name: Run gcal.js
+        env:
+          GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
+          GOOGLE_CALENDAR_CREDENTIALS: ${{ secrets.GOOGLE_CALENDAR_CREDENTIALS }}
+        run: node gcal.js
 
 
 
