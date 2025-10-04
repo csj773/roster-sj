@@ -1,4 +1,4 @@
-// ==================== gcal.js 10.15 ====================
+// ==================== gcal.js 10.17 (단순화 + 사후 중복 제거) ====================
 import fs from "fs";
 import path from "path";
 import { google } from "googleapis";
@@ -70,18 +70,6 @@ async function deleteExistingGcalEvents(){
   console.log("✅ 기존 gcal.js 이벤트 삭제 완료");
 }
 
-// ------------------- 중복 체크 -------------------
-const insertedEvents = new Set();
-function makeEventKey(activity, dateStr, from, to){
-  return `${activity}|${dateStr}|${from}→${to}`;
-}
-function isDuplicate(activity, dateStr, from, to){
-  const key = makeEventKey(activity, dateStr, from, to);
-  if(insertedEvents.has(key)) return true;
-  insertedEvents.add(key);
-  return false;
-}
-
 // ------------------- Event Insert Retry & Throttle -------------------
 async function insertEventWithRetry(eventBody,retries=5){
   for(let i=0;i<retries;i++){
@@ -97,6 +85,31 @@ async function insertEventWithRetry(eventBody,retries=5){
   throw new Error("Max retries exceeded for event insertion");
 }
 function delay(ms){ return new Promise(res=>setTimeout(res,ms)); }
+
+// ------------------- 사후 중복 제거 -------------------
+async function removeDuplicates() {
+  console.log("🗑 사후 중복 제거 시작...");
+  let pageToken;
+  const allEvents = [];
+  do {
+    const res = await calendar.events.list({ calendarId: CALENDAR_ID, singleEvents:true, orderBy:"startTime", pageToken });
+    allEvents.push(...(res.data.items||[]));
+    pageToken = res.data.nextPageToken;
+  } while(pageToken);
+
+  const seen = new Map();
+  for(const ev of allEvents){
+    if(!(ev.description||"").includes("CREATED_BY_GCALJS")) continue;
+    const startDate = ev.start?.dateTime ? new Date(ev.start.dateTime).toISOString().slice(0,10) : ev.start?.date;
+    const [from,to] = ev.location?.split(" → ") || ["",""];
+    const key = `${startDate}|${ev.summary}|${from}|${to}`;
+    if(seen.has(key)){
+      try{ await calendar.events.delete({calendarId:CALENDAR_ID,eventId:ev.id}); console.log(`🗑 중복 제거: ${ev.summary} (${startDate})`); }
+      catch(e){ if(e.code!==410) console.error("❌ 중복 삭제 실패:",e.message); }
+    } else seen.set(key,ev.id);
+  }
+  console.log("✅ 사후 중복 제거 완료");
+}
 
 // ------------------- Main -------------------
 (async()=>{
@@ -121,7 +134,6 @@ function delay(ms){ return new Promise(res=>setTimeout(res,ms)); }
     const rawDate = row[idx["Date"]];
     const convDate = convertDate(rawDate);
     if(!convDate) continue;
-    const eventDateStr = convDate;
 
     const from = row[idx["From"]] || "ICN";
     const to = row[idx["To"]] || "";
@@ -129,11 +141,6 @@ function delay(ms){ return new Promise(res=>setTimeout(res,ms)); }
     const staLStr = row[idx["STA(L)"]] || "0000";
     const ciLStr  = row[idx["C/I(L)"]] || "0000";
     const blhStr  = row[idx["BLH"]]   || "00:00";
-
-    if(isDuplicate(activity,eventDateStr,from,to)){
-      console.log(`⚠️ 중복 이벤트 스킵: ${activity} (${from}→${to})`);
-      continue;
-    }
 
     // ALL-DAY 이벤트
     if(/REST|OFF|ETC/i.test(activity) || stdLStr==="0000" || staLStr==="0000"){
@@ -180,6 +187,9 @@ AcReg: ${row[idx["AcReg"]]||""} Blockhours: ${blhStr}
     console.log(`✅ 비행 추가: ${activity} (${from}→${to}) [${startLocal.toISOString()}]`);
     await delay(200);
   }
+
+  // ------------------- 사후 중복 제거 -------------------
+  await removeDuplicates();
 
   console.log("✅ Google Calendar 업로드 완료");
 })();
