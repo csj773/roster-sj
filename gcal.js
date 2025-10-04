@@ -1,4 +1,4 @@
-// ==================== gcal.js 10.8 ====================
+// ==================== gcal.js 10.11 ====================
 import fs from "fs";
 import path from "path";
 import { google } from "googleapis";
@@ -7,13 +7,13 @@ import process from "process";
 // ------------------- 환경변수 -------------------
 const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID;
 if (!CALENDAR_ID) {
-  console.error("❌ GOOGLE_CALENDAR_ID 필요 (GitHub Secrets에 등록)");
+  console.error(" GOOGLE_CALENDAR_ID 필요 (GitHub Secrets에 등록)");
   process.exit(1);
 }
 
 const GOOGLE_CALENDAR_CREDENTIALS = process.env.GOOGLE_CALENDAR_CREDENTIALS;
 if (!GOOGLE_CALENDAR_CREDENTIALS) {
-  console.error("❌ GOOGLE_CALENDAR_CREDENTIALS 필요 (GitHub Secrets에 등록)");
+  console.error(" GOOGLE_CALENDAR_CREDENTIALS 필요 (GitHub Secrets에 등록)");
   process.exit(1);
 }
 
@@ -39,9 +39,9 @@ function parseTimeStr(t) {
 }
 
 function parseBLHtoMinutes(blh) {
-  if (!blh) return null;
+  if (!blh) return 0;
   const m = blh.trim().match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return null;
+  if (!m) return 0;
   return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
 }
 
@@ -81,9 +81,36 @@ function parseRosterDate(dateStr) {
 const auth = new google.auth.GoogleAuth({ credentials: creds, scopes: ["https://www.googleapis.com/auth/calendar"] });
 const calendar = google.calendar({ version: "v3", auth });
 
+// ------------------- 기존 gcal.js 이벤트 삭제 -------------------
+async function deleteExistingGcalEvents() {
+  console.log("🗑 기존 gcal.js 이벤트 삭제 시작...");
+  let pageToken;
+  do {
+    const eventsRes = await calendar.events.list({
+      calendarId: CALENDAR_ID,
+      singleEvents: true,
+      orderBy: "startTime",
+      pageToken,
+    });
+    const events = eventsRes.data.items || [];
+    for (const ev of events) {
+      const evDesc = ev.description || "";
+      if (evDesc.includes("CREATED_BY_GCALJS")) {
+        await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: ev.id });
+        console.log(`🗑 삭제: ${ev.summary}`);
+      }
+    }
+    pageToken = eventsRes.data.nextPageToken;
+  } while (pageToken);
+  console.log("✅ 기존 gcal.js 이벤트 삭제 완료");
+}
+
 // ------------------- 메인 -------------------
 (async () => {
   console.log("🚀 Google Calendar 업로드 시작");
+
+  // 기존 이벤트 삭제
+  await deleteExistingGcalEvents();
 
   const rosterPath = path.join(process.cwd(), "public", "roster.json");
   if (!fs.existsSync(rosterPath)) {
@@ -116,65 +143,46 @@ const calendar = google.calendar({ version: "v3", auth });
 
     const from = row[idx["From"]] || "ICN";
     const to = row[idx["To"]] || "";
-
-    // STD(Z) 없으면 STD(L) 사용
-    let stdTime = parseTimeStr(row[idx["STD(Z)"]]);
-    if (!stdTime) stdTime = parseTimeStr(row[idx["STD(L)"]]);
-    const dayOffset = (row[idx["STD(Z)"]] || "").includes("+1") ? 1
-                    : (row[idx["STD(Z)"]] || "").includes("+2") ? 2 : 0;
+    
+    // Checkin 시간 기준
+    const ci = parseTimeStr(row[idx["C/I(L)"]]) || parseTimeStr(row[idx["STD(L)"]]);
+    if (!ci) {
+      console.warn(`⚠️ Check-in 시간 없음: ${activity} (행 ${r})`);
+      continue;
+    }
 
     const blh = row[idx["BLH"]] || "00:00";
 
     // All-day event (REST)
-    if (/REST/i.test(activity) || !stdTime) {
+    if (/REST/i.test(activity)) {
       await calendar.events.insert({
         calendarId: CALENDAR_ID,
         requestBody: {
           summary: activity,
           start: { date: isoDateStr },
           end: { date: isoDateStr },
-          description: `Crew:${row[idx["Crew"]]}`
+          description: `CREATED_BY_GCALJS | Crew:${row[idx["Crew"]]}`
         }
       });
       console.log(`✅ ALL-DAY 추가: ${activity} (${isoDateStr})`);
       continue;
     }
 
-    // UTC ms 계산
-    const startUtcMs = localToUTCms({ year, month, day, hour: stdTime.hour, minute: stdTime.minute }, from) + dayOffset * 24 * 60 * 60 * 1000;
-    const durationMin = parseBLHtoMinutes(blh) || 120;
+    // Normal timed event - Checkin 기준
+    const startUtcMs = localToUTCms({ year, month, day, hour: ci.hour, minute: ci.minute }, from);
+    const durationMin = parseBLHtoMinutes(blh);
     const endUtcMs = startUtcMs + durationMin * 60 * 1000;
 
     const sysOffset = getSystemOffsetMs();
     const startLocal = new Date(startUtcMs + sysOffset);
     const endLocal = new Date(endUtcMs + sysOffset);
 
-    // 중복 제거
-    const startDay = new Date(startLocal); startDay.setHours(0, 0, 0, 0);
-    const endDay = new Date(startLocal); endDay.setHours(23, 59, 59, 999);
-    const existing = (await calendar.events.list({
-      calendarId: CALENDAR_ID,
-      timeMin: startDay.toISOString(),
-      timeMax: endDay.toISOString(),
-      singleEvents: true,
-      orderBy: "startTime"
-    })).data.items || [];
-
-    for (const ex of existing) {
-      const exStartMs = ex.start.dateTime ? new Date(ex.start.dateTime).getTime() : new Date(ex.start.date + "T00:00:00").getTime();
-      if (ex.summary === activity && exStartMs === startLocal.getTime()) {
-        await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: ex.id });
-        console.log(`🗑 삭제: ${ex.summary}`);
-      }
-    }
-
-    // 캘린더 이벤트 삽입
     await calendar.events.insert({
       calendarId: CALENDAR_ID,
       requestBody: {
         summary: activity,
         location: from + " → " + to,
-        description: `AcReg:${row[idx["AcReg"]]} BLH:${blh} From:${from} To:${to}`,
+        description: `CREATED_BY_GCALJS | AcReg:${row[idx["AcReg"]]} BLH:${blh} From:${from} To:${to} Crew:${row[idx["Crew"]]}`,
         start: { dateTime: toISOLocalString(startLocal), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
         end: { dateTime: toISOLocalString(endLocal), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }
       }
