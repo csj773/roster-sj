@@ -1,4 +1,5 @@
 name: Update Roster & Google Calendar
+
 on:
   schedule:
     - cron: "0 * * * *"
@@ -46,6 +47,7 @@ jobs:
           git add public/roster.json public/roster.csv
           git commit -m "Update roster data" || echo "No changes to commit"
           git push
+
 
 
 
