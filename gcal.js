@@ -1,3 +1,4 @@
+// ==================== gcal.js v10.5 ====================
 import fs from "fs";
 import path from "path";
 import { google } from "googleapis";
@@ -78,7 +79,10 @@ function parseRosterDate(dateStr) {
 }
 
 // ------------------- Google Calendar 초기화 -------------------
-const auth = new google.auth.GoogleAuth({ credentials: creds, scopes: ["https://www.googleapis.com/auth/calendar"] });
+const auth = new google.auth.GoogleAuth({
+  credentials: creds,
+  scopes: ["https://www.googleapis.com/auth/calendar"],
+});
 const calendar = google.calendar({ version: "v3", auth });
 
 // ------------------- 메인 -------------------
@@ -128,7 +132,7 @@ const calendar = google.calendar({ version: "v3", auth });
           start: { date: isoDateStr },
           end: { date: isoDateStr },
           description: `Crew:${row[idx["Crew"]]}`
-        }
+        },
       });
       console.log(`✅ ALL-DAY 추가: ${activity} (${isoDateStr})`);
       continue;
@@ -143,26 +147,30 @@ const calendar = google.calendar({ version: "v3", auth });
     const startLocal = new Date(startUtcMs + sysOffset);
     const endLocal = new Date(endUtcMs + sysOffset);
 
-    // 중복 제거
+    // ✅ 중복 제거 (ISO UTC 기준 비교)
     const startDay = new Date(startLocal);
     startDay.setHours(0, 0, 0, 0);
     const endDay = new Date(startLocal);
     endDay.setHours(23, 59, 59, 999);
-    const existing = (await calendar.events.list({
-      calendarId: CALENDAR_ID,
-      timeMin: startDay.toISOString(),
-      timeMax: endDay.toISOString(),
-      singleEvents: true,
-      orderBy: "startTime"
-    })).data.items || [];
+    const existing = (
+      await calendar.events.list({
+        calendarId: CALENDAR_ID,
+        timeMin: startDay.toISOString(),
+        timeMax: endDay.toISOString(),
+        singleEvents: true,
+        orderBy: "startTime",
+      })
+    ).data.items || [];
 
+    const startISO = new Date(startLocal).toISOString();
     for (const ex of existing) {
-      const exStartMs = ex.start.dateTime
-        ? new Date(ex.start.dateTime).getTime()
-        : new Date(ex.start.date + "T00:00:00").getTime();
-      if (ex.summary === activity && exStartMs === startLocal.getTime()) {
+      const exStartISO = ex.start.dateTime
+        ? new Date(ex.start.dateTime).toISOString()
+        : new Date(ex.start.date + "T00:00:00Z").toISOString();
+
+      if (ex.summary === activity && exStartISO === startISO) {
         await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: ex.id });
-        console.log(`🗑 삭제: ${ex.summary}`);
+        console.log(`🗑 삭제: ${ex.summary} (${startISO})`);
       }
     }
 
@@ -172,9 +180,15 @@ const calendar = google.calendar({ version: "v3", auth });
         summary: activity,
         location: from + " → " + to,
         description: `AcReg:${row[idx["AcReg"]]} BLH:${blh} From:${from} To:${to}`,
-        start: { dateTime: toISOLocalString(startLocal), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
-        end: { dateTime: toISOLocalString(endLocal), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }
-      }
+        start: {
+          dateTime: toISOLocalString(startLocal),
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        },
+        end: {
+          dateTime: toISOLocalString(endLocal),
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        },
+      },
     });
     console.log(`✅ 추가: ${activity} (${from}→${to}) [${toISOLocalString(startLocal)}]`);
   }
