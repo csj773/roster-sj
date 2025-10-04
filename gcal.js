@@ -69,7 +69,14 @@ const calendar = google.calendar({version:"v3", auth});
     const activity = row[idx["Activity"]];
     if(!activity || !activity.trim()) continue;
 
-    const dateParts = row[idx["Date"]].split("-").map(n=>parseInt(n,10));
+    // 날짜 파싱
+    const dateStr = row[idx["Date"]];
+    if(!dateStr || !dateStr.includes("-")){
+      console.warn(`⚠️ 잘못된 날짜: ${dateStr} (행 ${r})`);
+      continue;
+    }
+
+    const dateParts = dateStr.split("-").map(n=>parseInt(n,10));
     const year=dateParts[0], month=dateParts[1], day=dateParts[2];
 
     const from=row[idx["From"]]||"ICN", to=row[idx["To"]]||"";
@@ -101,9 +108,16 @@ const calendar = google.calendar({version:"v3", auth});
     const startLocal=new Date(startUtcMs+sysOffset);
     const endLocal=new Date(endUtcMs+sysOffset);
 
+    // 날짜 유효성 체크
+    if(isNaN(startLocal.getTime()) || isNaN(endLocal.getTime())){
+      console.warn(`⚠️ 유효하지 않은 날짜/시간: Activity=${activity}, Date=${dateStr}, STD=${row[idx["STD(L)"]]}`);
+      continue;
+    }
+
     // 중복 제거: summary+start.dateTime 같은 이벤트 삭제
     const startDay = new Date(startLocal); startDay.setHours(0,0,0,0);
     const endDay = new Date(startLocal); endDay.setHours(23,59,59,999);
+
     const existing = (await calendar.events.list({
       calendarId:CALENDAR_ID,
       timeMin:startDay.toISOString(),
@@ -135,4 +149,5 @@ const calendar = google.calendar({version:"v3", auth});
 
   console.log("✅ Google Calendar 업로드 완료");
 })();
+
 
