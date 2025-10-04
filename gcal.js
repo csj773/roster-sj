@@ -1,4 +1,4 @@
-// ==================== gcal.js 10.11 ====================
+// ==================== gcal.js 10.13 ====================
 import fs from "fs";
 import path from "path";
 import { google } from "googleapis";
@@ -67,14 +67,12 @@ function parseRosterDate(dateStr) {
   const now = new Date();
   let year = now.getFullYear();
   let month = now.getMonth() + 1;
-
   if (day < now.getDate() - 15) month += 1;
   if (month > 12) {
     month = 1;
     year += 1;
   }
-
-  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  return { year, month, day };
 }
 
 // ------------------- Google Calendar 초기화 -------------------
@@ -109,7 +107,6 @@ async function deleteExistingGcalEvents() {
 (async () => {
   console.log("🚀 Google Calendar 업로드 시작");
 
-  // 기존 이벤트 삭제
   await deleteExistingGcalEvents();
 
   const rosterPath = path.join(process.cwd(), "public", "roster.json");
@@ -134,59 +131,58 @@ async function deleteExistingGcalEvents() {
     const activity = row[idx["Activity"]];
     if (!activity || !activity.trim()) continue;
 
-    const isoDateStr = parseRosterDate(row[idx["Date"]]);
-    if (!isoDateStr) {
-      console.warn(`⚠️ 잘못된 날짜: ${row[idx["Date"]]} (행 ${r})`);
-      continue;
-    }
-    const [year, month, day] = isoDateStr.split("-").map((n) => parseInt(n, 10));
-
+    const { year, month, day } = parseRosterDate(row[idx["Date"]]);
     const from = row[idx["From"]] || "ICN";
     const to = row[idx["To"]] || "";
-    
-    // Checkin 시간 기준
+
     const ci = parseTimeStr(row[idx["C/I(L)"]]) || parseTimeStr(row[idx["STD(L)"]]);
-    if (!ci) {
-      console.warn(`⚠️ Check-in 시간 없음: ${activity} (행 ${r})`);
+    const co = parseTimeStr(row[idx["C/O(L)"]]) || parseTimeStr(row[idx["STA(L)"]]);
+
+    if (!ci || !co) {
+      console.warn(`⚠️ CI(L)/CO(L) 시간 누락: ${activity} (행 ${r})`);
       continue;
     }
 
+    const std = row[idx["STD(L)"]] || "00:00";
+    const sta = row[idx["STA(L)"]] || "00:00";
     const blh = row[idx["BLH"]] || "00:00";
+    const acReg = row[idx["AcReg"]] || "";
+    const crew = row[idx["Crew"]] || "";
+    const notes = row[idx["Notes"]] || "";
 
-    // All-day event (REST)
-    if (/REST/i.test(activity)) {
-      await calendar.events.insert({
-        calendarId: CALENDAR_ID,
-        requestBody: {
-          summary: activity,
-          start: { date: isoDateStr },
-          end: { date: isoDateStr },
-          description: `CREATED_BY_GCALJS | Crew:${row[idx["Crew"]]}`
-        }
-      });
-      console.log(`✅ ALL-DAY 추가: ${activity} (${isoDateStr})`);
-      continue;
-    }
-
-    // Normal timed event - Checkin 기준
     const startUtcMs = localToUTCms({ year, month, day, hour: ci.hour, minute: ci.minute }, from);
-    const durationMin = parseBLHtoMinutes(blh);
-    const endUtcMs = startUtcMs + durationMin * 60 * 1000;
+    const endUtcMs = localToUTCms({ year, month, day, hour: co.hour, minute: co.minute }, to);
 
     const sysOffset = getSystemOffsetMs();
     const startLocal = new Date(startUtcMs + sysOffset);
     const endLocal = new Date(endUtcMs + sysOffset);
 
+    const description = `
+CREATED_BY_GCALJS
+Activity: ${activity}
+STD(L): ${std} | STA(L): ${sta}
+Crew Notes: ${notes}
+Blockhours: ${blh}
+AcReg: ${acReg}
+
+Local Start: ${toISOLocalString(startLocal)}
+UTC Start: ${new Date(startUtcMs).toISOString()}
+Local End: ${toISOLocalString(endLocal)}
+UTC End: ${new Date(endUtcMs).toISOString()}
+Crew: ${crew}
+`.trim();
+
     await calendar.events.insert({
       calendarId: CALENDAR_ID,
       requestBody: {
         summary: activity,
-        location: from + " → " + to,
-        description: `CREATED_BY_GCALJS | AcReg:${row[idx["AcReg"]]} BLH:${blh} From:${from} To:${to} Crew:${row[idx["Crew"]]}`,
+        location: `${from} → ${to}`,
+        description,
         start: { dateTime: toISOLocalString(startLocal), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
         end: { dateTime: toISOLocalString(endLocal), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }
       }
     });
+
     console.log(`✅ 추가: ${activity} (${from}→${to}) [${toISOLocalString(startLocal)}]`);
   }
 
