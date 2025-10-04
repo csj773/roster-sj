@@ -1,4 +1,4 @@
-// ==================== gcal.js 10.7 ====================
+// ==================== gcal.js 10.8 ====================
 import fs from "fs";
 import path from "path";
 import { google } from "googleapis";
@@ -117,14 +117,16 @@ const calendar = google.calendar({ version: "v3", auth });
     const from = row[idx["From"]] || "ICN";
     const to = row[idx["To"]] || "";
 
-    const stdL = parseTimeStr(row[idx["STD(L)"]]);
-    const stdZ = parseTimeStr(row[idx["STD(Z)"]]);
-    const dayOffset = (row[idx["STD(Z)"]] || "").includes("+1") ? 1 : (row[idx["STD(Z)"]] || "").includes("+2") ? 2 : 0;
+    // STD(Z) 없으면 STD(L) 사용
+    let stdTime = parseTimeStr(row[idx["STD(Z)"]]);
+    if (!stdTime) stdTime = parseTimeStr(row[idx["STD(L)"]]);
+    const dayOffset = (row[idx["STD(Z)"]] || "").includes("+1") ? 1
+                    : (row[idx["STD(Z)"]] || "").includes("+2") ? 2 : 0;
 
-    const blh = row[idx["BLH"]] || "00:00"; // BLH 없으면 00:00
+    const blh = row[idx["BLH"]] || "00:00";
 
     // All-day event (REST)
-    if (/REST/i.test(activity) || !stdL) {
+    if (/REST/i.test(activity) || !stdTime) {
       await calendar.events.insert({
         calendarId: CALENDAR_ID,
         requestBody: {
@@ -138,16 +140,16 @@ const calendar = google.calendar({ version: "v3", auth });
       continue;
     }
 
-    // STD(Z)+N 을 KST 기기시간으로 변환
-    const startUtcMs = localToUTCms({ year, month, day, hour: stdZ.hour, minute: stdZ.minute }, from) + dayOffset * 24 * 60 * 60 * 1000;
-    const durationMin = parseBLHtoMinutes(blh) || 0;
+    // UTC ms 계산
+    const startUtcMs = localToUTCms({ year, month, day, hour: stdTime.hour, minute: stdTime.minute }, from) + dayOffset * 24 * 60 * 60 * 1000;
+    const durationMin = parseBLHtoMinutes(blh) || 120;
     const endUtcMs = startUtcMs + durationMin * 60 * 1000;
 
     const sysOffset = getSystemOffsetMs();
     const startLocal = new Date(startUtcMs + sysOffset);
     const endLocal = new Date(endUtcMs + sysOffset);
 
-    // 중복 제거 (activity + 기기 시간 기준)
+    // 중복 제거
     const startDay = new Date(startLocal); startDay.setHours(0, 0, 0, 0);
     const endDay = new Date(startLocal); endDay.setHours(23, 59, 59, 999);
     const existing = (await calendar.events.list({
