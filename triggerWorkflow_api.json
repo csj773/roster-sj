@@ -4,7 +4,7 @@
       "name": "TriggerGitHubWorkflow",
       "description": "Trigger GitHub Actions to run roster.js and gcal.js via Render API",
       "method": "POST",
-      "baseUrl": "https://YOUR-RENDER-APP.onrender.com",
+      "baseUrl": "https://roster-sj.onrender.com",
       "endpoint": "/triggerWorkflow",
       "headers": {
         "x-api-key": "sj-flutter-key-2025",
