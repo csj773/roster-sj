@@ -2,11 +2,18 @@ name: Update Roster & Google Calendar
 
 on:
   schedule:
-    - cron: "0 * * * *"       # 매 시간 정각 실행
-  workflow_dispatch:           # 수동 실행 허용
+    - cron: "0 * * * *"  # 매 시간 실행
+  workflow_dispatch:
+    inputs:
+      PDC_USERNAME:
+        description: 'PDC 계정'
+        required: true
+      PDC_PASSWORD:
+        description: 'PDC 비밀번호'
+        required: true
 
 permissions:
-  contents: write             # 커밋/푸시 권한
+  contents: write
 
 jobs:
   build:
@@ -28,15 +35,15 @@ jobs:
       - name: Run roster.js
         env:
           CHROME_PATH: "/usr/bin/chromium-browser"
-          INPUT_PDC_USERNAME: ${{ secrets.PDC_USERNAME }}
-          INPUT_PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}
+          INPUT_PDC_USERNAME: ${{ github.event.inputs.PDC_USERNAME }}
+          INPUT_PDC_PASSWORD: ${{ github.event.inputs.PDC_PASSWORD }}
           INPUT_FIREBASE_UID: ${{ secrets.FLUTTERFLOW_UID }}
           INPUT_ADMIN_FIREBASE_UID: ${{ secrets.FIRESTORE_ADMIN_UID }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
         run: node -r dotenv/config roster.js
 
-      # 5. roster.json & roster.csv 커밋/푸시
+      # 5. 변경된 파일 커밋 & 푸시
       - name: Commit & Push roster.json & roster.csv
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
