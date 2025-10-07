@@ -1,56 +1,92 @@
-name: Update Roster & Google Calendar
+// ==================== server.js ====================
+import express from "express";
+import cors from "cors";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
+import fetch from "node-fetch";
+import "dotenv/config";
 
-on:
-  schedule:
-    - cron: "0 * * * *"   # 매 시간 정각마다 실행
-  workflow_dispatch:       # 수동 실행 버튼
+const app = express();
+app.use(express.json());
+app.use(helmet());
 
-permissions:
-  contents: write
+// ------------------- CORS -------------------
+app.use(cors({
+  origin: [
+    "https://your-flutterflow-app.web.app",
+    "https://your-flutterflow-app.firebaseapp.com"
+  ],
+  methods: ["POST"],
+}));
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+// ------------------- Rate Limit -------------------
+const limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  message: { error: "Too many requests" },
+});
 
-    steps:
-      # 1. 저장소 체크아웃
-      - uses: actions/checkout@v4
+// ------------------- API Key -------------------
+const API_KEY = process.env.API_KEY || "mysecret123";
 
-      # 2. Node.js 설치
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
+// ------------------- POST /triggerWorkflow -------------------
+app.post("/triggerWorkflow", limiter, async (req, res) => {
+  try {
+    const auth = req.headers["x-api-key"];  // FlutterFlow에서 header로 전달
+    if (!auth || auth !== API_KEY) 
+      return res.status(401).json({ error: "Unauthorized" });
 
-      # 3. 의존성 설치
-      - run: npm install
+    const { username, password } = req.body || {};
+    if (!username || !password)
+      return res.status(400).json({ error: "username and password required" });
 
-      # 4. roster.js 실행
-      - name: Run roster.js
-        env:
-          CHROME_PATH: "/usr/bin/chromium-browser"  # Puppeteer용 크롬 경로
-          INPUT_PDC_USERNAME: ${{ secrets.PDC_USERNAME }}
-          INPUT_PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}
-          INPUT_FIREBASE_UID: ${{ secrets.FLUTTERFLOW_UID }}
-          INPUT_ADMIN_FIREBASE_UID: ${{ secrets.FIRESTORE_ADMIN_UID }}
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }} # ✅ secret 추가
-          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
-        run: |
-          echo "🛫 Starting roster.js..."
-          node -r dotenv/config roster.js || exit 1
-          echo "✅ roster.js completed."
+    // GitHub repository 정보
+    const repoOwner = "csj773";
+    const repoName = "roster-sj";
+    const workflowFile = "update-roster.yml";
+    const branch = "main";
 
-      # 5. roster.json / roster.csv 커밋 & 푸시
-      - name: Commit & Push roster.json & roster.csv
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add public/roster.json public/roster.csv
-          git commit -m "Update roster data" || echo "No changes to commit"
-          git push
+    console.log(`🚀 Triggering GitHub workflow for ${username}...`);
 
-      # 6. gcal.js 실행 (원상복구)
-      - name: Run gcal.js
-        env:
-          GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
-          GOOGLE_CALENDAR_CREDENTIALS: ${{ secrets.GOOGLE_CALENDAR_CREDENTIALS }}
-        run: node gcal.js
+    const response = await fetch(
+      `https://api.github.com/repos/${repoOwner}/${repoName}/actions/workflows/${workflowFile}/dispatches`,
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${process.env.GITHUB_TOKEN}`, // PAT
+          "Accept": "application/vnd.github+json",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          ref: branch,
+          inputs: {
+            PDC_USERNAME: username,
+            PDC_PASSWORD: password
+          }
+        })
+      }
+    );
+
+    const text = await response.text();
+
+    if (!response.ok) {
+      console.error("❌ GitHub API error:", text);
+      return res.status(500).json({ error: "GitHub API error", details: text });
+    }
+
+    const workflowUrl = `https://github.com/${repoOwner}/${repoName}/actions`;
+    res.json({
+      ok: true,
+      message: "Workflow triggered successfully",
+      githubActionsUrl: workflowUrl
+    });
+
+  } catch (e) {
+    console.error("❌ triggerWorkflow error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ------------------- 서버 실행 -------------------
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
