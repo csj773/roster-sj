@@ -1,4 +1,4 @@
-// ==================== roster.js (통합판 + gcal 호출) ====================
+// roster.js
 import puppeteer from "puppeteer";
 import fs from "fs";
 import path from "path";
