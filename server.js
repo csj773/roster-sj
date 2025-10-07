@@ -17,7 +17,7 @@ app.use(helmet());
 app.use(
   cors({
     origin: [
-      "https://your-flutterflow-app.web.app", // FlutterFlow 웹앱 URL로 교체
+      "https://your-flutterflow-app.web.app",
       "https://your-flutterflow-app.firebaseapp.com",
     ],
     methods: ["POST"],
@@ -105,9 +105,9 @@ app.post("/triggerWorkflow", async (req, res) => {
     if (!username || !password)
       return res.status(400).json({ error: "username and password required" });
 
-    const repoOwner = "YOUR_GITHUB_USERNAME"; // 예: sjchoi-dev
-    const repoName = "YOUR_REPOSITORY_NAME";  // 예: airpremia-roster
-    const workflowFile = "9.23.yaml";          // 실제 workflow 파일명
+    const repoOwner = "YOUR_GITHUB_USERNAME";
+    const repoName = "YOUR_REPOSITORY_NAME";
+    const workflowFile = "9.23.yaml";
 
     console.log(`🚀 Triggering GitHub workflow for ${username}...`);
 
