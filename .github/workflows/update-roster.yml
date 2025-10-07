@@ -32,7 +32,7 @@ jobs:
           INPUT_PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}
           INPUT_FIREBASE_UID: ${{ secrets.FLUTTERFLOW_UID }}
           INPUT_ADMIN_FIREBASE_UID: ${{ secrets.FIRESTORE_ADMIN_UID }}
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }} # ✅ secret 추가
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
         run: |
           echo "🛫 Starting roster.js..."
