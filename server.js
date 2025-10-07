@@ -1,6 +1,4 @@
 // ==================== server.js ====================
-// Express server to trigger roster.js or GitHub workflow safely via Render
-
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -31,8 +29,8 @@ const limiter = rateLimit({
   message: { error: "Too many requests, please try again later." },
 });
 
-// ------------------- 보안키 -------------------
-const API_KEY = process.env.API_KEY || "change_me";
+// ------------------- 고정 API 키 -------------------
+const API_KEY = "mysecret123"; // 여기서 고정
 
 // ------------------- 민감정보 마스킹 -------------------
 function mask(str, username, password) {
@@ -45,7 +43,7 @@ function mask(str, username, password) {
 // ------------------- POST /runRoster -------------------
 app.post("/runRoster", limiter, async (req, res) => {
   try {
-    const auth = req.headers["mysecret223"];
+    const auth = req.headers["x-api-key"];
     if (!auth || auth !== API_KEY)
       return res.status(401).json({ error: "Unauthorized" });
 
@@ -91,7 +89,7 @@ app.post("/runRoster", limiter, async (req, res) => {
 // ------------------- POST /triggerWorkflow -------------------
 app.post("/triggerWorkflow", limiter, async (req, res) => {
   try {
-    const auth = req.headers["mysecret123"];
+    const auth = req.headers["x-api-key"];
     if (!auth || auth !== API_KEY)
       return res.status(401).json({ error: "Unauthorized" });
 
@@ -99,10 +97,10 @@ app.post("/triggerWorkflow", limiter, async (req, res) => {
     if (!username || !password)
       return res.status(400).json({ error: "username and password required" });
 
-    const repoOwner = "csj773";                  // GitHub 계정
-    const repoName = "roster-sj";                // 레포 이름
-    const workflowFile = "update-roster.yml";    // workflow 파일 이름
-    const branch = "main";                        // workflow 브랜치
+    const repoOwner = "csj773";
+    const repoName = "roster-sj";
+    const workflowFile = "update-roster.yml";
+    const branch = "main";
 
     console.log(`🚀 Triggering GitHub workflow for ${username}...`);
 
@@ -113,7 +111,6 @@ app.post("/triggerWorkflow", limiter, async (req, res) => {
         headers: {
           "Authorization": `Bearer ${process.env.GITHUB_TOKEN}`,
           "Accept": "application/vnd.github+json",
-          "X-GitHub-Api-Version": "2022-11-28",
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -139,7 +136,6 @@ app.post("/triggerWorkflow", limiter, async (req, res) => {
       message: "Workflow triggered successfully",
       githubActionsUrl: workflowUrl,
     });
-
   } catch (e) {
     console.error("❌ triggerWorkflow error:", e);
     res.status(500).json({ error: e.message });
