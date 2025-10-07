@@ -1,8 +1,6 @@
 name: Update Roster & Google Calendar
 
 on:
-  schedule:
-    - cron: "0 * * * *"  # 매 시간 실행
   workflow_dispatch:
     inputs:
       PDC_USERNAME:
@@ -20,18 +18,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. 코드 체크아웃
       - uses: actions/checkout@v4
-
-      # 2. Node.js 설치
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
-
-      # 3. 의존성 설치
+          node-version: '20'
       - run: npm install
 
-      # 4. roster.js 실행
       - name: Run roster.js
         env:
           CHROME_PATH: "/usr/bin/chromium-browser"
@@ -43,7 +35,6 @@ jobs:
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
         run: node -r dotenv/config roster.js
 
-      # 5. 변경된 파일 커밋 & 푸시
       - name: Commit & Push roster.json & roster.csv
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
@@ -52,7 +43,6 @@ jobs:
           git commit -m "Update roster data" || echo "No changes to commit"
           git push
 
-      # 6. gcal.js 실행
       - name: Run gcal.js
         env:
           GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
