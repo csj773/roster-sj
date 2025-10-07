@@ -1,0 +1,24 @@
+{
+  "apiCalls": [
+    {
+      "name": "TriggerGitHubWorkflow",
+      "description": "Trigger GitHub Actions to run roster.js and gcal.js via Render API",
+      "method": "POST",
+      "baseUrl": "https://YOUR-RENDER-APP.onrender.com",
+      "endpoint": "/triggerWorkflow",
+      "headers": {
+        "x-api-key": "sj-flutter-key-2025",
+        "Content-Type": "application/json"
+      },
+      "bodyType": "JSON",
+      "body": {
+        "username": "<%= username %>",
+        "password": "<%= password %>"
+      },
+      "responseType": "JSON",
+      "responseJsonPath": "$",
+      "successMessage": "Roster update started successfully",
+      "errorMessage": "Failed to start workflow"
+    }
+  ]
+}
