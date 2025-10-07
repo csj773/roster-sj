@@ -6,7 +6,7 @@ import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { spawn } from "child_process";
-import fetch from "node-fetch"; // ✅ 추가
+import fetch from "node-fetch";
 import "dotenv/config";
 
 const app = express();
@@ -30,7 +30,6 @@ const limiter = rateLimit({
   max: 5,
   message: { error: "Too many requests, please try again later." },
 });
-app.use("/runRoster", limiter);
 
 // ------------------- 보안키 -------------------
 const API_KEY = process.env.API_KEY || "change_me";
@@ -44,7 +43,7 @@ function mask(str, username, password) {
 }
 
 // ------------------- POST /runRoster -------------------
-app.post("/runRoster", async (req, res) => {
+app.post("/runRoster", limiter, async (req, res) => {
   try {
     const auth = req.headers["x-api-key"];
     if (!auth || auth !== API_KEY)
@@ -89,13 +88,8 @@ app.post("/runRoster", async (req, res) => {
   }
 });
 
-// ------------------- 기본 라우트 -------------------
-app.get("/", (req, res) => {
-  res.send("✅ Roster API running successfully on Render.");
-});
-
 // ------------------- POST /triggerWorkflow -------------------
-app.post("/triggerWorkflow", async (req, res) => {
+app.post("/triggerWorkflow", limiter, async (req, res) => {
   try {
     const auth = req.headers["x-api-key"];
     if (!auth || auth !== API_KEY)
@@ -105,9 +99,10 @@ app.post("/triggerWorkflow", async (req, res) => {
     if (!username || !password)
       return res.status(400).json({ error: "username and password required" });
 
-    const repoOwner = "csj773";
-    const repoName = "roster-sj";
-    const workflowFile = "update-roster.yaml";
+    const repoOwner = "csj773";                  // GitHub 계정
+    const repoName = "roster-sj";                // 레포 이름
+    const workflowFile = "update-roster.yml";    // workflow 파일 이름
+    const branch = "main";                        // workflow 브랜치
 
     console.log(`🚀 Triggering GitHub workflow for ${username}...`);
 
@@ -119,9 +114,10 @@ app.post("/triggerWorkflow", async (req, res) => {
           "Authorization": `Bearer ${process.env.GITHUB_TOKEN}`,
           "Accept": "application/vnd.github+json",
           "X-GitHub-Api-Version": "2022-11-28",
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          ref: "main",
+          ref: branch,
           inputs: {
             PDC_USERNAME: username,
             PDC_PASSWORD: password,
@@ -143,10 +139,16 @@ app.post("/triggerWorkflow", async (req, res) => {
       message: "Workflow triggered successfully",
       githubActionsUrl: workflowUrl,
     });
+
   } catch (e) {
     console.error("❌ triggerWorkflow error:", e);
     res.status(500).json({ error: e.message });
   }
+});
+
+// ------------------- 기본 라우트 -------------------
+app.get("/", (req, res) => {
+  res.send("✅ Roster API running successfully on Render.");
 });
 
 // ------------------- 서버 실행 -------------------
