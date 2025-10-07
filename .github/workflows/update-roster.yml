@@ -1,38 +1,33 @@
-name: Update Roster
+name: Update Roster & Google Calendar
 
-# 1. 스케줄링 + 수동 실행 가능
 on:
   schedule:
-    - cron: "0 * * * *"    # 매 시간 0분마다 실행
-  workflow_dispatch:        # 수동 실행 가능
+    - cron: "0 * * * *"       # 매 시간 정각 실행
+  workflow_dispatch:           # 수동 실행 허용
 
-# 2. 권한 설정
 permissions:
-  contents: write          # repo에 push 가능
+  contents: write             # 커밋/푸시 권한
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      # 3. 코드 체크아웃
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      # 1. 코드 체크아웃
+      - uses: actions/checkout@v4
 
-      # 4. Node.js 설치
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      # 2. Node.js 설치
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      # 5. 의존성 설치
-      - name: Install dependencies
-        run: npm install
+      # 3. 의존성 설치
+      - run: npm install
 
-      # 6. roster.js 실행
+      # 4. roster.js 실행
       - name: Run roster.js
         env:
-          CHROME_PATH: "/usr/bin/chromium-browser"  
+          CHROME_PATH: "/usr/bin/chromium-browser"
           INPUT_PDC_USERNAME: ${{ secrets.PDC_USERNAME }}
           INPUT_PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}
           INPUT_FIREBASE_UID: ${{ secrets.FLUTTERFLOW_UID }}
@@ -41,7 +36,7 @@ jobs:
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
         run: node -r dotenv/config roster.js
 
-      # 7. 변경된 roster 파일 commit & push
+      # 5. roster.json & roster.csv 커밋/푸시
       - name: Commit & Push roster.json & roster.csv
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
@@ -49,3 +44,10 @@ jobs:
           git add public/roster.json public/roster.csv
           git commit -m "Update roster data" || echo "No changes to commit"
           git push
+
+      # 6. gcal.js 실행
+      - name: Run gcal.js
+        env:
+          GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
+          GOOGLE_CALENDAR_CREDENTIALS: ${{ secrets.GOOGLE_CALENDAR_CREDENTIALS }}
+        run: node gcal.js
