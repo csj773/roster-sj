@@ -1,75 +1,156 @@
+// ==================== server.js ====================
+// Express server to trigger roster.js or GitHub workflow safely via Render
+
 import express from "express";
+import cors from "cors";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import { spawn } from "child_process";
+import fetch from "node-fetch"; // ✅ 추가
 import "dotenv/config";
 
 const app = express();
 app.use(express.json());
+app.use(helmet());
 
+// ------------------- CORS 설정 -------------------
+app.use(
+  cors({
+    origin: [
+      "https://your-flutterflow-app.web.app", // FlutterFlow 웹앱 URL로 교체
+      "https://your-flutterflow-app.firebaseapp.com",
+    ],
+    methods: ["POST"],
+  })
+);
+
+// ------------------- Rate Limit -------------------
+const limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  message: { error: "Too many requests, please try again later." },
+});
+app.use("/runRoster", limiter);
+
+// ------------------- 보안키 -------------------
 const API_KEY = process.env.API_KEY || "change_me";
 
-// 정규식 escape 함수
-function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// ------------------- 민감정보 마스킹 -------------------
+function mask(str, username, password) {
+  if (!str) return str;
+  return str
+    .split(username || "").join("[REDACTED]")
+    .split(password || "").join("[REDACTED]");
 }
 
+// ------------------- POST /runRoster -------------------
 app.post("/runRoster", async (req, res) => {
   try {
     const auth = req.headers["x-api-key"];
-    if (!auth || auth !== API_KEY) {
+    if (!auth || auth !== API_KEY)
       return res.status(401).json({ error: "Unauthorized" });
-    }
 
-    // body > env > fallback 순서
-    const username = req.body.username || process.env.INPUT_PDC_USERNAME;
-    const password = req.body.password || process.env.INPUT_PDC_PASSWORD;
-    const firebaseUid = req.body.firebaseUid || process.env.INPUT_FIREBASE_UID;
-    const adminFirebaseUid = req.body.adminFirebaseUid || process.env.INPUT_ADMIN_FIREBASE_UID;
+    const { username, password, firebaseUid } = req.body || {};
+    if (!username || !password)
+      return res.status(400).json({ error: "username and password required" });
 
-    if (!username || !password) {
-      return res.status(400).json({ error: "PDC 계정(username/password)이 입력되지 않았습니다." });
-    }
-    if (!firebaseUid || !adminFirebaseUid) {
-      return res.status(400).json({ error: "FlutterFlow UID 또는 Admin UID가 입력되지 않았습니다." });
-    }
+    console.log(`📤 Run roster.js from ${req.ip}`);
 
-    // roster.js 실행
     const env = {
       ...process.env,
       INPUT_PDC_USERNAME: username,
       INPUT_PDC_PASSWORD: password,
-      INPUT_FIREBASE_UID: firebaseUid,
-      INPUT_ADMIN_FIREBASE_UID: adminFirebaseUid,
+      FIREBASE_UID: firebaseUid || process.env.FIREBASE_UID,
+      CHROME_PATH: process.env.CHROME_PATH || "/usr/bin/chromium",
     };
 
-    const child = spawn("node", ["./roster.js"], { env, stdio: "pipe" });
+    const child = spawn("node", ["./roster.js"], { env });
+    let out = "", err = "";
 
-    let stdout = "", stderr = "";
-
-    child.stdout.on("data", (data) => {
-      const text = data.toString();
-      stdout += text;
-      process.stdout.write(text); // 콘솔에도 실시간 출력
-    });
-
-    child.stderr.on("data", (data) => {
-      const text = data.toString();
-      stderr += text;
-      process.stderr.write(text); // 콘솔에도 실시간 출력
-    });
+    child.stdout.on("data", (d) => (out += d.toString()));
+    child.stderr.on("data", (d) => (err += d.toString()));
 
     child.on("close", (code) => {
+      console.log(`✅ roster.js finished (exit ${code})`);
       res.json({
         exitCode: code,
-        stdout: stdout.replace(new RegExp(escapeRegex(username), "g"), "[REDACTED]"),
-        stderr: stderr || "",
+        stdout: mask(out, username, password),
+        stderr: mask(err, username, password),
       });
     });
 
-  } catch (error) {
-    console.error("❌ 서버 실행 에러:", error);
-    res.status(500).json({ error: error.message });
+    child.on("error", (error) => {
+      console.error("❌ Spawn error:", error);
+      res.status(500).json({ error: error.message });
+    });
+  } catch (e) {
+    console.error("❌ Server error:", e);
+    res.status(500).json({ error: e.message });
   }
 });
 
+// ------------------- 기본 라우트 -------------------
+app.get("/", (req, res) => {
+  res.send("✅ Roster API running successfully on Render.");
+});
+
+// ------------------- POST /triggerWorkflow -------------------
+app.post("/triggerWorkflow", async (req, res) => {
+  try {
+    const auth = req.headers["x-api-key"];
+    if (!auth || auth !== API_KEY)
+      return res.status(401).json({ error: "Unauthorized" });
+
+    const { username, password } = req.body || {};
+    if (!username || !password)
+      return res.status(400).json({ error: "username and password required" });
+
+    const repoOwner = "YOUR_GITHUB_USERNAME"; // 예: sjchoi-dev
+    const repoName = "YOUR_REPOSITORY_NAME";  // 예: airpremia-roster
+    const workflowFile = "9.23.yaml";          // 실제 workflow 파일명
+
+    console.log(`🚀 Triggering GitHub workflow for ${username}...`);
+
+    const response = await fetch(
+      `https://api.github.com/repos/${repoOwner}/${repoName}/actions/workflows/${workflowFile}/dispatches`,
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${process.env.GITHUB_TOKEN}`,
+          "Accept": "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+        body: JSON.stringify({
+          ref: "main",
+          inputs: {
+            PDC_USERNAME: username,
+            PDC_PASSWORD: password,
+          },
+        }),
+      }
+    );
+
+    const text = await response.text();
+
+    if (!response.ok) {
+      console.error("❌ GitHub API error:", text);
+      return res.status(500).json({ error: "GitHub API error", details: text });
+    }
+
+    const workflowUrl = `https://github.com/${repoOwner}/${repoName}/actions`;
+    res.json({
+      ok: true,
+      message: "Workflow triggered successfully",
+      githubActionsUrl: workflowUrl,
+    });
+  } catch (e) {
+    console.error("❌ triggerWorkflow error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ------------------- 서버 실행 -------------------
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on Render port ${PORT}`);
+});
