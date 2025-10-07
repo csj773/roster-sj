@@ -30,7 +30,7 @@ const limiter = rateLimit({
 });
 
 // ------------------- 고정 API 키 -------------------
-const API_KEY = "mysecret123"; // 여기서 고정
+const API_KEY = "mysecret123";
 
 // ------------------- 민감정보 마스킹 -------------------
 function mask(str, username, password) {
@@ -113,13 +113,7 @@ app.post("/triggerWorkflow", limiter, async (req, res) => {
           "Accept": "application/vnd.github+json",
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          ref: branch,
-          inputs: {
-            PDC_USERNAME: username,
-            PDC_PASSWORD: password,
-          },
-        }),
+        body: JSON.stringify({ ref: branch }),
       }
     );
 
@@ -136,6 +130,7 @@ app.post("/triggerWorkflow", limiter, async (req, res) => {
       message: "Workflow triggered successfully",
       githubActionsUrl: workflowUrl,
     });
+
   } catch (e) {
     console.error("❌ triggerWorkflow error:", e);
     res.status(500).json({ error: e.message });
