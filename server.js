@@ -105,9 +105,9 @@ app.post("/triggerWorkflow", async (req, res) => {
     if (!username || !password)
       return res.status(400).json({ error: "username and password required" });
 
-    const repoOwner = "YOUR_GITHUB_USERNAME";
-    const repoName = "YOUR_REPOSITORY_NAME";
-    const workflowFile = "9.23.yaml";
+    const repoOwner = "csj773";
+    const repoName = "roster-sj";
+    const workflowFile = "update-roster.yaml";
 
     console.log(`🚀 Triggering GitHub workflow for ${username}...`);
 
