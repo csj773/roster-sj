@@ -45,7 +45,7 @@ function mask(str, username, password) {
 // ------------------- POST /runRoster -------------------
 app.post("/runRoster", limiter, async (req, res) => {
   try {
-    const auth = req.headers["x-api-key"];
+    const auth = req.headers["mysecret223"];
     if (!auth || auth !== API_KEY)
       return res.status(401).json({ error: "Unauthorized" });
 
