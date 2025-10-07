@@ -91,7 +91,7 @@ app.post("/runRoster", limiter, async (req, res) => {
 // ------------------- POST /triggerWorkflow -------------------
 app.post("/triggerWorkflow", limiter, async (req, res) => {
   try {
-    const auth = req.headers["x-api-key"];
+    const auth = req.headers["mysecret123"];
     if (!auth || auth !== API_KEY)
       return res.status(401).json({ error: "Unauthorized" });
 
