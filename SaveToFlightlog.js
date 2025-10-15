@@ -11,6 +11,8 @@ import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
 
 // ------------------- Firebase 초기화 -------------------
+console.log("🚀 Firebase 초기화 시작");
+
 if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
   console.error("❌ FIREBASE_SERVICE_ACCOUNT Secret이 없습니다.");
   process.exit(1);
@@ -25,6 +27,8 @@ if (!admin.apps.length)
 
 const db = admin.firestore();
 const FIREBASE_UID = process.env.FIREBASE_UID || "manual_upload";
+
+console.log("✅ Firebase 초기화 완료");
 
 // ------------------- BLH / ET / NT 계산 함수 -------------------
 function blhStrToHour(str) {
@@ -98,4 +102,5 @@ if (!csvFile) {
 }
 
 uploadCSVToFirestore(csvFile);
+
 
