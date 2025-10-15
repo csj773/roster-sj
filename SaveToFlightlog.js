@@ -20,7 +20,7 @@ if (!admin.apps.length)
 const db = admin.firestore();
 const FIREBASE_UID = process.env.FIREBASE_UID || "manual_upload";
 
-// 2. my_flightlog.csv 자동 탐색 (루트 및 1단계 하위 폴더)
+// 2. CSV 자동 탐색 (루트 및 1단계 하위 폴더)
 function findCsvFile(filename = "my_flightlog.csv", dir = process.cwd()) {
   const files = fs.readdirSync(dir);
   if (files.includes(filename)) return path.join(dir, filename);
@@ -32,7 +32,6 @@ function findCsvFile(filename = "my_flightlog.csv", dir = process.cwd()) {
       if (nestedFiles.includes(filename)) return path.join(fullPath, filename);
     }
   }
-
   return null;
 }
 
@@ -59,35 +58,40 @@ fs.createReadStream(csvFile)
     // 4. Firestore 업로드
     for (const [i, row] of rows.entries()) {
       try {
+        // CSV Date → Firestore Date 타입
+        const flightDate = row.Date ? new Date(row.Date) : new Date();
+
         const docData = {
-          Date: row.Date || new Date(),
-          FLT: row.FLT || row["Flight No."] || "",
+          Date: flightDate,
+          FLT: row.Activity || row.FLT || row["Flight No."] || row.DC || "",
           FROM: row.From || row.FROM || "",
           TO: row.To || row.TO || "",
           REG: row["A/C ID"] || row.REG || "",
           DC: row["A/C Type"] || row.DC || "",
           BLK: parseFloat(row.BLH || 0),
           PIC: row.PIC || "",
-          Month: dayjs(row.Date).format("MM"),
-          Year: dayjs(row.Date).format("YYYY"),
+          Month: dayjs(flightDate).format("MM"),
+          Year: dayjs(flightDate).format("YYYY"),
           ET: parseFloat(row.BLH || 0),
           NT: parseFloat(row.STDz || 0),
           STDz: row["STD(Z)"] || row.STDz || "",
           STAz: row["STA(Z)"] || row.STAz || "",
-          DateString: row.Date || "",
           TKO: Number(row["T/O"] || row.TKO || 0),
           LDG: Number(row.LDG || 0),
           owner: FIREBASE_UID,
           uploadedAt: admin.firestore.FieldValue.serverTimestamp(),
         };
+
         await db.collection("Flightlog").add(docData);
-        console.log(`✅ ${i + 1}/${rows.length} 저장 완료 (${row.Date} ${row.FLT})`);
+        console.log(`✅ ${i + 1}/${rows.length} 저장 완료 (${flightDate.toISOString()} ${docData.FLT})`);
       } catch (err) {
         console.error(`❌ ${i + 1}행 오류:`, err.message);
       }
     }
+
     console.log("🎯 Firestore 업로드 완료!");
   });
+
 
 
 
