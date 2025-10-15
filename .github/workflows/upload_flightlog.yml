@@ -2,43 +2,23 @@ name: Upload Flightlog
 
 on:
   workflow_dispatch:
-    inputs:
-      file-path:
-        description: 'Path to CSV file to upload'
-        default: './my_flightlog.csv'
-        required: true
 
 jobs:
   upload-flightlog:
-    name: Upload Flightlog
     runs-on: ubuntu-latest
     steps:
-      # 1. Checkout repo
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      # 2. Setup Node.js
-      - name: Setup Node.js
+      - uses: actions/checkout@v3
+      - name: Node.js 설치
         uses: actions/setup-node@v3
         with:
-          node-version: '20'
-
-      # 3. Install dependencies
-      - name: Install dependencies
+          node-version: "20"
+      - name: 종속성 설치
         run: npm install
-
-      # 4. Verify required modules
-      - name: Verify Node modules
-        run: |
-          node -e "import 'csv-parser'; console.log('csv-parser OK')"
-          node -e "import 'firebase-admin'; console.log('firebase-admin OK')"
-          node -e "import 'dayjs'; console.log('dayjs OK')"
-
-      # 5. Run CSV → Firestore upload
-      - name: Upload CSV to Firestore
-        run: node SaveToFlightlog.js ${{ github.event.inputs['file-path'] }}
+      - name: Firestore 업로드
+        run: node SaveToFlightlog.js ./my_flightlog.csv
         env:
-          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_UID: ${{ secrets.FIREBASE_UID }}
+
 
 
