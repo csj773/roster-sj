@@ -58,18 +58,20 @@ fs.createReadStream(csvFile)
     // 4. Firestore 업로드
     for (const [i, row] of rows.entries()) {
       try {
+        // CSV Date → Firestore Date 타입
+        const flightDate = row.Date ? new Date(row.Date) : new Date();
+
         const docData = {
-          // FLT: Activity 우선, 없으면 Flt 또는 Flight No.
+          Date: flightDate,
           FLT: row.Activity || row.FLT || row["Flight No."] || row.DC || "",
-          Date: row.Date || new Date(),
           FROM: row.From || row.FROM || "",
           TO: row.To || row.TO || "",
           REG: row["A/C ID"] || row.REG || "",
           DC: row["A/C Type"] || row.DC || "",
           BLK: parseFloat(row.BLH || 0),
           PIC: row.PIC || "",
-          Month: dayjs(row.Date).format("MM"),
-          Year: dayjs(row.Date).format("YYYY"),
+          Month: dayjs(flightDate).format("MM"),
+          Year: dayjs(flightDate).format("YYYY"),
           ET: parseFloat(row.BLH || 0),
           NT: parseFloat(row.STDz || 0),
           STDz: row["STD(Z)"] || row.STDz || "",
@@ -81,7 +83,7 @@ fs.createReadStream(csvFile)
         };
 
         await db.collection("Flightlog").add(docData);
-        console.log(`✅ ${i + 1}/${rows.length} 저장 완료 (${row.Date} ${docData.FLT})`);
+        console.log(`✅ ${i + 1}/${rows.length} 저장 완료 (${flightDate.toISOString()} ${docData.FLT})`);
       } catch (err) {
         console.error(`❌ ${i + 1}행 오류:`, err.message);
       }
@@ -89,6 +91,7 @@ fs.createReadStream(csvFile)
 
     console.log("🎯 Firestore 업로드 완료!");
   });
+
 
 
 
