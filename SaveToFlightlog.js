@@ -1,12 +1,6 @@
-/**
- * SaveToFlightlog.js (Secrets 기반)
- *
- * 🔹 GitHub Secrets 사용
- *    - FIREBASE_SERVICE_ACCOUNT_JSON
- *    - FIREBASE_UID
- * 🔹 PDC 로그인은 수동
- * 🔹 다운로드된 CSV Firestore 업로드
- */
+// ==================== SaveToFlightlog.js ====================
+// 🔹 로그인 및 기간선택은 직접 수행
+// 🔹 다운로드된 CSV를 Firestore에 업로드
 
 import fs from "fs";
 import csv from "csv-parser";
@@ -17,12 +11,12 @@ import utc from "dayjs/plugin/utc.js";
 dayjs.extend(utc);
 
 // ------------------- Firebase 초기화 -------------------
-if (!process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-  console.error("❌ FIREBASE_SERVICE_ACCOUNT_JSON Secret이 없습니다.");
+if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
+  console.error("❌ FIREBASE_SERVICE_ACCOUNT Secret이 없습니다.");
   process.exit(1);
 }
 
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 if (serviceAccount.private_key)
   serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
 
@@ -32,14 +26,26 @@ if (!admin.apps.length)
 const db = admin.firestore();
 const FIREBASE_UID = process.env.FIREBASE_UID || "manual_upload";
 
-// ------------------- BLH / ET / NT 계산 -------------------
-function blhStrToHour(str){ /* 기존 함수 동일 */ }
-function hourToTimeStr(hour){ /* 기존 함수 동일 */ }
-function calculateET(blhStr){ /* 기존 함수 동일 */ }
-function calculateNTFromSTDSTA(stdZ, staZ, flightDate, blhStr){ /* 기존 함수 동일 */ }
-function parseTimeToUTC(dateString, timeString){ /* 기존 함수 동일 */ }
+// ------------------- BLH / ET / NT 계산 함수 -------------------
+function blhStrToHour(str) {
+  const match = str?.match(/(\d{2})(\d{2})/);
+  if (!match) return 0;
+  const [, h, m] = match.map(Number);
+  return h + m / 60;
+}
+function calculateET(blhStr) {
+  const hours = blhStrToHour(blhStr);
+  return hours.toFixed(2);
+}
+function calculateNTFromSTDSTA(stdZ, staZ, dateStr, blhStr) {
+  const std = blhStrToHour(stdZ);
+  const sta = blhStrToHour(staZ);
+  if (isNaN(std) || isNaN(sta)) return 0;
+  const diff = sta - std;
+  return diff < 0 ? diff + 24 : diff;
+}
 
-// ------------------- CSV → Firestore -------------------
+// ------------------- CSV → Firestore 업로드 -------------------
 async function uploadCSVToFirestore(csvFile) {
   const rows = [];
   fs.createReadStream(csvFile)
@@ -49,27 +55,21 @@ async function uploadCSVToFirestore(csvFile) {
       console.log(`📄 CSV ${rows.length}건 로드 완료`);
       for (const [i, row] of rows.entries()) {
         try {
-          const stdUTC = parseTimeToUTC(row.Date, row["STD(Z)"] || row.STDz);
-          const staUTC = parseTimeToUTC(row.Date, row["STA(Z)"] || row.STAz);
-          const blk = row.BLH || row["BLK"] || "";
-
           const docData = {
-            Date: stdUTC || new Date(),
+            Date: row.Date || new Date(),
             FLT: row.FLT || row["Flight No."] || "",
             FROM: row.FROM || row["From"] || "",
             TO: row.TO || row["To"] || "",
             REG: row.REG || row["A/C ID"] || "",
             DC: row.DC || row["A/C Type"] || "",
-            RO: stdUTC || null,
-            RI: staUTC || null,
-            BLK: blk,
+            BLK: row.BLH || row["BLK"] || "",
             PIC: row.PIC || "",
-            Month: dayjs(stdUTC).format("MM"),
-            Year: dayjs(stdUTC).format("YYYY"),
-            ET: calculateET(blk),
-            NT: calculateNTFromSTDSTA(row.STDz || row["STD(Z)"], row.STAz || row["STA(Z)"], row.Date || new Date(), blk),
-            STDz: row.STDz || row["STD(Z)"] || "",
-            STAz: row.STAz || row["STA(Z)"] || "",
+            Month: dayjs(row.Date).format("MM"),
+            Year: dayjs(row.Date).format("YYYY"),
+            ET: calculateET(row.BLH),
+            NT: calculateNTFromSTDSTA(row["STD(Z)"], row["STA(Z)"], row.Date, row.BLH),
+            STDz: row["STD(Z)"] || "",
+            STAz: row["STA(Z)"] || "",
             DateString: row.Date || "",
             TKO: Number(row.TKO || row["T/O"] || 0),
             LDG: Number(row.LDG || 0),
@@ -87,17 +87,15 @@ async function uploadCSVToFirestore(csvFile) {
     });
 }
 
-// ------------------- 실행 안내 -------------------
+// ------------------- 실행 -------------------
 console.log("🟢 PDC 로그인 후, 기간 선택과 CSV 다운로드를 수동으로 진행하세요.");
-console.log("다운로드 완료 후, 터미널에서 Enter를 눌러 CSV Firestore 업로드를 시작합니다.");
+console.log("다운로드 완료 후, CSV 파일 경로를 지정해 Firestore 업로드를 시작합니다.");
 
-process.stdin.once("data", async () => {
-  const csvFile = process.argv[2];
-  if (!csvFile) {
-    console.error("❌ CSV 파일 경로를 지정해주세요. 예: node SaveToFlightlog.js ./my_flightlog.csv");
-    process.exit(1);
-  }
+const csvFile = process.argv[2];
+if (!csvFile) {
+  console.error("❌ CSV 파일 경로를 지정해주세요. 예: node SaveToFlightlog.js ./my_flightlog.csv");
+  process.exit(1);
+}
 
-  await uploadCSVToFirestore(csvFile);
-  process.exit(0);
-});
+uploadCSVToFirestore(csvFile);
+
