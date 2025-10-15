@@ -61,10 +61,11 @@ fs.createReadStream(csvFile)
     // 5. Firestore 업로드
     for (const [i, row] of rows.entries()) {
       try {
+        // Date → Firestore Date 타입
         const flightDate = row.Date ? new Date(row.Date) : new Date();
 
         // 중복 키 생성: Date-Activity-From-To
-        const dupKey = `${flightDate.toISOString()}|${row.Activity}|${row.From}|${row.To}`;
+        const dupKey = `${flightDate.toISOString()}|${row.Activity || row.FLT}|${row.From}|${row.To}`;
         if (uniqueSet.has(dupKey)) {
           console.log(`⚠️ ${i + 1}행 중복으로 건너뜀 (${dupKey})`);
           continue;
@@ -101,6 +102,7 @@ fs.createReadStream(csvFile)
 
     console.log("🎯 Firestore 업로드 완료!");
   });
+
 
 
 
