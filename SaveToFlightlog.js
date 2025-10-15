@@ -61,10 +61,14 @@ fs.createReadStream(csvFile)
     // 5. Firestore 업로드
     for (const [i, row] of rows.entries()) {
       try {
-        // CSV Date → Firestore Date 타입
-        const flightDate = row.Date ? new Date(row.Date) : new Date();
+        // CSV Date → Firestore Timestamp(Date 타입)
+        let flightDate = row.Date ? new Date(row.Date) : new Date();
+        if (isNaN(flightDate.getTime())) {
+          console.warn(`⚠️ ${row.Date} 날짜 형식이 올바르지 않아 현재 시간으로 대체합니다.`);
+          flightDate = new Date();
+        }
 
-        // 중복 키: Date-Activity-From-To
+        // 중복 키 생성: Date-Activity-From-To
         const dupKey = `${flightDate.toISOString()}|${row.Activity || row.FLT}|${row.From}|${row.To}`;
         if (uniqueSet.has(dupKey)) {
           console.log(`⚠️ ${i + 1}행 중복으로 건너뜀 (${dupKey})`);
@@ -73,7 +77,7 @@ fs.createReadStream(csvFile)
         uniqueSet.add(dupKey);
 
         const docData = {
-          Date: flightDate,
+          Date: flightDate, // Firestore Timestamp
           FLT: row.Activity || row.FLT || row["Flight No."] || row.DC || "",
           FROM: row.From || row.FROM || "",
           TO: row.To || row.TO || "",
@@ -102,6 +106,7 @@ fs.createReadStream(csvFile)
 
     console.log("🎯 Firestore 업로드 완료!");
   });
+
 
 
 
