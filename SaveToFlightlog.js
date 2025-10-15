@@ -4,7 +4,7 @@ import csv from "csv-parser";
 import admin from "firebase-admin";
 import dayjs from "dayjs";
 
-// 1. Firebase 서비스 계정
+// 1️⃣ Firebase 서비스 계정
 if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
   console.error("❌ FIREBASE_SERVICE_ACCOUNT Secret이 없습니다.");
   process.exit(1);
@@ -21,7 +21,7 @@ const db = admin.firestore();
 const FIREBASE_UID = process.env.FIREBASE_UID || "manual_upload";
 const FLUTTERFLOW_EMAIL = process.env.FLUTTERFLOW_EMAIL || "unknown@manual";
 
-// 2. CSV 자동 탐색
+// 2️⃣ CSV 자동 탐색
 function findCsvFile(filename = "my_flightlog.csv", dir = process.cwd()) {
   const files = fs.readdirSync(dir);
   if (files.includes(filename)) return path.join(dir, filename);
@@ -43,7 +43,7 @@ if (!csvFile) {
 
 console.log(`📄 CSV 파일 발견: ${csvFile}`);
 
-// 3. CSV 읽기
+// 3️⃣ CSV 읽기 및 Firestore 업로드
 const rows = [];
 fs.createReadStream(csvFile)
   .pipe(csv())
@@ -55,23 +55,23 @@ fs.createReadStream(csvFile)
     }
     console.log(`📄 CSV ${rows.length}건 로드 완료`);
 
-    // 4. Firestore 업로드
     for (const [i, row] of rows.entries()) {
       try {
-        // ✅ 정확한 날짜 변환 (YYYY-MM-DD → UTC midnight)
+        // ✅ CSV Date → Firestore Timestamp(Date 타입)
         const csvDateStr = (row.Date || "").trim();
         const flightDate = csvDateStr
           ? new Date(`${csvDateStr}T00:00:00Z`)
           : new Date();
 
+        // ✅ Firestore 저장 데이터 매핑
         const docData = {
-          Date: flightDate, // Firestore Timestamp type
-          FLT: row.Activity || row.FLT || row["Flight No."] || "",
+          Date: flightDate, // Timestamp
+          FLT: row.Activity || row.FLT || row["Flight No."] || "", // Activity → FLT
           FROM: row.From || row.FROM || "",
           TO: row.To || row.TO || "",
           REG: row["A/C ID"] || row.REG || "",
           DC: row["A/C Type"] || row.DC || "",
-          BLK: row.BH ? row.BH : row.BLH || "00:00",
+          BLK: row.BH || "00:00", // hh:mm
           PIC: row.PIC || "",
           Month: dayjs(flightDate).format("MMM"), // e.g. Oct
           Year: dayjs(flightDate).format("YYYY"),
@@ -105,8 +105,9 @@ fs.createReadStream(csvFile)
       }
     }
 
-    console.log("🎯 Firestore 업로드 완료!");
+    console.log("🎯 Firestore Flightlog 업로드 완료!");
   });
+
 
 
 
