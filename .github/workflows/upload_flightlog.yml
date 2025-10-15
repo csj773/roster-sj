@@ -1,16 +1,32 @@
+name: Upload Flightlog
+
+on:
+  workflow_dispatch:
+    inputs:
+      file-path:
+        description: 'Path to CSV file to upload'
+        default: './my_flightlog.csv'
+        required: true
+
 jobs:
   upload-flightlog:
+    name: Upload Flightlog
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - name: Node.js 설치
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: "20"
-      - name: 종속성 설치
+
+      - name: Install dependencies
         run: npm install
-      - name: Firestore 업로드
-        run: node SaveToFlightlog.js ./my_flightlog.csv
+
+      - name: Upload to Firestore
+        run: node SaveToFlightlog.js ${{ github.event.inputs['file-path'] }}
         env:
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
           FIREBASE_UID: ${{ secrets.FIREBASE_UID }}
+
