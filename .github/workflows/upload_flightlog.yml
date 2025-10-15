@@ -1,0 +1,16 @@
+jobs:
+  upload-flightlog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Node.js 설치
+        uses: actions/setup-node@v3
+        with:
+          node-version: "20"
+      - name: 종속성 설치
+        run: npm install
+      - name: Firestore 업로드
+        run: node SaveToFlightlog.js ./my_flightlog.csv
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          FIREBASE_UID: ${{ secrets.FIREBASE_UID }}
