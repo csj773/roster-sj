@@ -10,19 +10,22 @@
   "scripts": {
     "start": "node server.js",
     "update-roster": "node -r dotenv/config roster.js",
-    "build": "npm ci"
+    "build": "npm ci",
+    "upload-flightlog": "node SaveToFlightlog.js ./my_flightlog.csv"
   },
   "dependencies": {
     "body-parser": "^2.2.0",
+    "cors": "^2.8.5",
     "csv-parse": "^5.4.0",
+    "csv-parser": "^3.0.0",
+    "dayjs": "^1.12.7",
     "dotenv": "^16.6.1",
     "express": "^5.1.0",
-    "cors": "^2.8.5",
-    "helmet": "^7.0.0",
     "express-rate-limit": "^7.1.0",
-    "node-fetch": "^3.3.2",
     "firebase-admin": "^13.5.0",
     "googleapis": "^131.0.0",
+    "helmet": "^7.0.0",
+    "node-fetch": "^3.3.2",
     "puppeteer": "^24.19.0"
   },
   "keywords": [
@@ -34,3 +37,4 @@
   "author": "SJ",
   "license": "MIT"
 }
+
