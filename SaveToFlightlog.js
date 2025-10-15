@@ -41,7 +41,7 @@ if (!csvFile) {
   process.exit(1);
 }
 
-console.log("🚀 Roster Firestore 업로드 시작");
+console.log("🚀 Flightlog Firestore 업로드 시작");
 console.log(`📄 CSV 파일 발견: ${csvFile}`);
 
 // CSV 읽기
@@ -57,13 +57,9 @@ fs.createReadStream(csvFile)
 
     const headers = Object.keys(values[0]);
 
-    const QUICK_DESTS = ["NRT", "HKG", "DAC"];
-
     function resolveDateRaw(i, row) {
       if (row.Date && row.Date.trim()) return row.Date;
       const prevRow = i > 0 ? values[i - 1] : null;
-      if (prevRow && QUICK_DESTS.includes(row.From) && prevRow[9] === row.From && prevRow[6] === "ICN")
-        return prevRow[0];
       const prevDate = prevRow ? prevRow[0] : "";
       const nextDate = i < values.length - 1 ? values[i + 1][0] : "";
       return prevDate || nextDate || "";
@@ -117,8 +113,9 @@ fs.createReadStream(csvFile)
       await uploadDoc(docData, i + 1);
     }
 
-    console.log("✅ Roster Firestore 업로드 완료");
+    console.log("✅ Flightlog Firestore 업로드 완료");
   });
+
 
 
 
