@@ -25,7 +25,6 @@ const FIREBASE_EMAIL = process.env.FIREBASE_EMAIL || "";
 function findCsvFile(filename = "my_flightlog.csv", dir = process.cwd()) {
   const files = fs.readdirSync(dir);
   if (files.includes(filename)) return path.join(dir, filename);
-
   for (const file of files) {
     const fullPath = path.join(dir, file);
     if (fs.statSync(fullPath).isDirectory()) {
@@ -50,22 +49,20 @@ fs.createReadStream(csvFile)
   .pipe(csv())
   .on("data", (data) => rows.push(data))
   .on("end", async () => {
-    if (rows.length === 0) {
+    if (!rows.length) {
       console.error("❌ CSV에 데이터가 없습니다");
       process.exit(1);
     }
     console.log(`📄 CSV ${rows.length}건 로드 완료`);
 
-    // 4. 중복 제거용 Set
     const uniqueSet = new Set();
 
-    // 5. Firestore 업로드
     for (const [i, row] of rows.entries()) {
       try {
-        // CSV Date 그대로 Firestore Timestamp로 사용
+        // CSV Date → Firestore Timestamp
         const flightDate = row.Date ? new Date(row.Date) : new Date();
 
-        // 중복 제거 키: Date-Activity-From-To
+        // 중복 제거: Date-Activity-From-To
         const dupKey = `${row.Date}|${row.Activity || row.FLT}|${row.From}|${row.To}`;
         if (uniqueSet.has(dupKey)) {
           console.log(`⚠️ ${i + 1}행 중복, 건너뜀 (${dupKey})`);
@@ -74,22 +71,24 @@ fs.createReadStream(csvFile)
         uniqueSet.add(dupKey);
 
         const docData = {
-          Date: flightDate, // Firestore Timestamp
+          Date: flightDate,              // Firestore Timestamp
+          DC: row.DC || row["A/C Type"] || "",
           FLT: row.Activity || row.FLT || row["Flight No."] || "",
+          CI: row.CI || "",
+          CO: row.CO || "",
           FROM: row.From || row.FROM || "",
+          STDz: row.StartZ || "",
+          BLK: row.StartL || "",
           TO: row.To || row.TO || "",
-          REG: row["A/C ID"] || row.REG || "",
-          DC: row["A/C Type"] || row.DC || "",
-          BLK: row.BH || "",
+          STAz: row.FinishZ || "",
+          LDG: row.FinishL || 0,
+          BH: row.BH || "",
           PIC: row.PIC || "",
-          Month: dayjs(flightDate).format("MMM"),
-          Year: dayjs(flightDate).format("YYYY"),
           ET: row.BLH || "",
           NT: row.STDz || "",
-          STDz: row["STD(Z)"] || row.STDz || "",
-          STAz: row["STA(Z)"] || row.STAz || "",
-          TKO: Number(row["T/O"] || row.TKO || 0),
-          LDG: Number(row.LDG || 0),
+          P3: row.P3 || "",
+          Month: dayjs(flightDate).format("MMM"),
+          Year: dayjs(flightDate).format("YYYY"),
           owner: FIREBASE_UID,
           Email: FIREBASE_EMAIL,
           uploadedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -104,6 +103,7 @@ fs.createReadStream(csvFile)
 
     console.log("🎯 Firestore 업로드 완료!");
   });
+
 
 
 
