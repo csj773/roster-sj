@@ -35,20 +35,20 @@ fs.createReadStream(csvFile)
         const docData = {
           Date: row.Date || new Date(),
           FLT: row.FLT || row["Flight No."] || "",
-          FROM: row.FROM || row["From"] || "",
-          TO: row.TO || row["To"] || "",
-          REG: row.REG || row["A/C ID"] || "",
-          DC: row.DC || row["A/C Type"] || "",
+          FROM: row.From || row.FROM || "",
+          TO: row.To || row.TO || "",
+          REG: row["A/C ID"] || row.REG || "",
+          DC: row["A/C Type"] || row.DC || "",
           BLK: row.BLH || row["BLK"] || "",
           PIC: row.PIC || "",
           Month: dayjs(row.Date).format("MM"),
           Year: dayjs(row.Date).format("YYYY"),
           ET: parseFloat(row.BLH) || 0,
           NT: parseFloat(row.STDz || 0),
-          STDz: row["STD(Z)"] || "",
-          STAz: row["STA(Z)"] || "",
+          STDz: row["STD(Z)"] || row.STDz || "",
+          STAz: row["STA(Z)"] || row.STAz || "",
           DateString: row.Date || "",
-          TKO: Number(row.TKO || row["T/O"] || 0),
+          TKO: Number(row["T/O"] || row.TKO || 0),
           LDG: Number(row.LDG || 0),
           owner: FIREBASE_UID,
           uploadedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -61,6 +61,7 @@ fs.createReadStream(csvFile)
     }
     console.log("🎯 Firestore 업로드 완료!");
   });
+
 
 
 
