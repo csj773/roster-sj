@@ -62,15 +62,11 @@ fs.createReadStream(csvFile)
     // 5. Firestore 업로드
     for (const [i, row] of rows.entries()) {
       try {
-        // CSV Date → JS Date → Firestore Timestamp
-        let flightDate = row.Date ? new Date(row.Date) : new Date();
-        if (isNaN(flightDate.getTime())) {
-          console.warn(`⚠️ ${row.Date} 날짜 형식 오류, 현재 시간으로 대체`);
-          flightDate = new Date();
-        }
+        // CSV Date 그대로 Firestore Timestamp로 사용
+        const flightDate = row.Date ? new Date(row.Date) : new Date();
 
         // 중복 제거 키: Date-Activity-From-To
-        const dupKey = `${flightDate.toISOString()}|${row.Activity || row.FLT}|${row.From}|${row.To}`;
+        const dupKey = `${row.Date}|${row.Activity || row.FLT}|${row.From}|${row.To}`;
         if (uniqueSet.has(dupKey)) {
           console.log(`⚠️ ${i + 1}행 중복, 건너뜀 (${dupKey})`);
           continue;
@@ -84,12 +80,12 @@ fs.createReadStream(csvFile)
           TO: row.To || row.TO || "",
           REG: row["A/C ID"] || row.REG || "",
           DC: row["A/C Type"] || row.DC || "",
-          BLK: row.BH || "",        // hh:mm 문자열
-          PIC: row.PIC || "",       // hh:mm 문자열
+          BLK: row.BH || "",
+          PIC: row.PIC || "",
           Month: dayjs(flightDate).format("MMM"),
           Year: dayjs(flightDate).format("YYYY"),
-          ET: row.BLH || "",        // hh:mm 문자열
-          NT: row.STDz || "",       // hh:mm 문자열
+          ET: row.BLH || "",
+          NT: row.STDz || "",
           STDz: row["STD(Z)"] || row.STDz || "",
           STAz: row["STA(Z)"] || row.STAz || "",
           TKO: Number(row["T/O"] || row.TKO || 0),
@@ -100,7 +96,7 @@ fs.createReadStream(csvFile)
         };
 
         await db.collection("Flightlog").add(docData);
-        console.log(`✅ ${i + 1}/${rows.length} 저장 완료 (${flightDate.toISOString()} ${docData.FLT})`);
+        console.log(`✅ ${i + 1}/${rows.length} 저장 완료 (${row.Date} ${docData.FLT})`);
       } catch (err) {
         console.error(`❌ ${i + 1}행 오류:`, err.message);
       }
@@ -108,6 +104,7 @@ fs.createReadStream(csvFile)
 
     console.log("🎯 Firestore 업로드 완료!");
   });
+
 
 
 
