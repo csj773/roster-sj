@@ -18,8 +18,8 @@ if (!admin.apps.length)
 const db = admin.firestore();
 const FIREBASE_UID = process.env.FIREBASE_UID || "manual_upload";
 
-const csvFile = process.argv[2];
-if (!csvFile || !fs.existsSync(csvFile)) {
+const csvFile = process.argv[2] || "./my_flightlog.csv";
+if (!fs.existsSync(csvFile)) {
   console.error(`❌ CSV 파일을 찾을 수 없습니다: ${csvFile}`);
   process.exit(1);
 }
@@ -61,6 +61,7 @@ fs.createReadStream(csvFile)
     }
     console.log("🎯 Firestore 업로드 완료!");
   });
+
 
 
 
