@@ -20,7 +20,7 @@ if (!admin.apps.length)
 const db = admin.firestore();
 const FIREBASE_UID = process.env.FIREBASE_UID || "manual_upload";
 
-// 2. CSV 자동 탐색 (루트 및 1단계 하위 폴더)
+// 2. my_flightlog.csv 자동 탐색 (루트 및 1단계 하위 폴더)
 function findCsvFile(filename = "my_flightlog.csv", dir = process.cwd()) {
   const files = fs.readdirSync(dir);
   if (files.includes(filename)) return path.join(dir, filename);
@@ -32,6 +32,7 @@ function findCsvFile(filename = "my_flightlog.csv", dir = process.cwd()) {
       if (nestedFiles.includes(filename)) return path.join(fullPath, filename);
     }
   }
+
   return null;
 }
 
@@ -59,9 +60,8 @@ fs.createReadStream(csvFile)
     for (const [i, row] of rows.entries()) {
       try {
         const docData = {
-          // FLT: Activity 우선, 없으면 Flt 또는 Flight No.
-          FLT: row.Activity || row.FLT || row["Flight No."] || row.DC || "",
           Date: row.Date || new Date(),
+          FLT: row.FLT || row["Flight No."] || "",
           FROM: row.From || row.FROM || "",
           TO: row.To || row.TO || "",
           REG: row["A/C ID"] || row.REG || "",
@@ -74,22 +74,20 @@ fs.createReadStream(csvFile)
           NT: parseFloat(row.STDz || 0),
           STDz: row["STD(Z)"] || row.STDz || "",
           STAz: row["STA(Z)"] || row.STAz || "",
+          DateString: row.Date || "",
           TKO: Number(row["T/O"] || row.TKO || 0),
           LDG: Number(row.LDG || 0),
           owner: FIREBASE_UID,
           uploadedAt: admin.firestore.FieldValue.serverTimestamp(),
         };
-
         await db.collection("Flightlog").add(docData);
-        console.log(`✅ ${i + 1}/${rows.length} 저장 완료 (${row.Date} ${docData.FLT})`);
+        console.log(`✅ ${i + 1}/${rows.length} 저장 완료 (${row.Date} ${row.FLT})`);
       } catch (err) {
         console.error(`❌ ${i + 1}행 오류:`, err.message);
       }
     }
-
     console.log("🎯 Firestore 업로드 완료!");
   });
-
 
 
 
