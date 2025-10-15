@@ -1,7 +1,7 @@
 name: Upload Flightlog from Repo
 
 on:
-  workflow_dispatch:  # 수동 실행
+  workflow_dispatch:
 
 jobs:
   upload-flightlog:
@@ -16,23 +16,22 @@ jobs:
           node-version: "20"
 
       - name: Install dependencies
-        run: npm install
+        run: npm install csv-parser firebase-admin dayjs
 
-      - name: Check CSV file
+      - name: Debug directory & CSV
         run: |
-          if [ -f "./my_flightlog.csv" ]; then
-            echo "✅ my_flightlog.csv 파일 존재"
-            head -n 5 ./my_flightlog.csv
-          else
-            echo "❌ my_flightlog.csv 파일 없음"
-            exit 1
-          fi
+          echo "📂 현재 디렉터리: $(pwd)"
+          echo "📄 파일 목록:"
+          ls -al
+          echo "📂 하위 디렉터리에서 my_flightlog.csv 탐색:"
+          find . -type f -name "my_flightlog.csv"
 
-      - name: Upload CSV to Firestore
-        run: node SaveToFlightlog.js ./my_flightlog.csv
+      - name: Upload my_flightlog.csv to Firestore
+        run: node SaveToFlightlog.js
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_UID: ${{ secrets.FIREBASE_UID }}
+
 
 
 
