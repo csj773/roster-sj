@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       file-path:
-        description: '업로드할 CSV 파일 경로'
+        description: '업로드할 CSV 파일 경로 (예: ./my_flightlog.csv)'
         required: true
         default: './my_flightlog.csv'
 
@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v3
 
       - name: Setup Node.js
@@ -25,23 +25,12 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Upload CSV artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: flightlog-csv
-          path: ${{ github.event.inputs.file-path }}
-
-      - name: Download CSV artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: flightlog-csv
-          path: ./downloads
-
-      - name: Upload to Firestore
-        run: node scripts/SaveToFlightlog.js ./downloads/$(basename ${{ github.event.inputs.file-path }})
+      - name: Upload CSV to Firestore
+        run: node scripts/SaveToFlightlog.js ${{ github.event.inputs.file-path }}
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_UID: ${{ secrets.FIREBASE_UID }}
+
 
 
 
