@@ -19,7 +19,7 @@ if (!admin.apps.length)
 
 const db = admin.firestore();
 const FIREBASE_UID = process.env.FIREBASE_UID || "manual_upload";
-const FIREBASE_EMAIL = process.env.FIREBASE_EMAIL || ""; // FlutterFlow Email
+const FIREBASE_EMAIL = process.env.FIREBASE_EMAIL || "";
 
 // 2. CSV 자동 탐색 (루트 및 1단계 하위 폴더)
 function findCsvFile(filename = "my_flightlog.csv", dir = process.cwd()) {
@@ -62,40 +62,40 @@ fs.createReadStream(csvFile)
     // 5. Firestore 업로드
     for (const [i, row] of rows.entries()) {
       try {
-        // CSV Date → Firestore Timestamp(Date 타입)
+        // CSV Date → JS Date → Firestore Timestamp
         let flightDate = row.Date ? new Date(row.Date) : new Date();
         if (isNaN(flightDate.getTime())) {
-          console.warn(`⚠️ ${row.Date} 날짜 형식이 올바르지 않아 현재 시간으로 대체합니다.`);
+          console.warn(`⚠️ ${row.Date} 날짜 형식 오류, 현재 시간으로 대체`);
           flightDate = new Date();
         }
 
-        // 중복 키 생성: Date-Activity-From-To
+        // 중복 제거 키: Date-Activity-From-To
         const dupKey = `${flightDate.toISOString()}|${row.Activity || row.FLT}|${row.From}|${row.To}`;
         if (uniqueSet.has(dupKey)) {
-          console.log(`⚠️ ${i + 1}행 중복으로 건너뜀 (${dupKey})`);
+          console.log(`⚠️ ${i + 1}행 중복, 건너뜀 (${dupKey})`);
           continue;
         }
         uniqueSet.add(dupKey);
 
         const docData = {
           Date: flightDate, // Firestore Timestamp
-          FLT: row.Activity || row.FLT || row["Flight No."] || row.DC || "",
+          FLT: row.Activity || row.FLT || row["Flight No."] || "",
           FROM: row.From || row.FROM || "",
           TO: row.To || row.TO || "",
           REG: row["A/C ID"] || row.REG || "",
           DC: row["A/C Type"] || row.DC || "",
-          BLK: row.BH || "",          // hh:mm 문자열
-          PIC: row.PIC || "",         // hh:mm 문자열
-          Month: dayjs(flightDate).format("MMM"), // "Jan" ~ "Dec"
+          BLK: row.BH || "",        // hh:mm 문자열
+          PIC: row.PIC || "",       // hh:mm 문자열
+          Month: dayjs(flightDate).format("MMM"),
           Year: dayjs(flightDate).format("YYYY"),
-          ET: row.BLH || "",          // hh:mm 문자열
-          NT: row.STDz || "",         // hh:mm 문자열
+          ET: row.BLH || "",        // hh:mm 문자열
+          NT: row.STDz || "",       // hh:mm 문자열
           STDz: row["STD(Z)"] || row.STDz || "",
           STAz: row["STA(Z)"] || row.STAz || "",
           TKO: Number(row["T/O"] || row.TKO || 0),
           LDG: Number(row.LDG || 0),
-          owner: FIREBASE_UID,        // FlutterFlow UID
-          Email: FIREBASE_EMAIL,      // FlutterFlow Email
+          owner: FIREBASE_UID,
+          Email: FIREBASE_EMAIL,
           uploadedAt: admin.firestore.FieldValue.serverTimestamp(),
         };
 
@@ -108,6 +108,7 @@ fs.createReadStream(csvFile)
 
     console.log("🎯 Firestore 업로드 완료!");
   });
+
 
 
 
