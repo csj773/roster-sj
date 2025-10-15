@@ -13,20 +13,32 @@ jobs:
     name: Upload Flightlog
     runs-on: ubuntu-latest
     steps:
+      # 1. Checkout repo
       - name: Checkout repository
         uses: actions/checkout@v3
 
+      # 2. Setup Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: "20"
+          node-version: '20'
 
+      # 3. Install dependencies
       - name: Install dependencies
         run: npm install
 
-      - name: Upload to Firestore
+      # 4. Verify required modules
+      - name: Verify Node modules
+        run: |
+          node -e "import 'csv-parser'; console.log('csv-parser OK')"
+          node -e "import 'firebase-admin'; console.log('firebase-admin OK')"
+          node -e "import 'dayjs'; console.log('dayjs OK')"
+
+      # 5. Run CSV → Firestore upload
+      - name: Upload CSV to Firestore
         run: node SaveToFlightlog.js ${{ github.event.inputs['file-path'] }}
         env:
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
           FIREBASE_UID: ${{ secrets.FIREBASE_UID }}
+
 
