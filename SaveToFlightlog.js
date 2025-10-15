@@ -68,12 +68,12 @@ fs.createReadStream(csvFile)
           TO: row.To || row.TO || "",
           REG: row["A/C ID"] || row.REG || "",
           DC: row["A/C Type"] || row.DC || "",
-          BLK: parseFloat(row.BLH || 0),
-          PIC: row.PIC || "",
-          Month: dayjs(flightDate).format("MM"),
+          BLK: row.BH || "",          // hh:mm 문자열
+          PIC: row.PIC || "",         // hh:mm 문자열
+          Month: dayjs(flightDate).format("MMM"), // "Jan" ~ "Dec"
           Year: dayjs(flightDate).format("YYYY"),
-          ET: parseFloat(row.BLH || 0),
-          NT: parseFloat(row.STDz || 0),
+          ET: row.BLH || "",          // hh:mm 문자열
+          NT: row.STDz || "",         // hh:mm 문자열
           STDz: row["STD(Z)"] || row.STDz || "",
           STAz: row["STA(Z)"] || row.STAz || "",
           TKO: Number(row["T/O"] || row.TKO || 0),
@@ -91,6 +91,7 @@ fs.createReadStream(csvFile)
 
     console.log("🎯 Firestore 업로드 완료!");
   });
+
 
 
 
