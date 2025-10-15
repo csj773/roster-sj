@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       csv-content:
-        description: '업로드할 CSV 파일 내용 (작은 CSV용)'
+        description: '업로드할 CSV 내용 (작은 CSV 파일용, 첫 줄에 헤더 포함)'
         required: true
 
 jobs:
@@ -22,15 +22,22 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Show CSV content (for debug)
+        run: |
+          echo "===== CSV START ====="
+          echo "${{ github.event.inputs.csv-content }}"
+          echo "===== CSV END ====="
+
       - name: Save CSV to temporary file
         run: |
-          echo "${{ github.event.inputs.csv-content }}" > temp_flightlog.csv
+          printf "%s" "${{ github.event.inputs.csv-content }}" > temp_flightlog.csv
 
       - name: Upload CSV to Firestore
         run: node SaveToFlightlog.js temp_flightlog.csv
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_UID: ${{ secrets.FIREBASE_UID }}
+
 
 
 
