@@ -1,8 +1,10 @@
 import fs from "fs";
+import path from "path";
 import csv from "csv-parser";
 import admin from "firebase-admin";
 import dayjs from "dayjs";
 
+// 1. Firebase 서비스 계정 확인
 if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
   console.error("❌ FIREBASE_SERVICE_ACCOUNT Secret이 없습니다.");
   process.exit(1);
@@ -18,18 +20,43 @@ if (!admin.apps.length)
 const db = admin.firestore();
 const FIREBASE_UID = process.env.FIREBASE_UID || "manual_upload";
 
-const csvFile = process.argv[2] || "./my_flightlog.csv";
-if (!fs.existsSync(csvFile)) {
-  console.error(`❌ CSV 파일을 찾을 수 없습니다: ${csvFile}`);
+// 2. my_flightlog.csv 자동 탐색 (루트 및 1단계 하위 폴더)
+function findCsvFile(filename = "my_flightlog.csv", dir = process.cwd()) {
+  const files = fs.readdirSync(dir);
+  if (files.includes(filename)) return path.join(dir, filename);
+
+  for (const file of files) {
+    const fullPath = path.join(dir, file);
+    if (fs.statSync(fullPath).isDirectory()) {
+      const nestedFiles = fs.readdirSync(fullPath);
+      if (nestedFiles.includes(filename)) return path.join(fullPath, filename);
+    }
+  }
+
+  return null;
+}
+
+const csvFile = process.argv[2] || findCsvFile();
+if (!csvFile) {
+  console.error("❌ my_flightlog.csv 파일을 찾을 수 없습니다.");
   process.exit(1);
 }
 
+console.log(`📄 CSV 파일 발견: ${csvFile}`);
+
+// 3. CSV 읽기
 const rows = [];
 fs.createReadStream(csvFile)
   .pipe(csv())
-  .on("data", data => rows.push(data))
+  .on("data", (data) => rows.push(data))
   .on("end", async () => {
+    if (rows.length === 0) {
+      console.error("❌ CSV에 데이터가 없습니다");
+      process.exit(1);
+    }
     console.log(`📄 CSV ${rows.length}건 로드 완료`);
+
+    // 4. Firestore 업로드
     for (const [i, row] of rows.entries()) {
       try {
         const docData = {
@@ -39,11 +66,11 @@ fs.createReadStream(csvFile)
           TO: row.To || row.TO || "",
           REG: row["A/C ID"] || row.REG || "",
           DC: row["A/C Type"] || row.DC || "",
-          BLK: row.BLH || row["BLK"] || "",
+          BLK: parseFloat(row.BLH || 0),
           PIC: row.PIC || "",
           Month: dayjs(row.Date).format("MM"),
           Year: dayjs(row.Date).format("YYYY"),
-          ET: parseFloat(row.BLH) || 0,
+          ET: parseFloat(row.BLH || 0),
           NT: parseFloat(row.STDz || 0),
           STDz: row["STD(Z)"] || row.STDz || "",
           STAz: row["STA(Z)"] || row.STAz || "",
@@ -61,6 +88,7 @@ fs.createReadStream(csvFile)
     }
     console.log("🎯 Firestore 업로드 완료!");
   });
+
 
 
 
