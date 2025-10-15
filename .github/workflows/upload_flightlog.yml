@@ -1,4 +1,3 @@
-# .github/workflows/upload-flightlog.yml
 name: Upload Flightlog
 
 on:
@@ -12,9 +11,8 @@ on:
 jobs:
   upload-flightlog:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v3
 
       - name: Setup Node.js
@@ -26,10 +24,11 @@ jobs:
         run: npm install
 
       - name: Upload CSV to Firestore
-        run: node scripts/SaveToFlightlog.js ${{ github.event.inputs.file-path }}
+        run: node SaveToFlightlog.js ${{ github.event.inputs.file-path }}
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_UID: ${{ secrets.FIREBASE_UID }}
+
 
 
 
