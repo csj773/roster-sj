@@ -1,17 +1,17 @@
+# .github/workflows/upload-flightlog.yml
 name: Upload Flightlog
 
 on:
   workflow_dispatch:
     inputs:
       file-path:
-        description: '업로드할 CSV 파일 경로 (예: ./my_flightlog.csv)'
+        description: '업로드할 CSV 파일 경로'
         required: true
         default: './my_flightlog.csv'
 
 jobs:
   upload-flightlog:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -24,11 +24,24 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Upload CSV to Firestore
-        run: node SaveToFlightlog.js ${{ github.event.inputs.file-path }}
+      - name: Upload CSV artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: flightlog-csv
+          path: ${{ github.event.inputs.file-path }}
+
+      - name: Download CSV artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: flightlog-csv
+          path: ./downloads
+
+      - name: Upload to Firestore
+        run: node scripts/SaveToFlightlog.js ./downloads/$(basename ${{ github.event.inputs.file-path }})
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_UID: ${{ secrets.FIREBASE_UID }}
+
 
 
 
