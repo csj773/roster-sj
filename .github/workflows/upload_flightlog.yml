@@ -1,11 +1,7 @@
-name: Upload Flightlog
+name: Upload Flightlog from Repo
 
 on:
-  workflow_dispatch:
-    inputs:
-      csv-content:
-        description: '업로드할 CSV 내용 (작은 CSV용, 첫 줄에 헤더 포함)'
-        required: true
+  workflow_dispatch:  # 수동 실행
 
 jobs:
   upload-flightlog:
@@ -22,21 +18,22 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Show CSV content (debug)
+      - name: Check CSV file
         run: |
-          echo "===== CSV START ====="
-          printf "%s" "${{ github.event.inputs.csv-content }}"
-          echo "===== CSV END ====="
-
-      - name: Save CSV to temporary file
-        run: |
-          printf "%s" "${{ github.event.inputs.csv-content }}" > temp_flightlog.csv
+          if [ -f "./my_flightlog.csv" ]; then
+            echo "✅ my_flightlog.csv 파일 존재"
+            head -n 5 ./my_flightlog.csv
+          else
+            echo "❌ my_flightlog.csv 파일 없음"
+            exit 1
+          fi
 
       - name: Upload CSV to Firestore
-        run: node SaveToFlightlog.js temp_flightlog.csv
+        run: node SaveToFlightlog.js ./my_flightlog.csv
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_UID: ${{ secrets.FIREBASE_UID }}
+
 
 
 
