@@ -12,6 +12,7 @@ on:
 jobs:
   upload-flightlog:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -25,13 +26,13 @@ jobs:
         run: npm install
 
       - name: Upload CSV artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: flightlog-csv
           path: ${{ github.event.inputs.file-path }}
 
       - name: Download CSV artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: flightlog-csv
           path: ./downloads
@@ -41,6 +42,7 @@ jobs:
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_UID: ${{ secrets.FIREBASE_UID }}
+
 
 
 
