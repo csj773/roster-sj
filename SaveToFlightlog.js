@@ -20,7 +20,7 @@ if (!admin.apps.length)
 const db = admin.firestore();
 const FIREBASE_UID = process.env.FIREBASE_UID || "manual_upload";
 
-// 2. CSV 자동 탐색 (루트 및 1단계 하위 폴더)
+// 2. my_flightlog.csv 자동 탐색 (루트 및 1단계 하위 폴더)
 function findCsvFile(filename = "my_flightlog.csv", dir = process.cwd()) {
   const files = fs.readdirSync(dir);
   if (files.includes(filename)) return path.join(dir, filename);
@@ -32,6 +32,7 @@ function findCsvFile(filename = "my_flightlog.csv", dir = process.cwd()) {
       if (nestedFiles.includes(filename)) return path.join(fullPath, filename);
     }
   }
+
   return null;
 }
 
@@ -55,55 +56,36 @@ fs.createReadStream(csvFile)
     }
     console.log(`📄 CSV ${rows.length}건 로드 완료`);
 
-    // 4. 중복 제거용 Set
-    const uniqueSet = new Set();
-
-    // 5. Firestore 업로드
+    // 4. Firestore 업로드
     for (const [i, row] of rows.entries()) {
       try {
-        // CSV Date → Firestore Timestamp(Date 타입)
-        let flightDate = row.Date ? new Date(row.Date) : new Date();
-        if (isNaN(flightDate.getTime())) {
-          console.warn(`⚠️ ${row.Date} 날짜 형식이 올바르지 않아 현재 시간으로 대체합니다.`);
-          flightDate = new Date();
-        }
-
-        // 중복 키 생성: Date-Activity-From-To
-        const dupKey = `${flightDate.toISOString()}|${row.Activity || row.FLT}|${row.From}|${row.To}`;
-        if (uniqueSet.has(dupKey)) {
-          console.log(`⚠️ ${i + 1}행 중복으로 건너뜀 (${dupKey})`);
-          continue;
-        }
-        uniqueSet.add(dupKey);
-
         const docData = {
-          Date: flightDate, // Firestore Timestamp
-          FLT: row.Activity || row.FLT || row["Flight No."] || row.DC || "",
+          Date: row.Date || new Date(),
+          FLT: row.FLT || row["Flight No."] || "",
           FROM: row.From || row.FROM || "",
           TO: row.To || row.TO || "",
           REG: row["A/C ID"] || row.REG || "",
           DC: row["A/C Type"] || row.DC || "",
-          BLK: row.BH || "",          // hh:mm 문자열
-          PIC: row.PIC || "",         // hh:mm 문자열
-          Month: dayjs(flightDate).format("MMM"), // "Jan" ~ "Dec"
-          Year: dayjs(flightDate).format("YYYY"),
-          ET: row.BLH || "",          // hh:mm 문자열
-          NT: row.STDz || "",         // hh:mm 문자열
+          BLK: parseFloat(row.BLH || 0),
+          PIC: row.PIC || "",
+          Month: dayjs(row.Date).format("MM"),
+          Year: dayjs(row.Date).format("YYYY"),
+          ET: parseFloat(row.BLH || 0),
+          NT: parseFloat(row.STDz || 0),
           STDz: row["STD(Z)"] || row.STDz || "",
           STAz: row["STA(Z)"] || row.STAz || "",
+          DateString: row.Date || "",
           TKO: Number(row["T/O"] || row.TKO || 0),
           LDG: Number(row.LDG || 0),
           owner: FIREBASE_UID,
           uploadedAt: admin.firestore.FieldValue.serverTimestamp(),
         };
-
         await db.collection("Flightlog").add(docData);
-        console.log(`✅ ${i + 1}/${rows.length} 저장 완료 (${flightDate.toISOString()} ${docData.FLT})`);
+        console.log(`✅ ${i + 1}/${rows.length} 저장 완료 (${row.Date} ${row.FLT})`);
       } catch (err) {
         console.error(`❌ ${i + 1}행 오류:`, err.message);
       }
     }
-
     console.log("🎯 Firestore 업로드 완료!");
   });
 
