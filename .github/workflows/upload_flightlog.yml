@@ -3,10 +3,9 @@ name: Upload Flightlog
 on:
   workflow_dispatch:
     inputs:
-      file-path:
-        description: '업로드할 CSV 파일 경로 (repo 기준, 예: ./my_flightlog.csv)'
+      csv-content:
+        description: '업로드할 CSV 파일 내용 (작은 CSV용)'
         required: true
-        default: './my_flightlog.csv'
 
 jobs:
   upload-flightlog:
@@ -23,11 +22,16 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Save CSV to temporary file
+        run: |
+          echo "${{ github.event.inputs.csv-content }}" > temp_flightlog.csv
+
       - name: Upload CSV to Firestore
-        run: node SaveToFlightlog.js ${{ github.event.inputs.file-path }}
+        run: node SaveToFlightlog.js temp_flightlog.csv
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_UID: ${{ secrets.FIREBASE_UID }}
+
 
 
 
