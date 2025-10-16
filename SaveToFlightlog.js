@@ -21,6 +21,7 @@ const db = admin.firestore();
 
 // 🔸 GitHub Secrets 환경변수 사용
 const FIREBASE_UID = process.env.FIREBASE_UID || "manual_upload";
+const FIREBASE_EMAIL = process.env.FIREBASE_EMAIL || "unknown@manual";
 
 // 2️⃣ CSV 자동 탐색
 function findCsvFile(filename = "my_flightlog.csv", dir = process.cwd()) {
@@ -70,7 +71,7 @@ fs.createReadStream(csvFile)
 
         // ✅ Firestore 저장 데이터 매핑
         const docData = {
-          Date: flightDate, // Timestamp
+          Date: flightDate,
           FLT: row.Activity || row.FLT || row["Flight No."] || "",
           FROM: row.From || row.FROM || "",
           TO: row.To || row.TO || "",
@@ -83,7 +84,7 @@ fs.createReadStream(csvFile)
           ET: row.ET || "00:00",
           NT: row.NT || "00:00",
 
-          // 🔸 시간 필드는 string 그대로
+          // 🔸 시간 필드는 string 그대로 저장
           STDz: (row.StartZ || row["STD(Z)"] || row.STDz || "").toString().trim(),
           STAz: (row.FinishZ || row["STA(Z)"] || row.STAz || "").toString().trim(),
           StartL: (row.StartL || "").toString().trim(),
@@ -93,9 +94,9 @@ fs.createReadStream(csvFile)
           BH: (row.BH || "").trim(),
           DH: (row.DH || "00:00").trim(),
 
-          // 🔸 사용자 정보 (Secrets의 FIREBASE_UID 사용)
+          // 🔸 사용자 정보
           owner: FIREBASE_UID,
-          email: FIREBASE_UID, // ✅ 동일 UID로 저장
+          email: FIREBASE_EMAIL, // ✅ GitHub Secrets의 FIREBASE_EMAIL 사용
           uploadedAt: admin.firestore.FieldValue.serverTimestamp(),
         };
 
