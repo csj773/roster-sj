@@ -21,7 +21,7 @@ const db = admin.firestore();
 
 // 🔸 GitHub Secrets 환경변수 사용
 const FIREBASE_UID = process.env.FIREBASE_UID || "manual_upload";
-const FIREBASE_EMAIL = process.env.FIREBASE_EMAIL || "unknown@manual";
+const FIXED_EMAIL = "sjchoi787@gmail.com"; // ✅ email 고정
 
 // 2️⃣ CSV 자동 탐색
 function findCsvFile(filename = "my_flightlog.csv", dir = process.cwd()) {
@@ -96,7 +96,7 @@ fs.createReadStream(csvFile)
 
           // 🔸 사용자 정보
           owner: FIREBASE_UID,
-          email: FIREBASE_EMAIL, // ✅ GitHub Secrets의 FIREBASE_EMAIL 사용
+          email: FIXED_EMAIL, // ✅ 고정 이메일 사용
           uploadedAt: admin.firestore.FieldValue.serverTimestamp(),
         };
 
