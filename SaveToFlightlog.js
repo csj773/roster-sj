@@ -19,7 +19,6 @@ if (!admin.apps.length)
 
 const db = admin.firestore();
 const FIREBASE_UID = process.env.FIREBASE_UID || "manual_upload";
-const FLUTTERFLOW_EMAIL = process.env.FLUTTERFLOW_EMAIL || "unknown@manual";
 
 // 2️⃣ CSV 자동 탐색
 function findCsvFile(filename = "my_flightlog.csv", dir = process.cwd()) {
@@ -60,8 +59,6 @@ fs.createReadStream(csvFile)
         // ✅ CSV Date → Firestore Timestamp(Date 타입)
         const csvDateStr = (row.Date || "").trim();
         let flightDate;
-
-        // "08Sep25" → 2025-09-08 변환
         const parsed = dayjs(csvDateStr, "DDMMMYY", "en");
         if (parsed.isValid()) {
           flightDate = parsed.toDate();
@@ -84,11 +81,9 @@ fs.createReadStream(csvFile)
           ET: row.ET || "00:00",
           NT: row.NT || "00:00",
 
-          // 🔸 StartZ, FinishZ는 string으로 그대로 저장
+          // 🔸 시간 필드는 string 그대로
           STDz: (row.StartZ || row["STD(Z)"] || row.STDz || "").toString().trim(),
           STAz: (row.FinishZ || row["STA(Z)"] || row.STAz || "").toString().trim(),
-
-          // 🔸 Local 시간도 string 그대로
           StartL: (row.StartL || "").toString().trim(),
           FinishL: (row.FinishL || "").toString().trim(),
 
@@ -96,8 +91,9 @@ fs.createReadStream(csvFile)
           BH: (row.BH || "").trim(),
           DH: (row.DH || "00:00").trim(),
 
+          // 🔸 사용자 정보
           owner: FIREBASE_UID,
-          email: FLUTTERFLOW_EMAIL,
+          email: FIREBASE_UID, // ✅ userId를 email 필드에 저장
           uploadedAt: admin.firestore.FieldValue.serverTimestamp(),
         };
 
