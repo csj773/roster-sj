@@ -18,7 +18,10 @@ if (!admin.apps.length)
   admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 
 const db = admin.firestore();
+
+// 🔸 GitHub Secrets 환경변수 사용
 const FIREBASE_UID = process.env.FIREBASE_UID || "manual_upload";
+const FLUTTERFLOW_UID = process.env.FLUTTERFLOW_UID || "unknown_uid";
 
 // 2️⃣ CSV 자동 탐색
 function findCsvFile(filename = "my_flightlog.csv", dir = process.cwd()) {
@@ -93,7 +96,7 @@ fs.createReadStream(csvFile)
 
           // 🔸 사용자 정보
           owner: FIREBASE_UID,
-          email: FIREBASE_UID, // ✅ userId를 email 필드에 저장
+          email: FLUTTERFLOW_UID, // ✅ GitHub Secrets의 FLUTTERFLOW_UID 사용
           uploadedAt: admin.firestore.FieldValue.serverTimestamp(),
         };
 
