@@ -21,7 +21,6 @@ const db = admin.firestore();
 
 // 🔸 GitHub Secrets 환경변수 사용
 const FIREBASE_UID = process.env.FIREBASE_UID || "manual_upload";
-const FLUTTERFLOW_UID = process.env.FLUTTERFLOW_UID || "unknown_uid";
 
 // 2️⃣ CSV 자동 탐색
 function findCsvFile(filename = "my_flightlog.csv", dir = process.cwd()) {
@@ -94,9 +93,9 @@ fs.createReadStream(csvFile)
           BH: (row.BH || "").trim(),
           DH: (row.DH || "00:00").trim(),
 
-          // 🔸 사용자 정보
+          // 🔸 사용자 정보 (Secrets의 FIREBASE_UID 사용)
           owner: FIREBASE_UID,
-          email: FLUTTERFLOW_UID, // ✅ GitHub Secrets의 FLUTTERFLOW_UID 사용
+          email: FIREBASE_UID, // ✅ 동일 UID로 저장
           uploadedAt: admin.firestore.FieldValue.serverTimestamp(),
         };
 
