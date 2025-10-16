@@ -4,7 +4,7 @@ import csv from "csv-parser";
 import admin from "firebase-admin";
 import dayjs from "dayjs";
 
-// 1️⃣ Firebase 서비스 계정
+// 1️⃣ Firebase 서비스 계정 불러오기
 if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
   console.error("❌ FIREBASE_SERVICE_ACCOUNT Secret이 없습니다.");
   process.exit(1);
@@ -59,26 +59,43 @@ fs.createReadStream(csvFile)
       try {
         // ✅ CSV Date → Firestore Timestamp(Date 타입)
         const csvDateStr = (row.Date || "").trim();
-        const flightDate = csvDateStr
-          ? new Date(`${csvDateStr}T00:00:00Z`)
-          : new Date();
+        let flightDate;
+
+        // "08Sep25" → 2025-09-08 변환
+        const parsed = dayjs(csvDateStr, "DDMMMYY", "en");
+        if (parsed.isValid()) {
+          flightDate = parsed.toDate();
+        } else {
+          flightDate = new Date(); // fallback
+        }
 
         // ✅ Firestore 저장 데이터 매핑
         const docData = {
           Date: flightDate, // Timestamp
-          FLT: row.Activity || row.FLT || row["Flight No."] || "", // Activity → FLT
+          FLT: row.Activity || row.FLT || row["Flight No."] || "",
           FROM: row.From || row.FROM || "",
           TO: row.To || row.TO || "",
           REG: row["A/C ID"] || row.REG || "",
           DC: row["A/C Type"] || row.DC || "",
-          BLK: row.BH || "00:00", // hh:mm
+          BLK: row.BH || row.BLK || "00:00",
           PIC: row.PIC || "",
-          Month: dayjs(flightDate).format("MMM"), // e.g. Oct
+          Month: dayjs(flightDate).format("MMM"),
           Year: dayjs(flightDate).format("YYYY"),
           ET: row.ET || "00:00",
           NT: row.NT || "00:00",
-          STDz: row["StartZ"] || row["STD(Z)"] || row.STDz || "",
-          STAz: row["FinishZ"] || row["STA(Z)"] || row.STAz || "",
+
+          // 🔸 StartZ, FinishZ는 string으로 그대로 저장
+          STDz: (row.StartZ || row["STD(Z)"] || row.STDz || "").toString().trim(),
+          STAz: (row.FinishZ || row["STA(Z)"] || row.STAz || "").toString().trim(),
+
+          // 🔸 Local 시간도 string 그대로
+          StartL: (row.StartL || "").toString().trim(),
+          FinishL: (row.FinishL || "").toString().trim(),
+
+          // 🔸 Block / Deadhead
+          BH: (row.BH || "").trim(),
+          DH: (row.DH || "00:00").trim(),
+
           owner: FIREBASE_UID,
           email: FLUTTERFLOW_EMAIL,
           uploadedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -95,48 +112,17 @@ fs.createReadStream(csvFile)
 
         if (!dupQuery.empty) {
           console.log(`⚠️ 중복 데이터 발견 → 기존 문서 삭제 (${docData.FLT} ${csvDateStr})`);
-          for (const d of dupQuery.docs) await db.collection("Flightlog").doc(d.id).delete();
+          for (const d of dupQuery.docs) {
+            await db.collection("Flightlog").doc(d.id).delete();
+          }
         }
 
         await db.collection("Flightlog").add(docData);
         console.log(`✅ ${i + 1}/${rows.length} 저장 완료 (${csvDateStr} ${docData.FLT})`);
       } catch (err) {
-        console.error(`❌ ${i + 1}행 오류:`, err.message);
+        console.error(`❌ ${i + 1}행 오류: ${err.message}`);
       }
     }
 
     console.log("🎯 Firestore Flightlog 업로드 완료!");
   });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
