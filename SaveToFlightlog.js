@@ -4,12 +4,14 @@ import csv from "csv-parser";
 import admin from "firebase-admin";
 import dayjs from "dayjs";
 
-// ------------------- ET/NT 계산 유틸 -------------------
+// ------------------- ET/NT 계산 유틸 (패치됨) -------------------
 
 // 문자열 → 시간 변환
 function blhStrToHour(str) {
   if (!str) return 0;
   let h = 0, m = 0;
+  if (typeof str !== "string") str = String(str);
+  str = str.trim();
   if (str.includes(":")) {
     [h, m] = str.split(":").map(Number);
   } else if (/^\d{3,4}$/.test(str)) {
@@ -20,62 +22,111 @@ function blhStrToHour(str) {
       h = Number(str.slice(0, 2));
       m = Number(str.slice(2, 4));
     }
+  } else if (/^\d+(\.\d+)?$/.test(str)) {
+    // already decimal hours
+    return Number(str);
+  } else {
+    return 0;
   }
+  if (Number.isNaN(h)) h = 0;
+  if (Number.isNaN(m)) m = 0;
   return h + m / 60;
 }
 
 // 시간 → 문자열 변환
 function hourToTimeStr(hour) {
+  if (hour == null || Number.isNaN(hour)) return "00:00";
   const h = Math.floor(hour);
   let m = Math.round((hour - h) * 60);
   if (m === 60) return hourToTimeStr(h + 1);
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-// ET 계산
+// ET 계산 (변경 없음)
 function calculateET(blhStr) {
   const blh = blhStrToHour(blhStr);
   return blh > 8 ? hourToTimeStr(blh - 8) : "00:00";
 }
 
-// NT 계산
+/*
+  NT 계산 (개선)
+  - stdZ, staZ 형식 안정 파싱: ex "1744", "1744+1", "1744-1"
+  - UTC 기준 Date 객체 구성
+  - 각 날짜별로 Night window (13:00-21:00 UTC)와의 겹침만 합산
+  - 총합을 블록시간(BLH)과 8시간 중 작은 값으로 cap
+*/
+function parseTimeWithOffset(t) {
+  // returns { hh, mm, offsetDays }
+  if (!t || typeof t !== "string") return null;
+  const m = t.trim().match(/^(\d{2})(\d{2})([+-]\d)?$/);
+  if (!m) {
+    // try to extract digits and trailing +1/-1 anywhere
+    const digits = (t.match(/(\d{3,4})/) || [null])[0];
+    const ofs = (t.match(/([+-]\d+)/) || [null])[0];
+    if (!digits) return null;
+    const dd = digits.length === 3 ? [digits[0], digits.slice(1)] : [digits.slice(0,2), digits.slice(2)];
+    const hh = Number(dd[0]), mm = Number(dd[1]);
+    const offsetDays = ofs ? Number(ofs) : 0;
+    return { hh, mm, offsetDays };
+  }
+  const hh = Number(m[1]), mm = Number(m[2]), offsetDays = m[3] ? Number(m[3]) : 0;
+  return { hh, mm, offsetDays };
+}
+
 function calculateNTFromSTDSTA(stdZ, staZ, flightDate, blhStr) {
+  // 안전성: 빈값 처리
   if (!stdZ || !staZ) return "00:00";
+  const pStd = parseTimeWithOffset(stdZ);
+  const pSta = parseTimeWithOffset(staZ);
+  if (!pStd || !pSta) return "00:00";
 
-  let stdDate = new Date(flightDate);
-  let stdH = Number(stdZ.slice(0, 2));
-  let stdM = Number(stdZ.slice(2, 4));
-  stdDate.setUTCHours(stdH, stdM, 0, 0);
-  if (stdZ.includes("+1")) stdDate.setUTCDate(stdDate.getUTCDate() + 1);
-  if (stdZ.includes("-1")) stdDate.setUTCDate(stdDate.getUTCDate() - 1);
+  // Build UTC Date objects based on flightDate's Y-M-D (we treat flightDate as local date origin,
+  // but we'll set UTC hours directly so we operate in UTC consistently)
+  const y = flightDate.getUTCFullYear();
+  const m = flightDate.getUTCMonth();
+  const d = flightDate.getUTCDate();
 
-  let staDate = new Date(flightDate);
-  let staH = Number(staZ.slice(0, 2));
-  let staM = Number(staZ.slice(2, 4));
-  staDate.setUTCHours(staH, staM, 0, 0);
-  if (staZ.includes("+1")) staDate.setUTCDate(staDate.getUTCDate() + 1);
-  if (staZ.includes("-1")) staDate.setUTCDate(staDate.getUTCDate() - 1);
+  const stdDate = new Date(Date.UTC(y, m, d, pStd.hh, pStd.mm, 0));
+  if (pStd.offsetDays) stdDate.setUTCDate(stdDate.getUTCDate() + pStd.offsetDays);
 
-  let totalNT = 0;
-  let cursor = new Date(stdDate);
+  const staDate = new Date(Date.UTC(y, m, d, pSta.hh, pSta.mm, 0));
+  if (pSta.offsetDays) staDate.setUTCDate(staDate.getUTCDate() + pSta.offsetDays);
 
-  while (cursor < staDate) {
-    const ntStart = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate(), 13, 0, 0));
-    const ntEnd = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate(), 21, 0, 0));
-
-    const overlapStart = new Date(Math.max(stdDate, ntStart));
-    const overlapEnd = new Date(Math.min(staDate, ntEnd));
-
-    if (overlapStart < overlapEnd) totalNT += (overlapEnd - overlapStart) / 1000 / 3600;
-
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
-    cursor.setUTCHours(0, 0, 0, 0);
+  // If staDate < stdDate (shouldn't happen normally), swap or adjust by adding a day to staDate
+  if (staDate < stdDate) {
+    // assume arrival is next day if earlier than departure time
+    staDate.setUTCDate(staDate.getUTCDate() + 1);
   }
 
-  const blhHour = blhStr ? blhStrToHour(blhStr) : null;
-  if (blhHour !== null && totalNT > blhHour) totalNT = blhHour;
+  // Night window per day: UTC 13:00 -> 21:00
+  // Iterate days from floor(stdDate) to floor(staDate) inclusive
+  const startDay = new Date(Date.UTC(stdDate.getUTCFullYear(), stdDate.getUTCMonth(), stdDate.getUTCDate(), 0,0,0));
+  const endDay = new Date(Date.UTC(staDate.getUTCFullYear(), staDate.getUTCMonth(), staDate.getUTCDate(), 0,0,0));
 
-  return hourToTimeStr(totalNT);
+  let cursor = new Date(startDay);
+  let totalNT = 0;
+
+  while (cursor <= endDay) {
+    const ntWindowStart = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate(), 13, 0, 0));
+    const ntWindowEnd   = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate(), 21, 0, 0));
+
+    const overlapStart = new Date(Math.max(stdDate.getTime(), ntWindowStart.getTime()));
+    const overlapEnd   = new Date(Math.min(staDate.getTime(), ntWindowEnd.getTime()));
+
+    if (overlapStart < overlapEnd) {
+      totalNT += (overlapEnd - overlapStart) / 1000 / 3600;
+    }
+
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+
+  // BLH cap and absolute 8-hour cap
+  const blhHour = (blhStr != null && blhStr !== "") ? blhStrToHour(blhStr) : null;
+  const capByBlh = (blhHour != null && !Number.isNaN(blhHour) && blhHour > 0) ? blhHour : Infinity;
+  const absoluteCap = 8; // 8 hours maximum as requested
+  const finalNT = Math.min(totalNT, capByBlh, absoluteCap);
+
+  return hourToTimeStr(finalNT);
 }
 
 // ------------------- Firebase 초기화 -------------------
@@ -117,6 +168,7 @@ if (!csvFile) {
   console.error("❌ my_flightlog.csv 파일을 찾을 수 없습니다.");
   process.exit(1);
 }
+
 console.log(`📄 CSV 파일 발견: ${csvFile}`);
 
 // ------------------- CSV 읽기 및 Firestore 업로드 -------------------
@@ -137,7 +189,7 @@ fs.createReadStream(csvFile)
         const parsed = dayjs(csvDateStr, "DDMMMYY", "en");
         const flightDate = parsed.isValid() ? parsed.toDate() : new Date();
 
-        // 🔹 NT / ET 계산 적용
+        // 🔹 NT / ET 계산 적용 (패치된 함수 사용)
         const blk = (row.BH || row.BLK || "00:00").trim();
         const stdZ = (row.StartZ || row["STD(Z)"] || row.STDz || "").toString().trim();
         const staZ = (row.FinishZ || row["STA(Z)"] || row.STAz || "").toString().trim();
