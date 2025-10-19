@@ -178,7 +178,8 @@ console.log("✅ UID 및 Config 로드 완료");
     docData.userId = flutterflowUid || "";
     docData.adminId = firestoreAdminUid || "";
     docData.pdc_user_name = username || "";
-    docData.email = process.env.INPUT_USER_ID || process.env.USER_ID || "";
+     // ✅ GitHub Actions secrets의 USER_ID 사용
+    docData.email = process.env.USER_ID || "";
     
     if(!docData.Activity || docData.Activity.trim()==="") return null;
 
