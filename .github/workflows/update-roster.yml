@@ -40,21 +40,13 @@ jobs:
           USER_ID: ${{ secrets.USER_ID }}
         run: node -r dotenv/config roster.js
 
-      # 5. PerDiem 계산 및 CSV 저장
-      - name: Generate & Save PerDiem CSV
-        run: |
-          node -r dotenv/config scripts/generatePerDiem.js
-          node -r dotenv/config scripts/savePerDiemCSV.js
+      # 5. PerDiem 계산 및 CSV 저장 + Firestore 업로드
+      - name: Generate PerDiem & Upload to Firestore
+        run: node -r dotenv/config perdiem.js
         env:
           firestoreAdminUid: ${{ secrets.FIRESTORE_ADMIN_UID }}
 
-      # 6. Firestore 업로드
-      - name: Upload PerDiem to Firestore
-        run: node -r dotenv/config scripts/uploadPerDiemFirestore.js
-        env:
-          firestoreAdminUid: ${{ secrets.FIRESTORE_ADMIN_UID }}
-
-      # 7. roster.json, roster.csv, perdiem.csv 커밋/푸시
+      # 6. roster.json, roster.csv, perdiem.csv 커밋/푸시
       - name: Commit & Push JSON/CSV
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
@@ -63,7 +55,7 @@ jobs:
           git commit -m "Update roster & PerDiem data" || echo "No changes to commit"
           git push
 
-      # 8. gcal.js 실행 (Google Calendar 업데이트)
+      # 7. gcal.js 실행 (Google Calendar 업데이트)
       - name: Run gcal.js
         env:
           GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
