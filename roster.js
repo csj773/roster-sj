@@ -155,66 +155,88 @@ console.log("✅ UID 및 Config 로드 완료");
   console.log("✅ PerDiem 처리 완료");
 
   // ------------------- Roster Firestore 업로드 -------------------
-  console.log("🚀 Roster Firestore 업로드 시작");
+console.log("🚀 Roster Firestore 업로드 시작");
 
-  const headerMapFirestore = { "C/I(L)":"CIL", "C/O(L)":"COL", "STD(L)":"STDL", "STD(Z)":"STDZ", "STA(L)":"STAL", "STA(Z)":"STAZ" };
-  const QUICK_DESTS = ["NRT","HKG","DAC"];
+const headerMapFirestore = { "C/I(L)":"CIL", "C/O(L)":"COL", "STD(L)":"STDL", "STD(Z)":"STDZ", "STA(L)":"STAL", "STA(Z)":"STAZ" };
+const QUICK_DESTS = ["NRT","HKG","DAC"];
 
-  function resolveDateRaw(i, values, docData) {
-    if (docData.Date && docData.Date.trim()) return docData.Date;
-    const prevRow = i>1 ? values[i-1] : null;
-    if(prevRow && QUICK_DESTS.includes(docData.From) && prevRow[9]==docData.From && prevRow[6]=="ICN") return prevRow[0];
-    const prevDate = prevRow ? prevRow[0] : "";
-    const nextDate = i<values.length-1 ? values[i+1][0] : "";
-    return prevDate || nextDate || "";
+function resolveDateRaw(i, values, docData) {
+  if (docData.Date && docData.Date.trim()) return docData.Date;
+  const prevRow = i > 1 ? values[i - 1] : null;
+  if (prevRow && QUICK_DESTS.includes(docData.From) && prevRow[9] == docData.From && prevRow[6] == "ICN")
+    return prevRow[0];
+  const prevDate = prevRow ? prevRow[0] : "";
+  const nextDate = i < values.length - 1 ? values[i + 1][0] : "";
+  return prevDate || nextDate || "";
+}
+
+function buildDocData(row, headers, i, values) {
+  const docData = {};
+  headers.forEach((h, idx) => {
+    docData[h] = row[idx] || "";
+    docData[headerMapFirestore[h] || h] = row[idx] || "";
+  });
+
+  docData.DateRaw = resolveDateRaw(i, values, docData);
+  docData.Date = convertDate(docData.DateRaw);
+
+  // ✅ userId 제거
+  // ❌ docData.userId = flutterflowUid;
+
+  // ✅ adminId → owner 로 변경
+  docData.owner = firestoreAdminUid || "";
+
+  docData.pdc_user_name = username || "";
+  docData.email = process.env.USER_ID || "";
+
+  if (!docData.Activity || docData.Activity.trim() === "") return null;
+
+  docData.ET = calculateET(docData.BLH);
+  docData.NT = docData.From !== docData.To
+    ? calculateNTFromSTDSTA(docData.STDZ, docData.STAZ, new Date(docData.Date))
+    : "00:00";
+  docData.CrewArray = parseCrewString(docData.Crew);
+  const { Year, Month } = parseYearMonthFromEeeDd(docData.DateRaw);
+  docData.Year = Year;
+  docData.Month = Month;
+
+  Object.keys(docData).forEach(k => {
+    if (docData[k] === undefined) delete docData[k];
+  });
+  return docData;
+}
+
+async function uploadDoc(db, collectionName, docData, i) {
+  const querySnapshot = await db.collection(collectionName)
+    .where("Date", "==", docData.Date)
+    .where("DC", "==", docData.DC)
+    .where("F", "==", docData.F)
+    .where("From", "==", docData.From)
+    .where("To", "==", docData.To)
+    .where("AcReg", "==", docData.AcReg)
+    .where("Crew", "==", docData.Crew)
+    .get();
+
+  if (!querySnapshot.empty) {
+    for (const d of querySnapshot.docs) {
+      await db.collection(collectionName).doc(d.id).delete();
+    }
   }
 
-  function buildDocData(row, headers, i, values) {
-    const docData = {};
-    headers.forEach((h, idx) => { docData[h]=row[idx]||""; docData[headerMapFirestore[h]||h]=row[idx]||""; });
+  const newDocRef = await db.collection(collectionName).add(docData);
+  console.log(
+    `✅ ${i}행 업로드 완료: ${newDocRef.id}, NT=${docData.NT}, ET=${docData.ET}, CrewCount=${docData.CrewArray.length}, Year=${docData.Year}, Month=${docData.Month}`
+  );
+}
 
-    docData.DateRaw = resolveDateRaw(i, values, docData);
-    docData.Date = convertDate(docData.DateRaw);
-    docData.userId = flutterflowUid || "";
-    docData.adminId = firestoreAdminUid || "";
-    docData.pdc_user_name = username || "";
-     // ✅ GitHub Actions secrets의 USER_ID 사용
-    docData.email = process.env.USER_ID || "";
-    
-    if(!docData.Activity || docData.Activity.trim()==="") return null;
+for (let i = 1; i < values.length; i++) {
+  const row = values[i];
+  const docData = buildDocData(row, headers, i, values);
+  if (!docData) continue;
+  await uploadDoc(db, firestoreCollection, docData, i);
+}
 
-    docData.ET = calculateET(docData.BLH);
-    docData.NT = docData.From!==docData.To ? calculateNTFromSTDSTA(docData.STDZ, docData.STAZ, new Date(docData.Date)) : "00:00";
-    docData.CrewArray = parseCrewString(docData.Crew);
-    const {Year, Month}=parseYearMonthFromEeeDd(docData.DateRaw);
-    docData.Year=Year; docData.Month=Month;
-    Object.keys(docData).forEach(k=>{ if(docData[k]===undefined) delete docData[k]; });
-    return docData;
-  }
-
-  async function uploadDoc(db, collectionName, docData, i) {
-    const querySnapshot = await db.collection(collectionName)
-      .where("Date","==",docData.Date)
-      .where("DC","==",docData.DC)
-      .where("F","==",docData.F)
-      .where("From","==",docData.From)
-      .where("To","==",docData.To)
-      .where("AcReg","==",docData.AcReg)
-      .where("Crew","==",docData.Crew)
-      .get();
-    if(!querySnapshot.empty) for(const d of querySnapshot.docs) await db.collection(collectionName).doc(d.id).delete();
-    const newDocRef = await db.collection(collectionName).add(docData);
-    console.log(`✅ ${i}행 업로드 완료: ${newDocRef.id}, NT=${docData.NT}, ET=${docData.ET}, CrewCount=${docData.CrewArray.length}, Year=${docData.Year}, Month=${docData.Month}`);
-  }
-
-  for(let i=1;i<values.length;i++){
-    const row = values[i];
-    const docData = buildDocData(row, headers, i, values);
-    if(!docData) continue;
-    await uploadDoc(db, firestoreCollection, docData, i);
-  }
-
-  console.log("✅ Roster Firestore 업로드 완료");
+console.log("✅ Roster Firestore 업로드 완료");
 
   // ------------------- Google Sheets 업로드 -------------------
   console.log("🚀 Google Sheets 업로드 시작");
