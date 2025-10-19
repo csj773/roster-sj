@@ -194,16 +194,19 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
 }
 
 // ------------------- Firestore 업로드 -------------------
-export async function uploadPerDiemFirestore(
-  perdiemList,
-  owner = process.env.FIREBASE_UID || process.env.INPUT_FIREBASE_UID // ✅ 둘 다 지원
-) {
+export async function uploadPerDiemFirestore(perdiemList) {
+  // ✅ Secrets에서만 owner 가져오기
+  const owner = process.env.firestoreAdminUid || "";
+
   if (!Array.isArray(perdiemList) || !owner) {
-    console.warn("❌ uploadPerDiemFirestore: 잘못된 입력 또는 FIREBASE_UID 누락");
+    console.warn("❌ uploadPerDiemFirestore: 잘못된 입력 또는 firestoreAdminUid 누락");
     return;
   }
 
-  if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.applicationDefault() });
+  if (!admin.apps.length) {
+    admin.initializeApp({ credential: admin.credential.applicationDefault() });
+  }
+
   const db = admin.firestore();
   const collection = db.collection("Perdiem");
 
@@ -211,6 +214,7 @@ export async function uploadPerDiemFirestore(
     if (!row || !row.Destination) continue;
 
     try {
+      // 동일 문서가 있으면 삭제 후 다시 추가
       const snapshot = await collection
         .where("Destination", "==", row.Destination)
         .where("Date", "==", row.Date)
@@ -218,7 +222,9 @@ export async function uploadPerDiemFirestore(
         .get();
 
       if (!snapshot.empty) {
-        for (const doc of snapshot.docs) await collection.doc(doc.id).delete();
+        for (const doc of snapshot.docs) {
+          await collection.doc(doc.id).delete();
+        }
       }
 
       await collection.add({ ...row, owner });
