@@ -1,4 +1,4 @@
-// ========================= perdiem.js v10.1-1-patch-3 =========================
+// ========================= perdiem.js (ICN 출발 포함 최종 패치) =========================
 import fs from "fs";
 import path from "path";
 import admin from "firebase-admin";
@@ -88,7 +88,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
 
     let DateFormatted = convertDate(DateStr);
     if (!DateFormatted || !DateFormatted.includes(".")) {
-      DateFormatted = i > 0 ? convertDate(flightRows[i-1][0]) 
+      DateFormatted = i > 0 ? convertDate(flightRows[i-1][0])
         : `${now.getFullYear()}.${String(now.getMonth()+1).padStart(2,"0")}.${String(now.getDate()).padStart(2,"0")}`;
     }
 
@@ -129,7 +129,9 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
     }
     // ===== 출발편 (ICN → 해외 도착) =====
     else if (From === "ICN") {
+      // ICN 출발편도 반드시 리스트 포함
       riDate = parseHHMMOffset(STAZ, DateFormatted);
+      roDate = null;
     }
     // ===== 해외 출발 ↔ 해외 도착 =====
     else {
@@ -151,19 +153,18 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       }
     }
 
-    // ===== Per Diem 계산 =====
     const riValid = riDate instanceof Date && !isNaN(riDate) ? riDate : null;
     const roValid = roDate instanceof Date && !isNaN(roDate) ? roDate : null;
 
-    let { StayHours, Total } = calculatePerDiem(riValid, roValid, Rate);
+    let StayHours = "0:00";
+    let Total = 0;
 
-    // ✅ ICN 출발편 항상 0으로
-    if (From === "ICN") {
-      StayHours = "0:00";
-      Total = 0;
+    if (riValid && roValid) {
+      const result = calculatePerDiem(riValid, roValid, Rate);
+      StayHours = result.StayHours;
+      Total = result.Total;
     }
 
-    // ✅ Quick Turn 처리
     if (isQuickTurnReturn) {
       Total = 33;
       Rate = 33;
