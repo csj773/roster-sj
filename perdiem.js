@@ -3,7 +3,6 @@ import fs from "fs";
 import path from "path";
 import admin from "firebase-admin";
 import { hourToTimeStr } from "./flightTimeUtils.js";
-import "dotenv/config"; // ✅ .env 또는 Secrets 불러오기용
 
 // ------------------- 공항별 PER DIEM -------------------
 export const PERDIEM_RATE = {
@@ -15,6 +14,7 @@ export const PERDIEM_RATE = {
 // ------------------- Date 변환 -------------------
 export function convertDate(input) {
   if (!input || typeof input !== "string") return input;
+
   const parts = input.trim().split(/\s+/);
   if (parts.length < 2) return input;
 
@@ -68,6 +68,7 @@ function calculatePerDiem(riDate, roDate, rate) {
 export async function generatePerDiemList(rosterJsonPath, owner) {
   const raw = JSON.parse(fs.readFileSync(rosterJsonPath, "utf-8"));
   const rows = raw.values.slice(1);
+
   rows.sort((a, b) => new Date(convertDate(a[0])) - new Date(convertDate(b[0])));
 
   const perdiemList = [];
@@ -77,6 +78,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
     admin.initializeApp({ credential: admin.credential.applicationDefault() });
   }
   const db = admin.firestore();
+
   const flightRows = rows.filter(r => r[6] && r[9] && r[6] !== r[9]);
   const QUICK_DESTS = ["NRT", "HKG", "DAC"];
 
@@ -86,31 +88,34 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
 
     let DateFormatted = convertDate(DateStr);
     if (!DateFormatted || !DateFormatted.includes(".")) {
-      DateFormatted = i > 0 ? convertDate(flightRows[i - 1][0]) :
-        `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, "0")}.${String(now.getDate()).padStart(2, "0")}`;
+      DateFormatted = i > 0 ? convertDate(flightRows[i-1][0]) 
+        : `${now.getFullYear()}.${String(now.getMonth()+1).padStart(2,"0")}.${String(now.getDate()).padStart(2,"0")}`;
     }
 
     const dfParts = DateFormatted.split(".");
     const Year = dfParts[0] || String(now.getFullYear());
-    const Month = (dfParts[1] || "01").padStart(2, "0");
+    const Month = (dfParts[1] || "01").padStart(2,"0");
 
     let Rate = From === "ICN" ? 0 : PERDIEM_RATE[From] || 3;
     let riDate = null, roDate = null;
 
+    // ===== 귀국편 (To === ICN) =====
     if (To === "ICN" && From !== "ICN") {
       roDate = parseHHMMOffset(STDZ, DateFormatted);
+
       if (i === 0) {
+        // --- 이번 달 첫편 → 이전 달 귀국편 조회 ---
         const curMonthNum = Number(Month);
         const prevMonthNum = curMonthNum - 1 >= 1 ? curMonthNum - 1 : 12;
-        const prevMonth = String(prevMonthNum).padStart(2, "0");
-        const prevYear = prevMonthNum === 12 ? String(Number(Year) - 1) : Year;
+        const prevMonth = String(prevMonthNum).padStart(2,"0");
+        const prevYear = prevMonthNum === 12 ? String(Number(Year)-1) : Year;
 
         const prevSnapshot = await db.collection("Perdiem")
-          .where("owner", "==", owner)
-          .where("Month", "==", prevMonth)
-          .where("Year", "==", prevYear)
-          .where("Destination", "==", From)
-          .orderBy("Date", "desc")
+          .where("owner","==",owner)
+          .where("Month","==",prevMonth)
+          .where("Year","==",prevYear)
+          .where("Destination","==",From)
+          .orderBy("Date","desc")
           .limit(1)
           .get();
 
@@ -119,19 +124,25 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
           if (prevDoc.RO) riDate = new Date(prevDoc.RO);
         }
       } else {
-        const prevRow = flightRows[i - 1];
+        // 바로 이전편 도착시간을 RI로
+        const prevRow = flightRows[i-1];
         riDate = parseHHMMOffset(prevRow[11], convertDate(prevRow[0]));
       }
-    } else if (From === "ICN") {
+    }
+    // ===== 출발편 (ICN → 해외 도착) =====
+    else if (From === "ICN") {
       riDate = parseHHMMOffset(STAZ, DateFormatted);
-    } else {
+    }
+    // ===== 해외 출발 ↔ 해외 도착 =====
+    else {
       riDate = parseHHMMOffset(STAZ, DateFormatted);
       roDate = parseHHMMOffset(STDZ, DateFormatted);
     }
 
+    // ===== Quick Turn 귀국편 처리 =====
     let isQuickTurnReturn = false;
     if (To === "ICN" && QUICK_DESTS.includes(From) && i > 0) {
-      const prevRow = flightRows[i - 1];
+      const prevRow = flightRows[i-1];
       if (prevRow[6] === "ICN" && prevRow[9] === From) {
         const prevRI = parseHHMMOffset(prevRow[11], convertDate(prevRow[0]));
         if (prevRI instanceof Date && !isNaN(prevRI)) {
@@ -142,6 +153,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       }
     }
 
+    // ===== Per Diem 계산 =====
     const riValid = riDate instanceof Date && !isNaN(riDate) ? riDate : null;
     const roValid = roDate instanceof Date && !isNaN(roDate) ? roDate : null;
 
@@ -203,10 +215,7 @@ export async function uploadPerDiemFirestore(perdiemList) {
     return;
   }
 
-  if (!admin.apps.length) {
-    admin.initializeApp({ credential: admin.credential.applicationDefault() });
-  }
-
+  if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.applicationDefault() });
   const db = admin.firestore();
   const collection = db.collection("Perdiem");
 
@@ -214,17 +223,15 @@ export async function uploadPerDiemFirestore(perdiemList) {
     if (!row || !row.Destination) continue;
 
     try {
-      // 동일 문서가 있으면 삭제 후 다시 추가
+      // 기존 문서 제거
       const snapshot = await collection
-        .where("Destination", "==", row.Destination)
-        .where("Date", "==", row.Date)
-        .where("owner", "==", owner)
+        .where("Destination","==",row.Destination)
+        .where("Date","==",row.Date)
+        .where("owner","==",owner)
         .get();
 
       if (!snapshot.empty) {
-        for (const doc of snapshot.docs) {
-          await collection.doc(doc.id).delete();
-        }
+        for (const doc of snapshot.docs) await collection.doc(doc.id).delete();
       }
 
       await collection.add({ ...row, owner });
@@ -233,5 +240,5 @@ export async function uploadPerDiemFirestore(perdiemList) {
     }
   }
 
-  console.log(`✅ PerDiem Firestore 업로드 완료 (owner=${owner})`);
+  console.log("✅ PerDiem Firestore 업로드 완료");
 }
