@@ -159,12 +159,13 @@ const roValid = roDate instanceof Date && !isNaN(roDate) ? roDate : null;
 
 let { StayHours, Total } = calculatePerDiem(riValid, roValid, Rate);
 
-// ICN 출발편도 리스트에 포함시키기 위해 stayHours만 조정
+// 최소 수정: ICN 출발편도 리스트에 포함
 if (From === "ICN") {
   StayHours = "0:00";
-  Total = 0; // 필요하면 Total도 0으로
+  Total = 0; // 필요 시 Total도 0
 }
 
+// Quick Turn 처리
 if (isQuickTurnReturn) {
   Total = 33;
   Rate = 33;
@@ -183,7 +184,11 @@ perdiemList.push({
   Total,
   Month,
   Year
-});    
+});   
+  }
+
+  return perdiemList;
+}
 
 // ------------------- CSV 저장 -------------------
 export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
@@ -208,12 +213,9 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
 }
 
 // ------------------- Firestore 업로드 -------------------
-export async function uploadPerDiemFirestore(perdiemList) {
-  // ✅ Secrets에서만 owner 가져오기
-  const owner = process.env.firestoreAdminUid || "";
-
+export async function uploadPerDiemFirestore(perdiemList, owner) {
   if (!Array.isArray(perdiemList) || !owner) {
-    console.warn("❌ uploadPerDiemFirestore: 잘못된 입력 또는 firestoreAdminUid 누락");
+    console.warn("❌ uploadPerDiemFirestore: 잘못된 입력");
     return;
   }
 
