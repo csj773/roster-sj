@@ -153,35 +153,37 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       }
     }
 
-    // ===== Per Diem 계산 =====
-    const riValid = riDate instanceof Date && !isNaN(riDate) ? riDate : null;
-    const roValid = roDate instanceof Date && !isNaN(roDate) ? roDate : null;
+// ===== Per Diem 계산 =====
+const riValid = riDate instanceof Date && !isNaN(riDate) ? riDate : null;
+const roValid = roDate instanceof Date && !isNaN(roDate) ? roDate : null;
 
-    let { StayHours, Total } = calculatePerDiem(riValid, roValid, Rate);
+let { StayHours, Total } = calculatePerDiem(riValid, roValid, Rate);
 
-    if (From === "ICN") StayHours = "0:00";
-    if (isQuickTurnReturn) {
-      Total = 33;
-      Rate = 33;
-    }
-
-    perdiemList.push({
-      Date: DateFormatted,
-      Activity,
-      From,
-      Destination: To,
-      RI: riValid ? riValid.toISOString() : "",
-      RO: roValid ? roValid.toISOString() : "",
-      StayHours,
-      Rate,
-      Total,
-      Month,
-      Year
-    });
-  }
-
-  return perdiemList;
+// ICN 출발편도 리스트에 포함시키기 위해 stayHours만 조정
+if (From === "ICN") {
+  StayHours = "0:00";
+  Total = 0; // 필요하면 Total도 0으로
 }
+
+if (isQuickTurnReturn) {
+  Total = 33;
+  Rate = 33;
+}
+
+// ✅ 반드시 리스트에 push
+perdiemList.push({
+  Date: DateFormatted,
+  Activity,
+  From,
+  Destination: To,
+  RI: riValid ? riValid.toISOString() : "",
+  RO: roValid ? roValid.toISOString() : "",
+  StayHours,
+  Rate,
+  Total,
+  Month,
+  Year
+});    
 
 // ------------------- CSV 저장 -------------------
 export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
