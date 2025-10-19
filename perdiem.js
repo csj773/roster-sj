@@ -1,4 +1,4 @@
-// ========================= perdiem.js v10.1-1-patch-2 =========================
+// ========================= perdiem.js v10.1-1-patch-3 =========================
 import fs from "fs";
 import path from "path";
 import admin from "firebase-admin";
@@ -157,10 +157,13 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
 
     let { StayHours, Total } = calculatePerDiem(riValid, roValid, Rate);
 
-    // ICN 출발편 처리
-    if (From === "ICN") StayHours = "0:00";
+    // ✅ ICN 출발편 항상 0으로
+    if (From === "ICN") {
+      StayHours = "0:00";
+      Total = 0;
+    }
 
-    // Quick Turn 처리
+    // ✅ Quick Turn 처리
     if (isQuickTurnReturn) {
       Total = 33;
       Rate = 33;
@@ -223,7 +226,6 @@ export async function uploadPerDiemFirestore(perdiemList) {
     if (!row || !row.Destination) continue;
 
     try {
-      // 기존 문서 제거
       const snapshot = await collection
         .where("Destination","==",row.Destination)
         .where("Date","==",row.Date)
