@@ -147,7 +147,7 @@ const db = admin.firestore();
 
 // ------------------- 기본 설정 -------------------
 const FIREBASE_UID = process.env.FIREBASE_UID || "manual_upload";
-const FIXED_EMAIL = "sjchoi787@gmail.com";
+//const FIXED_EMAIL = "sjchoi787@gmail.com";
 
 // ------------------- CSV 탐색 -------------------
 function findCsvFile(filename = "my_flightlog.csv", dir = process.cwd()) {
@@ -217,7 +217,7 @@ fs.createReadStream(csvFile)
           BH: blk,
           DH: (row.DH || "00:00").trim(),
           owner: FIREBASE_UID,
-          email: FIXED_EMAIL,
+          //email: FIXED_EMAIL,
           uploadedAt: admin.firestore.FieldValue.serverTimestamp(),
         };
 
