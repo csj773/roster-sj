@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write              # 커밋/푸시 권한
 
+env:
+  # firestoreAdminUid secrets 자동 주입
+  firestoreAdminUid: ${{ secrets.FIRESTORE_ADMIN_UID }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -24,31 +28,44 @@ jobs:
       # 3. 의존성 설치
       - run: npm install
 
-      # 4. roster.js 실행
+      # 4. roster.js 실행 (로스터 JSON 생성)
       - name: Run roster.js
         env:
           CHROME_PATH: "/usr/bin/chromium-browser"
           INPUT_PDC_USERNAME: ${{ secrets.PDC_USERNAME }}
           INPUT_PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}
-          INPUT_FIREBASE_UID: ${{ secrets.FLUTTERFLOW_UID }}
-          INPUT_ADMIN_FIREBASE_UID: ${{ secrets.FIRESTORE_ADMIN_UID }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          INPUT_ADMIN_FIREBASE_UID: ${{ secrets.FIRESTORE_ADMIN_UID }}
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
           USER_ID: ${{ secrets.USER_ID }}
         run: node -r dotenv/config roster.js
 
-      # 5. roster.json & roster.csv 커밋/푸시
-      - name: Commit & Push roster.json & roster.csv
+      # 5. PerDiem 계산 및 CSV 저장
+      - name: Generate & Save PerDiem CSV
+        run: |
+          node -r dotenv/config scripts/generatePerDiem.js
+          node -r dotenv/config scripts/savePerDiemCSV.js
+        env:
+          firestoreAdminUid: ${{ secrets.FIRESTORE_ADMIN_UID }}
+
+      # 6. Firestore 업로드
+      - name: Upload PerDiem to Firestore
+        run: node -r dotenv/config scripts/uploadPerDiemFirestore.js
+        env:
+          firestoreAdminUid: ${{ secrets.FIRESTORE_ADMIN_UID }}
+
+      # 7. roster.json, roster.csv, perdiem.csv 커밋/푸시
+      - name: Commit & Push JSON/CSV
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add public/roster.json public/roster.csv
-          git commit -m "Update roster data" || echo "No changes to commit"
+          git add public/roster.json public/roster.csv public/perdiem.csv
+          git commit -m "Update roster & PerDiem data" || echo "No changes to commit"
           git push
 
-      # 6. gcal.js 실행
+      # 8. gcal.js 실행 (Google Calendar 업데이트)
       - name: Run gcal.js
         env:
           GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
           GOOGLE_CALENDAR_CREDENTIALS: ${{ secrets.GOOGLE_CALENDAR_CREDENTIALS }}
-        run: node gcal.js
+        run: node -r dotenv/config gcal.js
