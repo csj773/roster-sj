@@ -215,7 +215,6 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
 
 // ------------------- Firestore 업로드 -------------------
 export async function uploadPerDiemFirestore(perdiemList) {
-  // ✅ Secrets에서만 owner 가져오기
   const owner = process.env.firestoreAdminUid || "";
 
   if (!Array.isArray(perdiemList) || !owner) {
@@ -223,30 +222,34 @@ export async function uploadPerDiemFirestore(perdiemList) {
     return;
   }
 
-  if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.applicationDefault() });
+  if (!admin.apps.length)
+    admin.initializeApp({ credential: admin.credential.applicationDefault() });
+
   const db = admin.firestore();
   const collection = db.collection("Perdiem");
 
   for (const row of perdiemList) {
-    if (!row || !row.Destination) continue;
+    // ✅ 기본 유효성 검사 (ICN 출발 포함)
+    if (!row || !row.Date || !row.From) {
+      console.warn("⚠️ 잘못된 PerDiem 행:", row);
+      continue;
+    }
 
     try {
-      // 기존 문서 제거
-      const snapshot = await collection
-        .where("Destination","==",row.Destination)
-        .where("Date","==",row.Date)
-        .where("owner","==",owner)
-        .get();
+      // ✅ 문서 고유 키 생성: Date + From + Destination + owner
+      const docId = `${row.Date}_${row.From}_${row.Destination || "NA"}_${owner}`;
+      const docRef = collection.doc(docId);
 
-      if (!snapshot.empty) {
-        for (const doc of snapshot.docs) await collection.doc(doc.id).delete();
-      }
+      // ✅ 저장 전 기존 동일 키 문서 삭제 대신 덮어쓰기
+      await docRef.set({ ...row, owner }, { merge: true });
 
-      await collection.add({ ...row, owner });
     } catch (err) {
-      console.error(`❌ Firestore 업로드 실패 (${row.Destination}, ${row.Date}):`, err);
+      console.error(`❌ Firestore 업로드 실패 (${row.From} → ${row.Destination}, ${row.Date}):`, err);
     }
   }
+
+  console.log("✅ PerDiem Firestore 업로드 완료 (ICN 출발 포함)");
+}
 
   console.log("✅ PerDiem Firestore 업로드 완료");
 }
