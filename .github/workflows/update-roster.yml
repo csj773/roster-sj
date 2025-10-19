@@ -35,8 +35,7 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
           USER_ID: ${{ secrets.USER_ID }}  
-           
-         run: node -r dotenv/config roster.js
+        run: node -r dotenv/config roster.js
 
       # 5. roster.json & roster.csv 커밋/푸시
       - name: Commit & Push roster.json & roster.csv
