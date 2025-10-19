@@ -1,5 +1,3 @@
-// perdiem 10.1-1
-
 // ========================= perdiem.js =========================
 import fs from "fs";
 import path from "path";
@@ -106,7 +104,6 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       roDate = parseHHMMOffset(STDZ, DateFormatted);
 
       if (i === 0) {
-        // --- 이번 달 첫편 → 이전 달 귀국편 조회 ---
         const curMonthNum = Number(Month);
         const prevMonthNum = curMonthNum - 1 >= 1 ? curMonthNum - 1 : 12;
         const prevMonth = String(prevMonthNum).padStart(2,"0");
@@ -126,7 +123,6 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
           if (prevDoc.RO) riDate = new Date(prevDoc.RO);
         }
       } else {
-        // 바로 이전편 도착시간을 RI로
         const prevRow = flightRows[i-1];
         riDate = parseHHMMOffset(prevRow[11], convertDate(prevRow[0]));
       }
@@ -167,6 +163,9 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       Rate = 33;
     }
 
+    // ===== 🚀 교통비 추가 =====
+    const TransportFee = From !== To ? 7000 : 0;
+
     perdiemList.push({
       Date: DateFormatted,
       Activity,
@@ -177,6 +176,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       StayHours,
       Rate,
       Total,
+      TransportFee, // 추가
       Month,
       Year
     });
@@ -192,9 +192,9 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
     return;
   }
 
-  const header = "Date,Activity,From,Destination,RI,RO,StayHours,Rate,Total,Month,Year\n";
+  const header = "Date,Activity,From,Destination,RI,RO,StayHours,Rate,Total,TransportFee,Month,Year\n";
   const rows = perdiemList.map(e =>
-    `${e.Date},${e.Activity},${e.From},${e.Destination},${e.RI},${e.RO},${e.StayHours},${e.Rate},${e.Total},${e.Month},${e.Year}`
+    `${e.Date},${e.Activity},${e.From},${e.Destination},${e.RI},${e.RO},${e.StayHours},${e.Rate},${e.Total},${e.TransportFee},${e.Month},${e.Year}`
   );
 
   try {
@@ -208,7 +208,6 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
 }
 
 // ------------------- Firestore 업로드 -------------------
-
 export async function uploadPerDiemFirestore(perdiemList) {
   const owner = process.env.firestoreAdminUid || "";
 
@@ -225,7 +224,6 @@ export async function uploadPerDiemFirestore(perdiemList) {
     if (!row || !row.Destination) continue;
 
     try {
-      // 기존 문서 제거
       const snapshot = await collection
         .where("Destination","==",row.Destination)
         .where("Date","==",row.Date)
