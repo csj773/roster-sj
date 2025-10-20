@@ -1,4 +1,4 @@
-// ========================= perdiem.js =========================
+// ========================= perdiem_full_patched.js =========================
 import fs from "fs";
 import path from "path";
 import admin from "firebase-admin";
@@ -176,7 +176,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       StayHours,
       Rate,
       Total,
-      TransportFee, // 추가
+      TransportFee,
       Month,
       Year
     });
@@ -207,7 +207,7 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
   }
 }
 
-// ------------------- Firestore 업로드 (패치본: 모든 비행편 저장 + 중복체크 유지 + ICN출발편 포함) -------------------
+// ------------------- Firestore 업로드 (패치본) -------------------
 export async function uploadPerDiemFirestore(perdiemList) {
   const owner = process.env.FIRESTORE_ADMIN_UID || process.env.firestoreAdminUid || "";
 
