@@ -164,9 +164,10 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
     }
 
     // ===== 교통비 추가 =====
-    const TransportFee = From !== To ? 7000 : 7000;
-    if (isQuickTurnReturn) TransportFee = 14000;
-    
+
+let TransportFee = 7000;
+if (isQuickTurnReturn) TransportFee = 14000;
+
     perdiemList.push({
       Date: DateFormatted,
       Activity,
