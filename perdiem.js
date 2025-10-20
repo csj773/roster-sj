@@ -79,7 +79,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
   }
   const db = admin.firestore();
 
-  const flightRows = rows.filter(r => r[6] && r[9] && r[6] !== r[9]);
+  const flightRows = rows.filter(r => r[6] && r[9]);
   const QUICK_DESTS = ["NRT", "HKG", "DAC"];
 
   for (let i = 0; i < flightRows.length; i++) {
@@ -163,7 +163,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       Rate = 33;
     }
 
-    // ===== 🚀 교통비 추가 =====
+    // ===== 교통비 추가 =====
     const TransportFee = From !== To ? 7000 : 0;
 
     perdiemList.push({
@@ -176,7 +176,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       StayHours,
       Rate,
       Total,
-      TransportFee, // 추가
+      TransportFee,
       Month,
       Year
     });
@@ -207,6 +207,7 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
   }
 }
 
+// ------------------- Firestore 업로드 -------------------
 export async function uploadPerDiemFirestore(perdiemList) {
   const owner = process.env.FIRESTORE_ADMIN_UID || process.env.firestoreAdminUid || "";
 
@@ -230,23 +231,19 @@ export async function uploadPerDiemFirestore(perdiemList) {
     try {
       if (!row || !row.Date || !row.Destination) continue;
 
-      // normalize From and build data
       const rawFrom = row.From ?? row.FROM ?? "";
       const normalizedFrom = String(rawFrom).trim().toUpperCase();
       const data = { ...row, owner };
 
-      // Debug log to inspect incoming values (remove in production if noisy)
-      console.log(`DEBUG: From="${rawFrom}" -> "${normalizedFrom}", Date=${row.Date}, Dest=${row.Destination}`);
-
-      // ICN 출발편 강제 적용 (보다 강건한 비교)
+      // ✈️ ICN 출발편은 강제 설정
       if (normalizedFrom === "ICN") {
         data.StayHours = "0:00";
         data.Total = 0;
         data.TransportFee = 7000;
-        console.log(`INFO: Applied ICN defaults for ${row.Date} ${row.Destination}`);
+        console.log(`✈️ ICN 출발편 처리: ${row.Date} (${row.Activity})`);
       }
 
-      // 기존 문서 삭제 (Date + Destination + owner 기준)
+      // 중복체크 후 삭제
       const snapshot = await collection
         .where("Destination", "==", row.Destination)
         .where("Date", "==", row.Date)
@@ -260,12 +257,12 @@ export async function uploadPerDiemFirestore(perdiemList) {
         }
       }
 
-      // 새 문서 저장
+      // 신규 업로드
       await collection.add(data);
-      console.log(`✅ 저장 완료: ${rawFrom} → ${row.Destination}, ${row.Date}`);
+      console.log(`✅ 업로드 완료: ${normalizedFrom} → ${row.Destination}, ${row.Date}`);
       successCount++;
     } catch (err) {
-      console.error(`❌ 업로드 실패 (${row.From} → ${row.Destination}, ${row.Date}):`, err);
+      console.error(`❌ Firestore 업로드 실패 (${row.From} → ${row.Destination}, ${row.Date}):`, err);
       failCount++;
     }
   }
