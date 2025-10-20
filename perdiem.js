@@ -207,7 +207,7 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
   }
 }
 
-// ------------------- Firestore 업로드 -------------------
+// ------------------- Firestore 업로드 (패치본: From ≠ To 모두 저장 + owner=firestoreAdminUid) -------------------
 export async function uploadPerDiemFirestore(perdiemList) {
   const owner = process.env.firestoreAdminUid || "";
 
@@ -216,29 +216,66 @@ export async function uploadPerDiemFirestore(perdiemList) {
     return;
   }
 
-  if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.applicationDefault() });
+  if (!admin.apps.length)
+    admin.initializeApp({ credential: admin.credential.applicationDefault() });
+
   const db = admin.firestore();
   const collection = db.collection("Perdiem");
 
-  for (const row of perdiemList) {
-    if (!row || !row.Destination) continue;
+  // 🔹 From ≠ To → 중복체크 없이 바로 저장
+  const toSaveImmediately = perdiemList.filter(
+    (r) => r && r.From && r.Destination && r.From !== r.Destination
+  );
 
-    try {
-      const snapshot = await collection
-        .where("Destination","==",row.Destination)
-        .where("Date","==",row.Date)
-        .where("owner","==",owner)
-        .get();
+  // 🔹 From = To → 중복체크 후 저장
+  const toCheckDup = perdiemList.filter(
+    (r) => r && r.From && r.Destination && r.From === r.Destination
+  );
 
-      if (!snapshot.empty) {
-        for (const doc of snapshot.docs) await collection.doc(doc.id).delete();
+  // 1️⃣ From ≠ To : 즉시 저장
+  if (toSaveImmediately.length > 0) {
+    console.log(`🚀 즉시 저장 대상 ${toSaveImmediately.length}건 (From ≠ To)`);
+    for (const row of toSaveImmediately) {
+      try {
+        await collection.add({ ...row, owner });
+        console.log(`✅ 즉시 저장 완료: ${row.From} → ${row.Destination}, ${row.Date}`);
+      } catch (err) {
+        console.error(
+          `❌ 즉시 저장 실패 (${row.From} → ${row.Destination}, ${row.Date}):`,
+          err
+        );
       }
-
-      await collection.add({ ...row, owner });
-    } catch (err) {
-      console.error(`❌ Firestore 업로드 실패 (${row.Destination}, ${row.Date}):`, err);
     }
   }
 
-  console.log("✅ PerDiem Firestore 업로드 완료");
+  // 2️⃣ From = To : 기존 문서 삭제 후 저장
+  if (toCheckDup.length > 0) {
+    console.log(`🔁 중복체크 저장 대상 ${toCheckDup.length}건 (From = To)`);
+    for (const row of toCheckDup) {
+      try {
+        const snapshot = await collection
+          .where("Destination", "==", row.Destination)
+          .where("Date", "==", row.Date)
+          .where("owner", "==", owner)
+          .get();
+
+        if (!snapshot.empty) {
+          for (const doc of snapshot.docs) {
+            await collection.doc(doc.id).delete();
+            console.log(`🗑️ 기존 문서 삭제: ${row.Destination}, ${row.Date}`);
+          }
+        }
+
+        await collection.add({ ...row, owner });
+        console.log(`✅ 중복체크 후 저장 완료: ${row.Destination}, ${row.Date}`);
+      } catch (err) {
+        console.error(
+          `❌ Firestore 업로드 실패 (${row.Destination}, ${row.Date}):`,
+          err
+        );
+      }
+    }
+  }
+
+  console.log(`✅ PerDiem Firestore 업로드 완료 (owner=${owner})`);
 }
