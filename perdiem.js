@@ -1,4 +1,4 @@
-// ========================= perdiem_full_patched.js =========================
+// ========================= perdiem.js =========================
 import fs from "fs";
 import path from "path";
 import admin from "firebase-admin";
@@ -176,7 +176,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       StayHours,
       Rate,
       Total,
-      TransportFee,
+      TransportFee, // 추가
       Month,
       Year
     });
@@ -207,7 +207,6 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
   }
 }
 
-// ------------------- Firestore 업로드 (패치본) -------------------
 export async function uploadPerDiemFirestore(perdiemList) {
   const owner = process.env.FIRESTORE_ADMIN_UID || process.env.firestoreAdminUid || "";
 
@@ -231,17 +230,23 @@ export async function uploadPerDiemFirestore(perdiemList) {
     try {
       if (!row || !row.Date || !row.Destination) continue;
 
-      // ✈️ 모든 비행편 저장 (ICN 출발 포함)
+      // normalize From and build data
+      const rawFrom = row.From ?? row.FROM ?? "";
+      const normalizedFrom = String(rawFrom).trim().toUpperCase();
       const data = { ...row, owner };
 
-      // 🔹 ICN 출발편은 StayHours=0, Total=0, TransportFee=7000 강제 적용
-      if (row.From === "ICN") {
+      // Debug log to inspect incoming values (remove in production if noisy)
+      console.log(`DEBUG: From="${rawFrom}" -> "${normalizedFrom}", Date=${row.Date}, Dest=${row.Destination}`);
+
+      // ICN 출발편 강제 적용 (보다 강건한 비교)
+      if (normalizedFrom === "ICN") {
         data.StayHours = "0:00";
         data.Total = 0;
         data.TransportFee = 7000;
+        console.log(`INFO: Applied ICN defaults for ${row.Date} ${row.Destination}`);
       }
 
-      // 🔁 기존 문서 삭제 (Date + Destination + owner 기준)
+      // 기존 문서 삭제 (Date + Destination + owner 기준)
       const snapshot = await collection
         .where("Destination", "==", row.Destination)
         .where("Date", "==", row.Date)
@@ -255,9 +260,9 @@ export async function uploadPerDiemFirestore(perdiemList) {
         }
       }
 
-      // 💾 새 문서 저장
+      // 새 문서 저장
       await collection.add(data);
-      console.log(`✅ 저장 완료: ${row.From} → ${row.Destination}, ${row.Date}`);
+      console.log(`✅ 저장 완료: ${rawFrom} → ${row.Destination}, ${row.Date}`);
       successCount++;
     } catch (err) {
       console.error(`❌ 업로드 실패 (${row.From} → ${row.Destination}, ${row.Date}):`, err);
