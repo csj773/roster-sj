@@ -207,12 +207,12 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
   }
 }
 
-// ------------------- Firestore 업로드 (패치본: From ≠ To 모두 저장 + owner=firestoreAdminUid) -------------------
+// ------------------- Firestore 업로드 (패치본: 모든 비행편 저장 + 중복체크 유지 + ICN출발편 포함) -------------------
 export async function uploadPerDiemFirestore(perdiemList) {
-  const owner = process.env.firestoreAdminUid || "";
+  const owner = process.env.FIRESTORE_ADMIN_UID || process.env.firestoreAdminUid || "";
 
   if (!Array.isArray(perdiemList) || !owner) {
-    console.warn("❌ uploadPerDiemFirestore: 잘못된 입력 또는 firestoreAdminUid 누락");
+    console.warn("❌ uploadPerDiemFirestore: 잘못된 입력 또는 FIRESTORE_ADMIN_UID 누락");
     return;
   }
 
@@ -222,60 +222,48 @@ export async function uploadPerDiemFirestore(perdiemList) {
   const db = admin.firestore();
   const collection = db.collection("Perdiem");
 
-  // 🔹 From ≠ To → 중복체크 없이 바로 저장
-  const toSaveImmediately = perdiemList.filter(
-    (r) => r && r.From && r.Destination && r.From !== r.Destination
-  );
+  console.log(`🚀 Firestore 업로드 시작: ${perdiemList.length}건 (owner=${owner})`);
 
-  // 🔹 From = To → 중복체크 후 저장
-  const toCheckDup = perdiemList.filter(
-    (r) => r && r.From && r.Destination && r.From === r.Destination
-  );
+  let successCount = 0;
+  let failCount = 0;
 
-  // 1️⃣ From ≠ To : 즉시 저장
-  if (toSaveImmediately.length > 0) {
-    console.log(`🚀 즉시 저장 대상 ${toSaveImmediately.length}건 (From ≠ To)`);
-    for (const row of toSaveImmediately) {
-      try {
-        await collection.add({ ...row, owner });
-        console.log(`✅ 즉시 저장 완료: ${row.From} → ${row.Destination}, ${row.Date}`);
-      } catch (err) {
-        console.error(
-          `❌ 즉시 저장 실패 (${row.From} → ${row.Destination}, ${row.Date}):`,
-          err
-        );
+  for (const row of perdiemList) {
+    try {
+      if (!row || !row.Date || !row.Destination) continue;
+
+      // ✈️ 모든 비행편 저장 (ICN 출발 포함)
+      const data = { ...row, owner };
+
+      // 🔹 ICN 출발편은 StayHours=0, Total=0, TransportFee=7000 강제 적용
+      if (row.From === "ICN") {
+        data.StayHours = "0:00";
+        data.Total = 0;
+        data.TransportFee = 7000;
       }
-    }
-  }
 
-  // 2️⃣ From = To : 기존 문서 삭제 후 저장
-  if (toCheckDup.length > 0) {
-    console.log(`🔁 중복체크 저장 대상 ${toCheckDup.length}건 (From = To)`);
-    for (const row of toCheckDup) {
-      try {
-        const snapshot = await collection
-          .where("Destination", "==", row.Destination)
-          .where("Date", "==", row.Date)
-          .where("owner", "==", owner)
-          .get();
+      // 🔁 기존 문서 삭제 (Date + Destination + owner 기준)
+      const snapshot = await collection
+        .where("Destination", "==", row.Destination)
+        .where("Date", "==", row.Date)
+        .where("owner", "==", owner)
+        .get();
 
-        if (!snapshot.empty) {
-          for (const doc of snapshot.docs) {
-            await collection.doc(doc.id).delete();
-            console.log(`🗑️ 기존 문서 삭제: ${row.Destination}, ${row.Date}`);
-          }
+      if (!snapshot.empty) {
+        for (const doc of snapshot.docs) {
+          await collection.doc(doc.id).delete();
+          console.log(`🗑️ 기존 문서 삭제: ${row.Destination}, ${row.Date}`);
         }
-
-        await collection.add({ ...row, owner });
-        console.log(`✅ 중복체크 후 저장 완료: ${row.Destination}, ${row.Date}`);
-      } catch (err) {
-        console.error(
-          `❌ Firestore 업로드 실패 (${row.Destination}, ${row.Date}):`,
-          err
-        );
       }
+
+      // 💾 새 문서 저장
+      await collection.add(data);
+      console.log(`✅ 저장 완료: ${row.From} → ${row.Destination}, ${row.Date}`);
+      successCount++;
+    } catch (err) {
+      console.error(`❌ 업로드 실패 (${row.From} → ${row.Destination}, ${row.Date}):`, err);
+      failCount++;
     }
   }
 
-  console.log(`✅ PerDiem Firestore 업로드 완료 (owner=${owner})`);
+  console.log(`✅ Firestore 업로드 완료: ${successCount}건 성공, ${failCount}건 실패`);
 }
