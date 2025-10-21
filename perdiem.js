@@ -1,4 +1,4 @@
-// ========================= perdiem.js (최신 통합 패치본) =========================
+// ========================= perdiem.js (최신 패치본, 1번 제외) =========================
 import fs from "fs";
 import path from "path";
 import admin from "firebase-admin";
@@ -94,22 +94,6 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
     let Rate = PERDIEM_RATE[To] || 3;
     let riDate = null, roDate = null;
     let isQuickTurnReturn = false;
-
-    // --- 첫 해외 출발편이면 Firestore에서 직전 RO 연결 ---
-    if (i === 0 && From !== "ICN") {
-      const prevSnap = await db
-        .collection("Perdiem")
-        .where("To", "==", From)
-        .where("owner", "==", owner)
-        .orderBy("Date", "desc")
-        .limit(1)
-        .get();
-      if (!prevSnap.empty) {
-        const prev = prevSnap.docs[0].data();
-        riDate = prev.RO ? new Date(prev.RO) : null;
-        console.log(`🔗 Linked previous RO from Firestore: ${prev.Activity} (${prev.To}→${prev.From})`);
-      }
-    }
 
     // --- 출발이 ICN인 경우 ---
     if (From === "ICN") {
