@@ -1,4 +1,4 @@
-// ========================= perdiem.js (패치 통합본) =========================
+// ========================= perdiem.js (To 필드 통합 패치) =========================
 import fs from "fs";
 import path from "path";
 import admin from "firebase-admin";
@@ -30,8 +30,8 @@ export function convertDate(input) {
     month = monthMap[parts[0]];
     dayStr = parts[1].padStart(2, "0");
   } else {
-    month = String(now.getMonth() + 1).padStart(2, "0");
-    dayStr = parts[1].padStart(2, "0");
+    month = String(now.getMonth() + 1).padStart(2,"0");
+    dayStr = parts[1].padStart(2,"0");
   }
 
   return `${year}.${month}.${dayStr}`;
@@ -180,7 +180,8 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       Date: DateFormatted,
       Activity,
       From,
-      Destination: To,
+      To, // To 필드 추가
+      Destination: To, // 기존 호환
       RI: riValid ? riValid.toISOString() : "",
       RO: roValid ? roValid.toISOString() : "",
       StayHours,
@@ -199,9 +200,9 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
 export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
   if (!Array.isArray(perdiemList)) return;
 
-  const header = "Date,Activity,From,Destination,RI,RO,StayHours,Rate,Total,TransportFee,Month,Year\n";
+  const header = "Date,Activity,From,To,Destination,RI,RO,StayHours,Rate,Total,TransportFee,Month,Year\n";
   const rows = perdiemList.map(e =>
-    `${e.Date},${e.Activity},${e.From},${e.Destination},${e.RI},${e.RO},${e.StayHours},${e.Rate},${e.Total},${e.TransportFee},${e.Month},${e.Year}`
+    `${e.Date},${e.Activity},${e.From},${e.To},${e.Destination},${e.RI},${e.RO},${e.StayHours},${e.Rate},${e.Total},${e.TransportFee},${e.Month},${e.Year}`
   );
 
   try {
@@ -226,7 +227,8 @@ export async function uploadPerDiemFirestore(perdiemList) {
   const collectionRef = db.collection("Perdiem");
 
   for (let item of perdiemList) {
-    const docId = `${item.Year}${item.Month}${item.Date.replace(/\./g, "")}_${item.Destination}`;
+    // To 필드 포함 docId → 중복 체크에도 To 반영
+    const docId = `${item.Year}${item.Month}${item.Date.replace(/\./g, "")}_${item.To}`;
     await collectionRef.doc(docId).set({ owner, ...item });
   }
 
