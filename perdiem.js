@@ -1,4 +1,4 @@
-// ========================= perdiem.js (To 필드 통합 패치) =========================
+// ========================= perdiem.js (YP flight 전용 패치) =========================
 import fs from "fs";
 import path from "path";
 import admin from "firebase-admin";
@@ -28,7 +28,7 @@ export function convertDate(input) {
   let month, dayStr;
   if (monthMap[parts[0]]) {
     month = monthMap[parts[0]];
-    dayStr = parts[1].padStart(2, "0");
+    dayStr = parts[1].padStart(2,"0");
   } else {
     month = String(now.getMonth() + 1).padStart(2,"0");
     dayStr = parts[1].padStart(2,"0");
@@ -80,12 +80,12 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
 
   const QUICK_DESTS = ["NRT", "HKG", "DAC"];
 
-  // ===== flightRows 필터링 강화 =====
+  // ===== flightRows 필터링 (YP + From ≠ To) =====
   const flightRows = rows.filter(r => {
     const activity = (r[4] || "").trim().toUpperCase();
     const from = (r[6] || "").trim();
     const to = (r[9] || "").trim();
-    return activity && !["OFF", "REST", "RSV"].includes(activity) && from && to;
+    return activity.startsWith("YP") && from && to && from !== to;
   });
 
   for (let i = 0; i < flightRows.length; i++) {
@@ -180,8 +180,8 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       Date: DateFormatted,
       Activity,
       From,
-      To, // To 필드 추가
-      Destination: To, // 기존 호환
+      To,
+      Destination: To,
       RI: riValid ? riValid.toISOString() : "",
       RO: roValid ? roValid.toISOString() : "",
       StayHours,
@@ -227,7 +227,6 @@ export async function uploadPerDiemFirestore(perdiemList) {
   const collectionRef = db.collection("Perdiem");
 
   for (let item of perdiemList) {
-    // To 필드 포함 docId → 중복 체크에도 To 반영
     const docId = `${item.Year}${item.Month}${item.Date.replace(/\./g, "")}_${item.To}`;
     await collectionRef.doc(docId).set({ owner, ...item });
   }
