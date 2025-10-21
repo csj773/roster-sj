@@ -1,4 +1,4 @@
-// ========================= perdiem.js (패치 통합본) =========================
+// ========================= perdiem.js (중복제거 패치) =========================
 import fs from "fs";
 import path from "path";
 import admin from "firebase-admin";
@@ -67,11 +67,7 @@ function calculatePerDiem(riDate, roDate, rate) {
 export async function generatePerDiemList(rosterJsonPath, owner) {
   const raw = JSON.parse(fs.readFileSync(rosterJsonPath, "utf-8"));
   const rows = raw.values.slice(1);
-
   rows.sort((a, b) => new Date(convertDate(a[0])) - new Date(convertDate(b[0])));
-
-  const perdiemList = [];
-  const now = new Date();
 
   if (!admin.apps.length) {
     admin.initializeApp({ credential: admin.credential.applicationDefault() });
@@ -79,8 +75,9 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
   const db = admin.firestore();
 
   const QUICK_DESTS = ["NRT", "HKG", "DAC"];
+  const perdiemList = [];
+  const now = new Date();
 
-  // ===== flightRows 필터링 강화 =====
   const flightRows = rows.filter(r => {
     const activity = (r[4] || "").trim().toUpperCase();
     const from = (r[6] || "").trim();
@@ -108,73 +105,39 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
     let Rate = From === "ICN" ? 0 : PERDIEM_RATE[From] || 3;
     let riDate = null, roDate = null;
 
-    // ===== 귀국편 (To === ICN) =====
     if (To === "ICN" && From !== "ICN") {
       roDate = parseHHMMOffset(STDZ, DateFormatted);
-
-      if (i === 0) {
-        const curMonthNum = Number(Month);
-        const prevMonthNum = curMonthNum - 1 >= 1 ? curMonthNum - 1 : 12;
-        const prevMonth = String(prevMonthNum).padStart(2,"0");
-        const prevYear = prevMonthNum === 12 ? String(Number(Year)-1) : Year;
-
-        const prevSnapshot = await db.collection("Perdiem")
-          .where("owner","==",owner)
-          .where("Month","==",prevMonth)
-          .where("Year","==",prevYear)
-          .where("Destination","==",From)
-          .orderBy("Date","desc")
-          .limit(1)
-          .get();
-
-        if (!prevSnapshot.empty) {
-          const prevDoc = prevSnapshot.docs[0].data();
-          if (prevDoc.RO) riDate = new Date(prevDoc.RO);
-        }
-      } else {
+      if (i > 0) {
         const prevRow = flightRows[i-1];
         riDate = parseHHMMOffset(prevRow[11], convertDate(prevRow[0]));
       }
-    }
-    // ===== 출발편 (ICN → 해외 도착) =====
-    else if (From === "ICN") {
+    } else if (From === "ICN") {
       riDate = parseHHMMOffset(STAZ, DateFormatted);
-    }
-    // ===== 해외 출발 ↔ 해외 도착 =====
-    else {
+    } else {
       riDate = parseHHMMOffset(STAZ, DateFormatted);
       roDate = parseHHMMOffset(STDZ, DateFormatted);
     }
 
-    // ===== Quick Turn 귀국편 처리 =====
     let isQuickTurnReturn = false;
     if (To === "ICN" && QUICK_DESTS.includes(From) && i > 0) {
       const prevRow = flightRows[i-1];
       if (prevRow[6] === "ICN" && prevRow[9] === From) {
-        const prevRI = parseHHMMOffset(prevRow[11], convertDate(prevRow[0]));
-        if (prevRI instanceof Date && !isNaN(prevRI)) {
-          isQuickTurnReturn = true;
-          riDate = prevRI;
-          if (!DateStr || !DateStr.trim()) DateFormatted = convertDate(prevRow[0]);
-        }
+        isQuickTurnReturn = true;
+        riDate = parseHHMMOffset(prevRow[11], convertDate(prevRow[0]));
       }
     }
 
-    // ===== Per Diem 계산 =====
     const riValid = riDate instanceof Date && !isNaN(riDate) ? riDate : null;
     const roValid = roDate instanceof Date && !isNaN(roDate) ? roDate : null;
 
     let { StayHours, Total } = calculatePerDiem(riValid, roValid, Rate);
-
     if (From === "ICN") StayHours = "0:00";
     if (isQuickTurnReturn) {
       Total = 33;
       Rate = 33;
     }
 
-    // ===== 교통비 =====
-    let TransportFee = 7000;
-    if (isQuickTurnReturn) TransportFee = 14000;
+    const TransportFee = isQuickTurnReturn ? 14000 : 14000;
 
     perdiemList.push({
       Date: DateFormatted,
@@ -188,30 +151,36 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       Total,
       TransportFee,
       Month,
-      Year
+      Year,
+      owner
     });
   }
 
-  return perdiemList;
+  // 🔹 중복 제거 (Date + Activity + owner)
+  const seen = new Set();
+  const uniqueList = [];
+  for (const item of perdiemList) {
+    const key = `${item.Date}_${item.Activity}_${item.owner}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      uniqueList.push(item);
+    }
+  }
+
+  console.log(`✅ PerDiem 리스트 생성 완료 (${uniqueList.length}건)`);
+  return uniqueList;
 }
 
 // ------------------- CSV 저장 -------------------
 export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
-  if (!Array.isArray(perdiemList)) return;
-
   const header = "Date,Activity,From,Destination,RI,RO,StayHours,Rate,Total,TransportFee,Month,Year\n";
   const rows = perdiemList.map(e =>
     `${e.Date},${e.Activity},${e.From},${e.Destination},${e.RI},${e.RO},${e.StayHours},${e.Rate},${e.Total},${e.TransportFee},${e.Month},${e.Year}`
   );
-
-  try {
-    const fullPath = path.join(process.cwd(), outputPath);
-    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-    fs.writeFileSync(fullPath, header + rows.join("\n"), "utf-8");
-    console.log(`✅ CSV 저장 완료: ${fullPath}`);
-  } catch (err) {
-    console.error("❌ CSV 저장 실패:", err);
-  }
+  const fullPath = path.join(process.cwd(), outputPath);
+  fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+  fs.writeFileSync(fullPath, header + rows.join("\n"), "utf-8");
+  console.log(`✅ CSV 저장 완료: ${fullPath}`);
 }
 
 // ------------------- Firestore 업로드 -------------------
@@ -219,13 +188,11 @@ export async function uploadPerDiemFirestore(perdiemList) {
   const owner = process.env.FIRESTORE_ADMIN_UID || process.env.firestoreAdminUid || "";
   if (!Array.isArray(perdiemList) || !owner) return;
 
-  if (!admin.apps.length)
-    admin.initializeApp({ credential: admin.credential.applicationDefault() });
-
+  if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.applicationDefault() });
   const db = admin.firestore();
   const collectionRef = db.collection("Perdiem");
 
-  for (let item of perdiemList) {
+  for (const item of perdiemList) {
     const docId = `${item.Year}${item.Month}${item.Date.replace(/\./g, "")}_${item.Destination}`;
     await collectionRef.doc(docId).set({ owner, ...item });
   }
