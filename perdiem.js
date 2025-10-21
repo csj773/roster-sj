@@ -1,4 +1,4 @@
-// ========================= perdiem.js (중복제거 패치) =========================
+// ========================= perdiem.js (최신 통합 패치본, FIREBASE_UID + 중복제거) =========================
 import fs from "fs";
 import path from "path";
 import admin from "firebase-admin";
@@ -19,7 +19,6 @@ export function convertDate(input) {
 
   const now = new Date();
   const year = now.getFullYear();
-
   const monthMap = {
     Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",
     Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12"
@@ -64,16 +63,17 @@ function calculatePerDiem(riDate, roDate, rate) {
 }
 
 // ------------------- Roster.json → PerDiem 리스트 -------------------
-export async function generatePerDiemList(rosterJsonPath, owner) {
+export async function generatePerDiemList(rosterJsonPath) {
+  const owner = process.env.FIREBASE_UID || "";
+  if (!owner) throw new Error("FIREBASE_UID 환경변수가 설정되어 있어야 합니다.");
+
   const raw = JSON.parse(fs.readFileSync(rosterJsonPath, "utf-8"));
-  const rows = raw.values.slice(1);
-  rows.sort((a, b) => new Date(convertDate(a[0])) - new Date(convertDate(b[0])));
+  const rows = raw.values.slice(1).sort((a, b) => new Date(convertDate(a[0])) - new Date(convertDate(b[0])));
 
   if (!admin.apps.length) {
     admin.initializeApp({ credential: admin.credential.applicationDefault() });
   }
   const db = admin.firestore();
-
   const QUICK_DESTS = ["NRT", "HKG", "DAC"];
   const perdiemList = [];
   const now = new Date();
@@ -88,7 +88,6 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
   for (let i = 0; i < flightRows.length; i++) {
     const row = flightRows[i];
     const [DateStr,, , , Activity,, FromRaw,, STDZ, ToRaw,, STAZ] = row;
-
     const From = FromRaw?.trim() || "UNKNOWN";
     const To = ToRaw?.trim() || "UNKNOWN";
 
@@ -98,19 +97,13 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
         : `${now.getFullYear()}.${String(now.getMonth()+1).padStart(2,"0")}.${String(now.getDate()).padStart(2,"0")}`;
     }
 
-    const dfParts = DateFormatted.split(".");
-    const Year = dfParts[0] || String(now.getFullYear());
-    const Month = (dfParts[1] || "01").padStart(2,"0");
-
+    const [Year, Month] = DateFormatted.split(".");
     let Rate = From === "ICN" ? 0 : PERDIEM_RATE[From] || 3;
     let riDate = null, roDate = null;
 
     if (To === "ICN" && From !== "ICN") {
       roDate = parseHHMMOffset(STDZ, DateFormatted);
-      if (i > 0) {
-        const prevRow = flightRows[i-1];
-        riDate = parseHHMMOffset(prevRow[11], convertDate(prevRow[0]));
-      }
+      if (i > 0) riDate = parseHHMMOffset(flightRows[i-1][11], convertDate(flightRows[i-1][0]));
     } else if (From === "ICN") {
       riDate = parseHHMMOffset(STAZ, DateFormatted);
     } else {
@@ -137,7 +130,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       Rate = 33;
     }
 
-    const TransportFee = isQuickTurnReturn ? 14000 : 14000;
+    const TransportFee = 14000; // 일률적 적용
 
     perdiemList.push({
       Date: DateFormatted,
@@ -185,17 +178,28 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
 
 // ------------------- Firestore 업로드 -------------------
 export async function uploadPerDiemFirestore(perdiemList) {
-  const owner = process.env.FIRESTORE_ADMIN_UID || process.env.firestoreAdminUid || "";
+  const owner = process.env.FIREBASE_UID || "";
   if (!Array.isArray(perdiemList) || !owner) return;
 
   if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.applicationDefault() });
   const db = admin.firestore();
   const collectionRef = db.collection("Perdiem");
 
+  // 🔹 중복 제거: Date + Activity + owner
+  const seen = new Set();
+  const uniqueList = [];
   for (const item of perdiemList) {
-    const docId = `${item.Year}${item.Month}${item.Date.replace(/\./g, "")}_${item.Destination}`;
-    await collectionRef.doc(docId).set({ owner, ...item });
+    const key = `${item.Date}_${item.Activity}_${owner}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      uniqueList.push({ ...item, owner });
+    }
   }
 
-  console.log(`✅ Firestore 업로드 완료 (${perdiemList.length}건)`);
+  for (const item of uniqueList) {
+    const docId = `${item.Year}${item.Month}${item.Date.replace(/\./g, "")}_${item.Destination}`;
+    await collectionRef.doc(docId).set(item, { merge: true });
+  }
+
+  console.log(`✅ Firestore 업로드 완료 (${uniqueList.length}건)`);
 }
