@@ -1,4 +1,4 @@
-// ========================= perdiem.js =========================
+// ========================= perdiem.js (패치 통합본) =========================
 import fs from "fs";
 import path from "path";
 import admin from "firebase-admin";
@@ -14,7 +14,6 @@ export const PERDIEM_RATE = {
 // ------------------- Date 변환 -------------------
 export function convertDate(input) {
   if (!input || typeof input !== "string") return input;
-
   const parts = input.trim().split(/\s+/);
   if (parts.length < 2) return input;
 
@@ -79,12 +78,22 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
   }
   const db = admin.firestore();
 
-  const flightRows = rows.filter(r => r[6] && r[9]);
   const QUICK_DESTS = ["NRT", "HKG", "DAC"];
+
+  // ===== flightRows 필터링 강화 =====
+  const flightRows = rows.filter(r => {
+    const activity = (r[4] || "").trim().toUpperCase();
+    const from = (r[6] || "").trim();
+    const to = (r[9] || "").trim();
+    return activity && !["OFF", "REST", "RSV"].includes(activity) && from && to;
+  });
 
   for (let i = 0; i < flightRows.length; i++) {
     const row = flightRows[i];
-    const [DateStr,, , , Activity, , From, , STDZ, To, , STAZ] = row;
+    const [DateStr,, , , Activity,, FromRaw,, STDZ, ToRaw,, STAZ] = row;
+
+    const From = FromRaw?.trim() || "UNKNOWN";
+    const To = ToRaw?.trim() || "UNKNOWN";
 
     let DateFormatted = convertDate(DateStr);
     if (!DateFormatted || !DateFormatted.includes(".")) {
@@ -163,10 +172,9 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       Rate = 33;
     }
 
-    // ===== 교통비 추가 =====
-
-let TransportFee = 7000;
-if (isQuickTurnReturn) TransportFee = 14000;
+    // ===== 교통비 =====
+    let TransportFee = 7000;
+    if (isQuickTurnReturn) TransportFee = 14000;
 
     perdiemList.push({
       Date: DateFormatted,
@@ -189,10 +197,7 @@ if (isQuickTurnReturn) TransportFee = 14000;
 
 // ------------------- CSV 저장 -------------------
 export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
-  if (!Array.isArray(perdiemList)) {
-    console.warn("❌ savePerDiemCSV: perdiemList가 배열이 아닙니다.");
-    return;
-  }
+  if (!Array.isArray(perdiemList)) return;
 
   const header = "Date,Activity,From,Destination,RI,RO,StayHours,Rate,Total,TransportFee,Month,Year\n";
   const rows = perdiemList.map(e =>
@@ -212,62 +217,18 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
 // ------------------- Firestore 업로드 -------------------
 export async function uploadPerDiemFirestore(perdiemList) {
   const owner = process.env.FIRESTORE_ADMIN_UID || process.env.firestoreAdminUid || "";
-
-  if (!Array.isArray(perdiemList) || !owner) {
-    console.warn("❌ uploadPerDiemFirestore: 잘못된 입력 또는 FIRESTORE_ADMIN_UID 누락");
-    return;
-  }
+  if (!Array.isArray(perdiemList) || !owner) return;
 
   if (!admin.apps.length)
     admin.initializeApp({ credential: admin.credential.applicationDefault() });
 
   const db = admin.firestore();
-  const collection = db.collection("Perdiem");
+  const collectionRef = db.collection("Perdiem");
 
-  console.log(`🚀 Firestore 업로드 시작: ${perdiemList.length}건 (owner=${owner})`);
-
-  let successCount = 0;
-  let failCount = 0;
-
-  for (const row of perdiemList) {
-    try {
-      if (!row || !row.Date || !row.Destination) continue;
-
-      const rawFrom = row.From ?? row.FROM ?? "";
-      const normalizedFrom = String(rawFrom).trim().toUpperCase();
-      const data = { ...row, owner };
-
-      // ✈️ ICN 출발편은 강제 설정
-      if (normalizedFrom === "ICN") {
-        data.StayHours = "0:00";
-        data.Total = 0;
-        data.TransportFee = 7000;
-        console.log(`✈️ ICN 출발편 처리: ${row.Date} (${row.Activity})`);
-      }
-
-      // 중복체크 후 삭제
-      const snapshot = await collection
-        .where("Destination", "==", row.Destination)
-        .where("Date", "==", row.Date)
-        .where("owner", "==", owner)
-        .get();
-
-      if (!snapshot.empty) {
-        for (const doc of snapshot.docs) {
-          await collection.doc(doc.id).delete();
-          console.log(`🗑️ 기존 문서 삭제: ${row.Destination}, ${row.Date}`);
-        }
-      }
-
-      // 신규 업로드
-      await collection.add(data);
-      console.log(`✅ 업로드 완료: ${normalizedFrom} → ${row.Destination}, ${row.Date}`);
-      successCount++;
-    } catch (err) {
-      console.error(`❌ Firestore 업로드 실패 (${row.From} → ${row.Destination}, ${row.Date}):`, err);
-      failCount++;
-    }
+  for (let item of perdiemList) {
+    const docId = `${item.Year}${item.Month}${item.Date.replace(/\./g, "")}_${item.Destination}`;
+    await collectionRef.doc(docId).set({ owner, ...item });
   }
 
-  console.log(`✅ Firestore 업로드 완료: ${successCount}건 성공, ${failCount}건 실패`);
+  console.log(`✅ Firestore 업로드 완료 (${perdiemList.length}건)`);
 }
