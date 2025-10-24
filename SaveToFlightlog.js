@@ -137,8 +137,11 @@ fs.createReadStream(csvFile)
     for (const [i, row] of rows.entries()) {
       try {
         const csvDateStr = (row.Date || "").trim();
-        const parsed = dayjs(csvDateStr, "DDMMMYY", "en");
+
+        // ✅ 다양한 형식 대응: 2.Oct.25 / 02.Oct.25 / 2.Oct.2025
+        const parsed = dayjs(csvDateStr, ["D.MMM.YY", "DD.MMM.YY", "D.MMM.YYYY"], "en", true);
         const flightDate = parsed.isValid() ? parsed.toDate() : new Date();
+        const flightTimestamp = admin.firestore.Timestamp.fromDate(flightDate);
 
         const blk = (row.BH || row.BLK || "00:00").trim();
         const stdZ = (row.StartZ || row["STD(Z)"] || "").trim();
@@ -147,15 +150,13 @@ fs.createReadStream(csvFile)
         const ET = calculateET(blk);
         const NT = calculateNTFromSTDSTA(stdZ, staZ, flightDate, blk);
 
-        const dateKey = dayjs(flightDate).format("YYYY-MM-DD");
-
         const docData = {
-          Date: dateKey,
+          Date: flightTimestamp, // ✅ Timestamp로 저장
           FLT: row.Activity || row.FLT || "",
           FROM: row.From || "",
           TO: row.To || "",
           REG: row["A/C ID"] || "",
-          DC: row["A/C Type"] || "",
+          DC: row["A/C Type"] || row.DC || "",
           BLK: blk,
           PIC: row.PIC || "",
           ET,
@@ -169,10 +170,10 @@ fs.createReadStream(csvFile)
           uploadedAt: admin.firestore.FieldValue.serverTimestamp(),
         };
 
-        // 중복 제거
+        // 🔁 중복 제거 (같은 날짜·FLT·FROM·TO)
         const dupQuery = await db
           .collection("Flightlog")
-          .where("Date", "==", dateKey)
+          .where("Date", "==", flightTimestamp)
           .where("FLT", "==", docData.FLT)
           .where("FROM", "==", docData.FROM)
           .where("TO", "==", docData.TO)
