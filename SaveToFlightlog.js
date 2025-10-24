@@ -123,6 +123,21 @@ console.log(`📄 CSV 파일 발견: ${csvFile}`);
 
 // ------------------- CSV 파싱 및 Firestore 업로드 -------------------
 
+function parseFlightDate(csvDateStr) {
+  if (!csvDateStr) return new Date();
+
+  const normalized = csvDateStr
+    .replace(/(\d+)\.(\w+)\.(\d{2,4})/, "$1 $2 $3")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const parsed = dayjs(normalized, ["D MMM YY", "DD MMM YY", "D MMM YYYY"], "en", true);
+  if (parsed.isValid()) return parsed.toDate();
+
+  console.warn(`⚠️ 날짜 파싱 실패 → ${csvDateStr}, 현재시간으로 대체`);
+  return new Date();
+}
+
 const rows = [];
 fs.createReadStream(csvFile)
   .pipe(csv())
@@ -137,10 +152,7 @@ fs.createReadStream(csvFile)
     for (const [i, row] of rows.entries()) {
       try {
         const csvDateStr = (row.Date || "").trim();
-
-        // ✅ 다양한 형식 대응: 2.Oct.25 / 02.Oct.25 / 2.Oct.2025
-        const parsed = dayjs(csvDateStr, ["D.MMM.YY", "DD.MMM.YY", "D.MMM.YYYY"], "en", true);
-        const flightDate = parsed.isValid() ? parsed.toDate() : new Date();
+        const flightDate = parseFlightDate(csvDateStr);
         const flightTimestamp = admin.firestore.Timestamp.fromDate(flightDate);
 
         const blk = (row.BH || row.BLK || "00:00").trim();
@@ -151,7 +163,7 @@ fs.createReadStream(csvFile)
         const NT = calculateNTFromSTDSTA(stdZ, staZ, flightDate, blk);
 
         const docData = {
-          Date: flightTimestamp, // ✅ Timestamp로 저장
+          Date: flightTimestamp, // ✅ Firestore Timestamp 저장
           FLT: row.Activity || row.FLT || "",
           FROM: row.From || "",
           TO: row.To || "",
@@ -170,7 +182,7 @@ fs.createReadStream(csvFile)
           uploadedAt: admin.firestore.FieldValue.serverTimestamp(),
         };
 
-        // 🔁 중복 제거 (같은 날짜·FLT·FROM·TO)
+        // 중복 제거 (같은 날짜·FLT·FROM·TO)
         const dupQuery = await db
           .collection("Flightlog")
           .where("Date", "==", flightTimestamp)
@@ -184,7 +196,9 @@ fs.createReadStream(csvFile)
         }
 
         await db.collection("Flightlog").add(docData);
-        console.log(`✅ ${i + 1}/${rows.length} 저장 완료 (${csvDateStr} ${docData.FLT}) [ET=${ET}, NT=${NT}]`);
+        console.log(
+          `✅ ${i + 1}/${rows.length} 저장 완료 (${csvDateStr} → ${flightDate.toISOString().split("T")[0]}) [${docData.FLT}]`
+        );
       } catch (err) {
         console.error(`❌ ${i + 1}행 오류: ${err.message}`);
       }
