@@ -1,4 +1,4 @@
-// ========================= perdiem.js (패치 통합본) =========================
+// ========================= perdiem.js (패치 통합본: Month = "Oct" 형식) =========================
 import fs from "fs";
 import path from "path";
 import admin from "firebase-admin";
@@ -80,7 +80,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
 
   const QUICK_DESTS = ["NRT", "HKG", "DAC"];
 
-  // ===== flightRows 필터링 강화 =====
+  // ===== flightRows 필터링 =====
   const flightRows = rows.filter(r => {
     const activity = (r[4] || "").trim().toUpperCase();
     const from = (r[6] || "").trim();
@@ -97,33 +97,40 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
 
     let DateFormatted = convertDate(DateStr);
     if (!DateFormatted || !DateFormatted.includes(".")) {
-      DateFormatted = i > 0 ? convertDate(flightRows[i-1][0]) 
-        : `${now.getFullYear()}.${String(now.getMonth()+1).padStart(2,"0")}.${String(now.getDate()).padStart(2,"0")}`;
+      DateFormatted = i > 0 ? convertDate(flightRows[i - 1][0])
+        : `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, "0")}.${String(now.getDate()).padStart(2, "0")}`;
     }
 
+    // ✅ Month를 Oct 형식으로 변환
     const dfParts = DateFormatted.split(".");
     const Year = dfParts[0] || String(now.getFullYear());
-    const Month = (dfParts[1] || "01").padStart(2,"0");
+    const monthNum = (dfParts[1] || "01").padStart(2, "0");
+    const monthNameMap = {
+      "01": "Jan", "02": "Feb", "03": "Mar", "04": "Apr",
+      "05": "May", "06": "Jun", "07": "Jul", "08": "Aug",
+      "09": "Sep", "10": "Oct", "11": "Nov", "12": "Dec"
+    };
+    const Month = monthNameMap[monthNum] || "Unknown";
 
     let Rate = From === "ICN" ? 0 : PERDIEM_RATE[From] || 3;
     let riDate = null, roDate = null;
 
-    // ===== 귀국편 (To === ICN) =====
+    // ===== 귀국편 =====
     if (To === "ICN" && From !== "ICN") {
       roDate = parseHHMMOffset(STDZ, DateFormatted);
 
       if (i === 0) {
-        const curMonthNum = Number(Month);
+        const curMonthNum = Number(monthNum);
         const prevMonthNum = curMonthNum - 1 >= 1 ? curMonthNum - 1 : 12;
-        const prevMonth = String(prevMonthNum).padStart(2,"0");
-        const prevYear = prevMonthNum === 12 ? String(Number(Year)-1) : Year;
+        const prevMonth = String(prevMonthNum).padStart(2, "0");
+        const prevYear = prevMonthNum === 12 ? String(Number(Year) - 1) : Year;
 
         const prevSnapshot = await db.collection("Perdiem")
-          .where("owner","==",owner)
-          .where("Month","==",prevMonth)
-          .where("Year","==",prevYear)
-          .where("Destination","==",From)
-          .orderBy("Date","desc")
+          .where("owner", "==", owner)
+          .where("Month", "==", prevMonth)
+          .where("Year", "==", prevYear)
+          .where("Destination", "==", From)
+          .orderBy("Date", "desc")
           .limit(1)
           .get();
 
@@ -132,24 +139,24 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
           if (prevDoc.RO) riDate = new Date(prevDoc.RO);
         }
       } else {
-        const prevRow = flightRows[i-1];
+        const prevRow = flightRows[i - 1];
         riDate = parseHHMMOffset(prevRow[11], convertDate(prevRow[0]));
       }
     }
-    // ===== 출발편 (ICN → 해외 도착) =====
+    // ===== 출발편 (ICN → 해외) =====
     else if (From === "ICN") {
       riDate = parseHHMMOffset(STAZ, DateFormatted);
     }
-    // ===== 해외 출발 ↔ 해외 도착 =====
+    // ===== 해외 → 해외 =====
     else {
       riDate = parseHHMMOffset(STAZ, DateFormatted);
       roDate = parseHHMMOffset(STDZ, DateFormatted);
     }
 
-    // ===== Quick Turn 귀국편 처리 =====
+    // ===== Quick Turn 귀국편 =====
     let isQuickTurnReturn = false;
     if (To === "ICN" && QUICK_DESTS.includes(From) && i > 0) {
-      const prevRow = flightRows[i-1];
+      const prevRow = flightRows[i - 1];
       if (prevRow[6] === "ICN" && prevRow[9] === From) {
         const prevRI = parseHHMMOffset(prevRow[11], convertDate(prevRow[0]));
         if (prevRI instanceof Date && !isNaN(prevRI)) {
