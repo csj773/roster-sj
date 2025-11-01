@@ -165,11 +165,11 @@ async function removeDuplicates() {
     if(endLocal<=startLocal) endLocal.setDate(endLocal.getDate()+1);
 
     const description = `
-CREATED_BY_GCALJS
+CREATED_BY_gcal.js
 Activity: ${activity}
+C/I(L): ${ciLStr}
 From: ${from} To: ${to}
 STD(L): ${stdLStr} STA(L): ${staLStr}
-C/I(L): ${ciLStr}
 AcReg: ${row[idx["AcReg"]]||""} 
 Blockhours: ${blhStr}
 Crew: ${row[idx["Crew"]]||""}
