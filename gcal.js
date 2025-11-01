@@ -167,11 +167,12 @@ async function removeDuplicates() {
     const description = `
 CREATED_BY_GCALJS
 Activity: ${activity}
-Crew: ${row[idx["Crew"]]||""}
 From: ${from} To: ${to}
 STD(L): ${stdLStr} STA(L): ${staLStr}
 C/I(L): ${ciLStr}
-AcReg: ${row[idx["AcReg"]]||""} Blockhours: ${blhStr}
+AcReg: ${row[idx["AcReg"]]||""} 
+Blockhours: ${blhStr}
+Crew: ${row[idx["Crew"]]||""}
     `.trim();
 
     await insertEventWithRetry({
