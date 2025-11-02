@@ -181,12 +181,6 @@ Blockhours: ${blhStr}
 Crew: ${row[idx["Crew"]] || ""}
 CREATED_BY_GCALJS
 `.trim();
-const description = `
-CREATED_BY_GCALJS
-Activity: ${activity}
-From: ${from} To: ${to}
-STD(L): ${stdLStr} STA(L): ${staLStr}
-C/I(L): ${ciLStr}
 
     await insertEventWithRetry({
       calendarId: CALENDAR_ID,
