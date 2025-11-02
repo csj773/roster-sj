@@ -134,15 +134,19 @@ async function removeDuplicates() {
     const rawDate = row[idx["Date"]];
     const convDate = convertDate(rawDate);
     if(!convDate) continue;
-
+   
     const from = row[idx["From"]] || "ICN";
-    const to = row[idx["To"]] || "";
-    const stdLStr = row[idx["STD(L)"]] || "0000";
-    const staLStr = row[idx["STA(L)"]] || "0000";
-    const stdZStr = row[idx["STD(Z)"]] || "";
-    const staZStr = row[idx["STA(Z)"]] || "";
-    const ciLStr  = row[idx["C/I(L)"]] || "0000";
-    const blhStr  = row[idx["BLH"]]   || "00:00";
+const to = row[idx["To"]] || "";
+const stdLStr = row[idx["STD(L)"]] || "0000";
+const staLStr = row[idx["STA(L)"]] || "0000";
+
+// ✅ (1) 추가: roster.json에서 STD(Z), STA(Z) 읽기
+const stdZStr = row[idx["STD(Z)"]] || "";
+const staZStr = row[idx["STA(Z)"]] || "";
+
+const ciLStr  = row[idx["C/I(L)"]] || "0000";
+const blhStr  = row[idx["BLH"]]   || "00:00";
+  
 
     // ALL-DAY 이벤트
     if(/REST|OFF|ETC/i.test(activity) || stdLStr==="0000" || staLStr==="0000"){
@@ -152,7 +156,7 @@ async function removeDuplicates() {
           summary: activity,
           start:{date: convDate},
           end:{date: convDate},
-          description:`Created_By_gcal.js\nCrew: ${row[idx["Crew"]]||""}`
+          description:`CREATED_BY_GCALJS\nCrew: ${row[idx["Crew"]]||""}`
         }
       });
       console.log(`✅ ALL-DAY 추가: ${activity} (${convDate})`);
@@ -168,15 +172,21 @@ async function removeDuplicates() {
 
     const description = `
 Activity: ${activity}
-C/I(L): ${ciLStr}
 From: ${from} To: ${to}
+C/I(L): ${ciLStr}
 STD(L): ${stdLStr} STA(L): ${staLStr}
 STD(Z): ${stdZStr} STA(Z): ${staZStr}
-AcReg: ${row[idx["AcReg"]]||""} 
+AcReg: ${row[idx["AcReg"]] || ""}
 Blockhours: ${blhStr}
-Crew: ${row[idx["Crew"]]||""}
-Created_By_gcal.js
-    `.trim();
+Crew: ${row[idx["Crew"]] || ""}
+CREATED_BY_GCALJS
+`.trim();
+const description = `
+CREATED_BY_GCALJS
+Activity: ${activity}
+From: ${from} To: ${to}
+STD(L): ${stdLStr} STA(L): ${staLStr}
+C/I(L): ${ciLStr}
 
     await insertEventWithRetry({
       calendarId: CALENDAR_ID,
