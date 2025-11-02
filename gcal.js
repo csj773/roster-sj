@@ -139,6 +139,8 @@ async function removeDuplicates() {
     const to = row[idx["To"]] || "";
     const stdLStr = row[idx["STD(L)"]] || "0000";
     const staLStr = row[idx["STA(L)"]] || "0000";
+    const stdZStr = row[idx["STD(Z)"]] || "";
+    const staZStr = row[idx["STA(Z)"]] || "";
     const ciLStr  = row[idx["C/I(L)"]] || "0000";
     const blhStr  = row[idx["BLH"]]   || "00:00";
 
@@ -150,7 +152,7 @@ async function removeDuplicates() {
           summary: activity,
           start:{date: convDate},
           end:{date: convDate},
-          description:`CREATED_BY_GCALJS\nCrew: ${row[idx["Crew"]]||""}`
+          description:`Created_By_gcal.js\nCrew: ${row[idx["Crew"]]||""}`
         }
       });
       console.log(`✅ ALL-DAY 추가: ${activity} (${convDate})`);
@@ -169,6 +171,7 @@ Activity: ${activity}
 C/I(L): ${ciLStr}
 From: ${from} To: ${to}
 STD(L): ${stdLStr} STA(L): ${staLStr}
+STD(Z): ${stdZStr} STA(Z): ${staZStr}
 AcReg: ${row[idx["AcReg"]]||""} 
 Blockhours: ${blhStr}
 Crew: ${row[idx["Crew"]]||""}
