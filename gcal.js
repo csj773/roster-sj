@@ -1,4 +1,4 @@
-// ==================== gcal.js 10.17 (단순화 + 사후 중복 제거) ====================
+// ==================== gcal.js 10.18 (DST 자동적용 버전) ====================
 import fs from "fs";
 import path from "path";
 import { google } from "googleapis";
@@ -18,8 +18,17 @@ try {
     : JSON.parse(fs.readFileSync(GOOGLE_CALENDAR_CREDENTIALS,"utf-8"));
 } catch(e) { console.error("❌ GOOGLE_CALENDAR_CREDENTIALS 파싱 실패:", e.message); process.exit(1); }
 
-// ------------------- 공항 UTC 오프셋 -------------------
-const AIRPORT_OFFSETS = { ICN: 9, LAX: -7, SFO: -7, EWR: -4, NRT: 9, HKG: 8, DAC: 6 };
+// ------------------- 공항 TimeZone (DST 자동 적용용) -------------------
+const AIRPORT_TIMEZONES = {
+  ICN: "Asia/Seoul",
+  LAX: "America/Los_Angeles",
+  SFO: "America/Los_Angeles",
+  EWR: "America/New_York",
+  NRT: "Asia/Tokyo",
+  HKG: "Asia/Hong_Kong",
+  DAC: "Asia/Dhaka",
+  BKK: "Asia/Bangkok", // ✅ 추가됨 (UTC+7, DST 없음)
+};
 
 // ------------------- 유틸 함수 -------------------
 function parseHHMMOffset(str, baseDateStr, airport) {
@@ -27,12 +36,20 @@ function parseHHMMOffset(str, baseDateStr, airport) {
   const match = str.match(/^(\d{2})(\d{2})([+-]\d+)?$/);
   if(!match) return null;
   const [, hh, mm, offset] = match;
+  const tz = AIRPORT_TIMEZONES[airport] || AIRPORT_TIMEZONES["ICN"];
+
+  // baseDateStr 형식: YYYY-MM-DD
   const [year, month, day] = baseDateStr.split("-").map(Number);
-  let dateObj = new Date(Date.UTC(year, month-1, day, Number(hh), Number(mm)));
-  const airportOffset = AIRPORT_OFFSETS[airport] ?? AIRPORT_OFFSETS["ICN"];
-  dateObj.setUTCHours(dateObj.getUTCHours() - airportOffset);
-  if(offset) dateObj.setUTCDate(dateObj.getUTCDate() + Number(offset));
-  return dateObj;
+  const local = new Date(Date.UTC(year, month - 1, day, hh, mm));
+
+  // 실제 현지 타임존과 UTC 시간의 차이를 계산 → DST 자동 반영
+  const utcTime = new Date(local.toLocaleString("en-US", { timeZone: "UTC" }));
+  const localTime = new Date(local.toLocaleString("en-US", { timeZone: tz }));
+  const offsetMs = localTime - utcTime;
+
+  const finalDate = new Date(local.getTime() - offsetMs);
+  if(offset) finalDate.setUTCDate(finalDate.getUTCDate() + Number(offset));
+  return finalDate;
 }
 
 function convertDate(input) {
@@ -113,7 +130,7 @@ async function removeDuplicates() {
 
 // ------------------- Main -------------------
 (async()=>{
-  console.log("🚀 Google Calendar 업로드 시작");
+  console.log("🚀 Google Calendar 업로드 시작 (DST 자동적용 버전 10.18)");
   await deleteExistingGcalEvents();
 
   const rosterPath = path.join(process.cwd(),"public","roster.json");
@@ -136,17 +153,13 @@ async function removeDuplicates() {
     if(!convDate) continue;
    
     const from = row[idx["From"]] || "ICN";
-const to = row[idx["To"]] || "";
-const stdLStr = row[idx["STD(L)"]] || "0000";
-const staLStr = row[idx["STA(L)"]] || "0000";
-
-// ✅ (1) 추가: roster.json에서 STD(Z), STA(Z) 읽기
-const stdZStr = row[idx["STD(Z)"]] || "";
-const staZStr = row[idx["STA(Z)"]] || "";
-
-const ciLStr  = row[idx["C/I(L)"]] || "0000";
-const blhStr  = row[idx["BLH"]]   || "00:00";
-  
+    const to = row[idx["To"]] || "";
+    const stdLStr = row[idx["STD(L)"]] || "0000";
+    const staLStr = row[idx["STA(L)"]] || "0000";
+    const stdZStr = row[idx["STD(Z)"]] || "";
+    const staZStr = row[idx["STA(Z)"]] || "";
+    const ciLStr  = row[idx["C/I(L)"]] || "0000";
+    const blhStr  = row[idx["BLH"]]   || "00:00";
 
     // ALL-DAY 이벤트
     if(/REST|OFF|ETC/i.test(activity) || stdLStr==="0000" || staLStr==="0000"){
@@ -188,16 +201,14 @@ CREATED_BY_GCALJS
         summary: activity,
         location: `${from} → ${to}`,
         description,
-        start:{dateTime:startLocal.toISOString(), timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone},
-        end:{dateTime:endLocal.toISOString(), timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone},
+        start:{dateTime:startLocal.toISOString(), timeZone: AIRPORT_TIMEZONES[from] || "Asia/Seoul"},
+        end:{dateTime:endLocal.toISOString(), timeZone: AIRPORT_TIMEZONES[to] || "Asia/Seoul"},
       }
     });
-    console.log(`✅ 비행 추가: ${activity} (${from}→${to}) [${startLocal.toISOString()}]`);
+    console.log(`✅ 비행 추가 (DST): ${activity} (${from}→${to}) [${startLocal.toISOString()}]`);
     await delay(200);
   }
 
-  // ------------------- 사후 중복 제거 -------------------
   await removeDuplicates();
-
-  console.log("✅ Google Calendar 업로드 완료");
+  console.log("✅ Google Calendar 업로드 완료 (DST 자동적용)");
 })();
