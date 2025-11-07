@@ -27,6 +27,8 @@ const AIRPORT_TIMEZONES = {
   NRT: "Asia/Tokyo",
   HKG: "Asia/Hong_Kong",
   DAC: "Asia/Dhaka",
+  HNL: "Pacific/Honolulu", // ✅ 추가됨 (UTC−10, DST 없음)
+  ESB: "Europe/Istanbul",  // ✅ 추가됨 (UTC+3, DST 없음)
   BKK: "Asia/Bangkok", // ✅ 추가됨 (UTC+7, DST 없음)
 };
 
