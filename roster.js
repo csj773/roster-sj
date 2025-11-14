@@ -120,45 +120,25 @@ console.log("✅ UID 및 Config 로드 완료");
     return idx!==undefined ? row[idx]||"" : "";
   }));
 
-  // ------------------- 중복 제거 (CREW/AcReg 변동 시 최신 하나만 유지) -------------------
-console.log("🚀 중복 제거 (최신 유지 로직)");
+  // ------------------- CSV/JSON 저장 전 중복 제거 (기존 Map 로직 유지) -------------------
+  console.log("🚀 CSV/JSON 저장 전 중복 제거");
+  const dateIdx = headers.indexOf("Date");
+  const dcIdx = headers.indexOf("DC");
+  const flightIdx = headers.indexOf("F");
+  const fromIdx = headers.indexOf("From");
+  const toIdx = headers.indexOf("To");
 
-const byKeyMap = new Map();
+  const normalizeDate = (raw) => convertDate(raw) || (raw || "").replace(/[.\s]/g, "");
 
-const dateIdx = 0; // Date
-const flightIdx = headers.indexOf("F");   // 5
-const fromIdx = headers.indexOf("From");  // 6
-const toIdx = headers.indexOf("To");      // 9
-
-for (let i = 0; i < values.length; i++) {
-  const row = values[i];
-  if (!row || row.length === 0) continue;
-
-  // 날짜 정규화
-  let dateNorm = "";
-  try {
-    dateNorm = convertDate(row[dateIdx]) || (row[dateIdx] || "").replace(/[.\s]/g, "");
-  } catch (e) {
-    dateNorm = (row[dateIdx] || "").replace(/[.\s]/g, "");
+  const mapByKey = new Map();
+  for (let i = 0; i < values.length; i++) {
+    const row = values[i];
+    const key = `${normalizeDate(row[dateIdx])}||${row[dcIdx]}||${row[flightIdx]}||${row[fromIdx]}||${row[toIdx]}`;
+    mapByKey.set(key, row); // 나중 항목 덮어쓰기 -> 최신 유지
   }
-
-  const flight = (row[flightIdx] || "").toString().trim().toUpperCase();
-  const from = (row[fromIdx] || "").toString().trim().toUpperCase();
-  const to = (row[toIdx] || "").toString().trim().toUpperCase();
-
-  const key = `${dateNorm}||${flight}||${from}||${to}`;
-
-  // 최신 row가 들어오면 덮어씀
-  byKeyMap.set(key, row);
-}
-
-// Map → 배열로 변환
-const deduped = Array.from(byKeyMap.values());
-
-// 첫 번째 줄은 header이므로 맨 앞에 다시 추가
-values = [headers, ...deduped];
-
-console.log("✅ 중복 제거 완료. 최종 행 수:", values.length - 1);
+  const dedupedRows = Array.from(mapByKey.values());
+  values = [headers, ...dedupedRows];
+  console.log("✅ CSV/JSON 저장 전 중복 제거 완료. 최종 행 수:", values.length - 1);
 
   await browser.close();
 
@@ -183,88 +163,77 @@ console.log("✅ 중복 제거 완료. 최종 행 수:", values.length - 1);
   console.log("✅ PerDiem 처리 완료");
 
   // ------------------- Roster Firestore 업로드 -------------------
-console.log("🚀 Roster Firestore 업로드 시작");
+  console.log("🚀 Roster Firestore 업로드 시작");
 
-const headerMapFirestore = { "C/I(L)":"CIL", "C/O(L)":"COL", "STD(L)":"STDL", "STD(Z)":"STDZ", "STA(L)":"STAL", "STA(Z)":"STAZ" };
-const QUICK_DESTS = ["NRT","HKG","DAC"];
+  const headerMapFirestore = { "C/I(L)":"CIL", "C/O(L)":"COL", "STD(L)":"STDL", "STD(Z)":"STDZ", "STA(L)":"STAL", "STA(Z)":"STAZ" };
+  const QUICK_DESTS = ["NRT","HKG","DAC"];
 
-function resolveDateRaw(i, values, docData) {
-  if (docData.Date && docData.Date.trim()) return docData.Date;
-  const prevRow = i > 1 ? values[i - 1] : null;
-  if (prevRow && QUICK_DESTS.includes(docData.From) && prevRow[9] == docData.From && prevRow[6] == "ICN")
-    return prevRow[0];
-  const prevDate = prevRow ? prevRow[0] : "";
-  const nextDate = i < values.length - 1 ? values[i + 1][0] : "";
-  return prevDate || nextDate || "";
-}
-
-function buildDocData(row, headers, i, values) {
-  const docData = {};
-  headers.forEach((h, idx) => {
-    docData[h] = row[idx] || "";
-    docData[headerMapFirestore[h] || h] = row[idx] || "";
-  });
-
-  docData.DateRaw = resolveDateRaw(i, values, docData);
-  docData.Date = convertDate(docData.DateRaw);
-
-  // ✅ userId 제거
-  // ❌ docData.userId = flutterflowUid;
-
-  // ✅ adminId → owner 로 변경
-  docData.owner = firestoreAdminUid || "";
-
-  docData.pdc_user_name = username || "";
-  docData.email = process.env.USER_ID || "";
-
-  if (!docData.Activity || docData.Activity.trim() === "") return null;
-
-  docData.ET = calculateET(docData.BLH);
-  docData.NT = docData.From !== docData.To
-    ? calculateNTFromSTDSTA(docData.STDZ, docData.STAZ, new Date(docData.Date))
-    : "00:00";
-  docData.CrewArray = parseCrewString(docData.Crew);
-  const { Year, Month } = parseYearMonthFromEeeDd(docData.DateRaw);
-  docData.Year = Year;
-  docData.Month = Month;
-
-  Object.keys(docData).forEach(k => {
-    if (docData[k] === undefined) delete docData[k];
-  });
-  return docData;
-}
-
-async function uploadDoc(db, collectionName, docData, i) {
-  const querySnapshot = await db.collection(collectionName)
-    .where("Date", "==", docData.Date)
-    .where("DC", "==", docData.DC)
-    .where("F", "==", docData.F)
-    .where("From", "==", docData.From)
-    .where("To", "==", docData.To)
-    .where("AcReg", "==", docData.AcReg)
-    .where("Crew", "==", docData.Crew)
-    .get();
-
-  if (!querySnapshot.empty) {
-    for (const d of querySnapshot.docs) {
-      await db.collection(collectionName).doc(d.id).delete();
-    }
+  function resolveDateRaw(i, values, docData) {
+    if (docData.Date && docData.Date.trim()) return docData.Date;
+    const prevRow = i > 1 ? values[i - 1] : null;
+    if (prevRow && QUICK_DESTS.includes(docData.From) && prevRow[9] == docData.From && prevRow[6] == "ICN")
+      return prevRow[0];
+    const prevDate = prevRow ? prevRow[0] : "";
+    const nextDate = i < values.length - 1 ? values[i + 1][0] : "";
+    return prevDate || nextDate || "";
   }
 
-  const newDocRef = await db.collection(collectionName).add(docData);
-  console.log(
-    `✅ ${i}행 업로드 완료: ${newDocRef.id}, NT=${docData.NT}, ET=${docData.ET}, CrewCount=${docData.CrewArray.length}, Year=${docData.Year}, Month=${docData.Month}`
-  );
-}
+  function buildDocData(row, headers, i, values) {
+    const docData = {};
+    headers.forEach((h, idx) => {
+      docData[h] = row[idx] || "";
+      docData[headerMapFirestore[h] || h] = row[idx] || "";
+    });
+    docData.DateRaw = resolveDateRaw(i, values, docData);
+    docData.Date = convertDate(docData.DateRaw);
+    docData.owner = firestoreAdminUid || "";
+    docData.pdc_user_name = username || "";
+    docData.email = process.env.USER_ID || "";
+    if (!docData.Activity || docData.Activity.trim() === "") return null;
+    docData.ET = calculateET(docData.BLH);
+    docData.NT = docData.From !== docData.To
+      ? calculateNTFromSTDSTA(docData.STDZ, docData.STAZ, new Date(docData.Date))
+      : "00:00";
+    docData.CrewArray = parseCrewString(docData.Crew);
+    const { Year, Month } = parseYearMonthFromEeeDd(docData.DateRaw);
+    docData.Year = Year;
+    docData.Month = Month;
+    Object.keys(docData).forEach(k => {
+      if (docData[k] === undefined) delete docData[k];
+    });
+    return docData;
+  }
 
-for (let i = 1; i < values.length; i++) {
-  const row = values[i];
-  const docData = buildDocData(row, headers, i, values);
-  if (!docData) continue;
-  await uploadDoc(db, firestoreCollection, docData, i);
-}
+  async function uploadDoc(db, collectionName, docData, i) {
+    // Firestore 업로드 시 중복 제거 기준: Date/DC/F/From/To
+    const querySnapshot = await db.collection(collectionName)
+      .where("Date", "==", docData.Date)
+      .where("DC", "==", docData.DC)
+      .where("F", "==", docData.F)
+      .where("From", "==", docData.From)
+      .where("To", "==", docData.To)
+      .get();
 
-console.log("✅ Roster Firestore 업로드 완료");
+    if (!querySnapshot.empty) {
+      for (const d of querySnapshot.docs) {
+        await db.collection(collectionName).doc(d.id).delete();
+      }
+    }
+
+    const newDocRef = await db.collection(collectionName).add(docData);
+    console.log(
+      `✅ ${i}행 업로드 완료 (중복 기준: Date/DC/F/From/To): ${newDocRef.id}, NT=${docData.NT}, ET=${docData.ET}, CrewCount=${docData.CrewArray.length}, Year=${docData.Year}, Month=${docData.Month}`
+    );
+  }
+
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const docData = buildDocData(row, headers, i, values);
+    if (!docData) continue;
+    await uploadDoc(db, firestoreCollection, docData, i);
+  }
+
+  console.log("✅ Roster Firestore 업로드 완료");
 
   // ------------------- Google Sheets 업로드 -------------------
   console.log("🚀 Google Sheets 업로드 시작");
