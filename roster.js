@@ -120,17 +120,45 @@ console.log("✅ UID 및 Config 로드 완료");
     return idx!==undefined ? row[idx]||"" : "";
   }));
 
-  // ------------------- 중복 제거 -------------------
-  console.log("🚀 중복 제거");
-  const seen = new Set();
-  values = values.filter(row => {
-    const key = row.join("||");
-    if(seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  values.unshift(headers);
-  console.log("✅ 중복 제거 완료. 최종 행 수:", values.length - 1);
+  // ------------------- 중복 제거 (CREW/AcReg 변동 시 최신 하나만 유지) -------------------
+console.log("🚀 중복 제거 (최신 유지 로직)");
+
+const byKeyMap = new Map();
+
+const dateIdx = 0; // Date
+const flightIdx = headers.indexOf("F");   // 5
+const fromIdx = headers.indexOf("From");  // 6
+const toIdx = headers.indexOf("To");      // 9
+
+for (let i = 0; i < values.length; i++) {
+  const row = values[i];
+  if (!row || row.length === 0) continue;
+
+  // 날짜 정규화
+  let dateNorm = "";
+  try {
+    dateNorm = convertDate(row[dateIdx]) || (row[dateIdx] || "").replace(/[.\s]/g, "");
+  } catch (e) {
+    dateNorm = (row[dateIdx] || "").replace(/[.\s]/g, "");
+  }
+
+  const flight = (row[flightIdx] || "").toString().trim().toUpperCase();
+  const from = (row[fromIdx] || "").toString().trim().toUpperCase();
+  const to = (row[toIdx] || "").toString().trim().toUpperCase();
+
+  const key = `${dateNorm}||${flight}||${from}||${to}`;
+
+  // 최신 row가 들어오면 덮어씀
+  byKeyMap.set(key, row);
+}
+
+// Map → 배열로 변환
+const deduped = Array.from(byKeyMap.values());
+
+// 첫 번째 줄은 header이므로 맨 앞에 다시 추가
+values = [headers, ...deduped];
+
+console.log("✅ 중복 제거 완료. 최종 행 수:", values.length - 1);
 
   await browser.close();
 
