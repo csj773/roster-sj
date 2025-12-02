@@ -154,7 +154,7 @@ export function parseCrewString(crewStr) {
   if (!crewStr || typeof crewStr !== "string") return [];
 
   // 성씨 + 1~2글자 이름 (총 2~3글자) 패턴 매칭
-  const regex = /(김|이|박|최|정|조|윤|장|임|한|오|서|선|신|권|황|안|송|류|홍|전|고|문|손|봉|배|백|허|유|양|남|심|노|하|곽|성|차|주|우|구|민|진|지|엄|염|채|원|천|방|공|강)[가-힣]{1,2}/g;
+  const regex = /(김|이|박|최|정|조|윤|장|임|한|오|서|선|신|권|황|안|송|류|홍|전|고|문|손|반|봉|배|백|허|유|양|남|심|노|하|곽|성|차|주|우|구|민|진|지|엄|염|채|원|천|방|공|강)[가-힣]{1,2}/g;
 
   const matches = crewStr.match(regex);
   return matches ? matches : [];
