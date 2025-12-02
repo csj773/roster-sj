@@ -148,15 +148,51 @@ export function parseYearMonthFromEeeDd(dateStr) {
   return { Year: String(year), Month: month };
 }
 
-// ------------------- Crew 문자열 파싱 -------------------
-// “김최배**.." → ["김","최","배",...]
-export function parseCrewString(crewStr) {
-  if (!crewStr || typeof crewStr !== "string") return [];
+// ------------------- Crew 문자열 파싱 (성 앞 고정 + 예외 지원) -------------------
 
-  // 성씨 + 1~2글자 이름 (총 2~3글자) 패턴 매칭
-  const regex = /(김|이|박|최|정|조|윤|장|임|한|오|서|선|신|권|황|안|송|류|홍|전|고|문|손|배|백|허|유|양|남|심|노|하|곽|성|차|주|우|구|민|진|지|엄|염|채|원|천|방|공|강)[가-힣]{1,2}/g;
+export function parseCrewStringSmart(str) {
+  if (!str || typeof str !== "string") return [];
 
-  const matches = crewStr.match(regex);
-  return matches ? matches : [];
+  // 1. 노이즈 제거 (한글만 남기기)
+  str = str.replace(/[^가-힣]/g, "");
+
+  // 2. 한국 성씨 기본 리스트
+  const lastNames = [
+    "김","이","박","최","정","조","윤","장","임","한","오","서","신","권","황","안","송",
+    "류","홍","전","고","문","손","배","백","허","유","양","남","심","노","하","곽",
+    "성","차","주","우","구","민","진","지","엄","염","채","원","천","방","강"
+  ];
+
+  const result = [];
+  let i = 0;
+
+  while (i < str.length) {
+    const char = str[i];
+
+    // 3. 성씨가 나오면 새 이름 시작
+    if (lastNames.includes(char)) {
+      // 기본적으로 뒤 2글자를 이름으로 가정
+      const name1 = str.slice(i, i + 3); // 성 + 이름2
+
+      // 예외 처리: 이름이 1글자인 경우 (유리 등)
+      const name2 = str.slice(i, i + 2); // 성 + 이름1
+
+      // 다음 글자가 또 성씨인 경우 = 이름이 1글자일 확률 높음
+      const nextChar = str[i + 2];
+
+      if (nextChar && lastNames.includes(nextChar)) {
+        result.push(name2);
+        i += 2;
+      } else {
+        result.push(name1);
+        i += 3;
+      }
+
+    } else {
+      // 성씨가 아니면 한 글자 건너뛰기
+      i++;
+    }
+  }
+
+  return result;
 }
-
