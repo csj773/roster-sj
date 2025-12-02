@@ -150,56 +150,44 @@ export function parseYearMonthFromEeeDd(dateStr) {
 
 // ------------------- Crew 문자열 파싱 -------------------
 
-export function parseCrewString(str) {
-  const singleSurnames = [
-    "김","이","박","최","정","조","윤","장","임","한","오","서","선","신","권","황",
-    "안","송","류","홍","전","고","문","손","반","봉","배","백","허","유","양","남",
-    "심","노","하","곽","성","차","주","우","구","민","진","지","엄","염","채","원",
-    "천","방","공","강"
-  ];
-
-  const doubleSurnames = [
-    "남궁","황보","제갈","독고","사공","선우","서문","동방","북궁","어금","망절",
-    "장손","탁정","구여","공손","등정","헐강","창해","첨해","소봉"
-  ];
-
-  const result = [];
-  let i = 0;
-
-  // -------------------------------------
-  // 1) 첫 사람은 성 미포함 2글자 이름 허용
-  // -------------------------------------
-  if (str.length >= 2) {
-    result.push(str.slice(0, 2));   // 예: "유리"
-    i = 2;
-  }
-
-  // -------------------------------------
-  // 2) 그 다음부터 복성 우선 → 단성
-  // -------------------------------------
-  while (i < str.length) {
-
-    // 2-1) 복성 시도 (2글자 성 + 2글자 이름 = 총 4글자)
-    const two = str.slice(i, i + 2);    // 성 후보 2글자
-    const name2 = str.slice(i + 2, i + 4); // 이름 2글자
-    if (doubleSurnames.includes(two) && name2.length === 2) {
-      result.push(two + name2);
-      i += 4;
-      continue;
-    }
-
-    // 2-2) 단성 시도 (1글자 성 + 2글자 이름 = 총 3글자)
-    const one = str[i];
-    const name1 = str.slice(i + 1, i + 3); // 이름 2글자
-    if (singleSurnames.includes(one) && name1.length === 2) {
-      result.push(one + name1);
-      i += 3;
-      continue;
-    }
-
-    // 2-3) 매칭 안될 경우 안전하게 1글자 스킵
-    i += 1;
-  }
-
-  return result;
+// 유니코드 한글만 남기는 헬퍼 (입력 정리)
+function keepHangulOnly(s) {
+  return s ? s.replace(/[^가-힣]/g, "") : "";
 }
+
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// 1글자 성씨(광범위하게 포함)
+const singleLastNames = [
+  "김","이","박","최","정","조","윤","장","임","한","오","서","선","신","권","황",
+  "안","송","류","홍","전","고","문","손","백","허","유","양","남","심","노","하",
+  "곽","성","차","주","우","구","민","진","지","엄","염","채","원","천","방","공",
+  "강","반","봉","배","반" // 예시로 요청하신 '반','염','배' 포함
+];
+
+// 두 글자 복성 (필요 시 확장)
+const doubleLastNames = [
+  "남궁","선우","제갈","독고","황보","사공","선우","서문"
+];
+
+// 합치고 중복 제거
+const lastNameSet = new Set([...doubleLastNames, ...singleLastNames]);
+const lastNamesArr = Array.from(lastNameSet);
+
+// 복성(2글자) 먼저 매칭되도록 길이 내림차순 정렬
+lastNamesArr.sort((a,b) => b.length - a.length);
+
+// 정규식 생성 (예: (남궁|제갈|김|이|박)...)[가-힣]{1,2}
+const pattern = `(${lastNamesArr.map(escapeRegExp).join("|")})[가-힣]{1,2}`;
+const regex = new RegExp(pattern, "g");
+
+// 실제 파서
+export function parseCrewString(crewStr) {
+  if (!crewStr || typeof crewStr !== "string") return [];
+
+  const input = keepHangulOnly(crewStr);
+  const matches = input.match(regex);
+  return matches ? matches : [];
+  }
