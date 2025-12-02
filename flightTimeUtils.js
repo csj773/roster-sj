@@ -149,13 +149,45 @@ export function parseYearMonthFromEeeDd(dateStr) {
 }
 
 // ------------------- Crew 문자열 파싱 -------------------
-// “김최배**.." → ["김","최","배",...]
+
+// 유니코드 한글만 남기는 헬퍼 (입력 정리)
+function keepHangulOnly(s) {
+  return s ? s.replace(/[^가-힣]/g, "") : "";
+}
+
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// 1글자 성씨(광범위하게 포함)
+const singleLastNames = [
+  "김","이","박","최","정","조","윤","장","임","한","오","서","선","신","권","황",
+  "안","송","류","홍","전","고","문","손","백","허","유","양","남","심","노","하",
+  "곽","성","차","주","우","구","민","진","지","엄","염","채","원","천","방","공",
+  "강","반","봉","배","반" // 예시로 요청하신 '반','염','배' 포함
+];
+
+// 두 글자 복성 (필요 시 확장)
+const doubleLastNames = [
+  "남궁","선우","제갈","독고","황보","사공","선우","서문"
+];
+
+// 합치고 중복 제거
+const lastNameSet = new Set([...doubleLastNames, ...singleLastNames]);
+const lastNamesArr = Array.from(lastNameSet);
+
+// 복성(2글자) 먼저 매칭되도록 길이 내림차순 정렬
+lastNamesArr.sort((a,b) => b.length - a.length);
+
+// 정규식 생성 (예: (남궁|제갈|김|이|박)...)[가-힣]{1,2}
+const pattern = `(${lastNamesArr.map(escapeRegExp).join("|")})[가-힣]{1,2}`;
+const regex = new RegExp(pattern, "g");
+
+// 실제 파서
 export function parseCrewString(crewStr) {
   if (!crewStr || typeof crewStr !== "string") return [];
 
-  // 성씨 + 1~2글자 이름 (총 2~3글자) 패턴 매칭
-  const regex = /(김|이|박|최|정|조|윤|장|임|한|오|서|선|신|권|황|안|송|류|홍|전|고|문|손|반|봉|배|백|허|유|양|남|심|노|하|곽|성|차|주|우|구|민|진|지|엄|염|채|원|천|방|공|강)[가-힣]{1,2}/g;
-
-  const matches = crewStr.match(regex);
+  const input = keepHangulOnly(crewStr);
+  const matches = input.match(regex);
   return matches ? matches : [];
 }
