@@ -148,46 +148,91 @@ export function parseYearMonthFromEeeDd(dateStr) {
   return { Year: String(year), Month: month };
 }
 
-// ------------------- Crew 문자열 파싱 -------------------
+// ------------------- Crew 문자열 파싱 (복성 지원 + 선두 2글자 이름 허용) -------------------
 
-// 유니코드 한글만 남기는 헬퍼 (입력 정리)
+// 유니코드 한글만 남기는 헬퍼
 function keepHangulOnly(s) {
   return s ? s.replace(/[^가-힣]/g, "") : "";
 }
 
-function escapeRegExp(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-// 1글자 성씨(광범위하게 포함)
-const singleLastNames = [
+// 단성(1글자) 성씨
+const singleSurnames = [
   "김","이","박","최","정","조","윤","장","임","한","오","서","선","신","권","황",
   "안","송","류","홍","전","고","문","손","백","허","유","양","남","심","노","하",
-  "곽","성","차","주","우","구","민","진","지","엄","염","채","원","천","방","공",
-  "강","반","봉","배","반" // 예시로 요청하신 '반','염','배' 포함
+  "곽","성","차","주","우","구","민","진","지","엄","염","채","원","천","방","공","강",
+  "반","봉","배"
 ];
 
-// 두 글자 복성 (필요 시 확장)
-const doubleLastNames = [
-  "남궁","선우","제갈","독고","황보","사공","선우","서문"
+// 복성(2글자) 성씨 (필요하면 여기에 더 추가)
+const doubleSurnames = [
+  "남궁","황보","제갈","독고","사공","선우","서문","동방","북궁","장손","공손","창해"
 ];
 
-// 합치고 중복 제거
-const lastNameSet = new Set([...doubleLastNames, ...singleLastNames]);
-const lastNamesArr = Array.from(lastNameSet);
+// 정리: 중복 제거 및 복성 우선 정렬
+const surnameSet = new Set([...doubleSurnames, ...singleSurnames]);
+let surnames = Array.from(surnameSet);
+surnames.sort((a,b) => b.length - a.length); // 길이 내림차순(복성 먼저)
 
-// 복성(2글자) 먼저 매칭되도록 길이 내림차순 정렬
-lastNamesArr.sort((a,b) => b.length - a.length);
-
-// 정규식 생성 (예: (남궁|제갈|김|이|박)...)[가-힣]{1,2}
-const pattern = `(${lastNamesArr.map(escapeRegExp).join("|")})[가-힣]{1,2}`;
-const regex = new RegExp(pattern, "g");
-
-// 실제 파서
+// ------------------- 파서 함수 -------------------
 export function parseCrewString(crewStr) {
   if (!crewStr || typeof crewStr !== "string") return [];
 
   const input = keepHangulOnly(crewStr);
-  const matches = input.match(regex);
-  return matches ? matches : [];
+  const n = input.length;
+  const result = [];
+
+  let i = 0;
+
+  // 1) 맨 앞에 성이 없을 수 있는 2글자 이름 우선 추출
+  if (n >= 2) {
+    // 만약 처음 2글자가 "성+이름" 패턴(예: 김하)과 겹쳐도,
+    // 사용자 요구대로 '맨앞 2글자 이름 가능'을 우선시함.
+    result.push(input.slice(0, 2));
+    i = 2;
   }
+
+  // 2) 이후부터는 복성(2글자) 우선, 그 다음 단성(1글자) 처리
+  while (i < n) {
+    // 남은 길이
+    const rem = n - i;
+
+    // 2-1) 복성(2글자 성) + 이름2 (총 4글자)
+    if (rem >= 4) {
+      const candSurname2 = input.slice(i, i + 2);
+      const candName2 = input.slice(i + 2, i + 4);
+      if (doubleSurnames.includes(candSurname2) && candName2.length === 2) {
+        result.push(candSurname2 + candName2);
+        i += 4;
+        continue;
+      }
+    }
+
+    // 2-2) 단성(1글자 성) + 이름2 (총 3글자)
+    if (rem >= 3) {
+      const candSurname1 = input[i];
+      const candName2 = input.slice(i + 1, i + 3);
+      if (singleSurnames.includes(candSurname1) && candName2.length === 2) {
+        result.push(candSurname1 + candName2);
+        i += 3;
+        continue;
+      }
+    }
+
+    // 2-3) 예외 처리: 남은 글자들 중 가능한 최대 길이 시도
+    if (rem === 1) {
+      // 남은 글자 1개는 의미없을 가능성 높으니 붙여서 마지막 항목 보정
+      const last = result.pop() || "";
+      result.push(last + input.slice(i));
+      break;
+    } else if (rem === 2) {
+      // 남은 2글자는 그냥 하나의 이름으로 처리
+      result.push(input.slice(i, i + 2));
+      break;
+    } else {
+      // 안전하게 한 글자 앞으로 이동 (이상 케이스 방지)
+      i += 1;
+    }
+  }
+
+  return result;
+}
