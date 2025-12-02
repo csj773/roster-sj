@@ -148,42 +148,14 @@ export function parseYearMonthFromEeeDd(dateStr) {
   return { Year: String(year), Month: month };
 }
 
-// ------------------- Crew 문자열 파싱 (성 앞 고정 + 예외 지원) -------------------
+// ------------------- Crew 문자열 파싱 -------------------
+// “김최배**.." → ["김","최","배",...]
+export function parseCrewString(crewStr) {
+  if (!crewStr || typeof crewStr !== "string") return [];
 
-export function parseCrewString(str) {
-  if (!str || typeof str !== "string") return [];
+  // 성씨 + 1~2글자 이름 (총 2~3글자) 패턴 매칭
+  const regex = /(김|이|박|최|정|조|윤|장|임|한|오|서|선|신|권|황|안|송|류|홍|전|고|문|손|배|백|허|유|양|남|심|노|하|곽|성|차|주|우|구|민|진|지|엄|염|채|원|천|방|공|강)[가-힣]{1,2}/g;
 
-  str = str.replace(/[^가-힣]/g, "");
-
-  const lastNames = [
-    "김","이","박","최","정","조","윤","장","임","한","오","서","신","권","황","안","송",
-    "류","홍","전","고","문","손","배","백","허","유","양","남","심","노","하","곽",
-    "성","차","주","우","구","민","진","지","엄","염","채","원","천","방","강"
-  ];
-
-  const result = [];
-  let i = 0;
-
-  while (i < str.length) {
-    const char = str[i];
-
-    if (lastNames.includes(char)) {
-      const name1 = str.slice(i, i + 3);
-      const name2 = str.slice(i, i + 2);
-
-      const nextChar = str[i + 2];
-
-      if (nextChar && lastNames.includes(nextChar)) {
-        result.push(name2);
-        i += 2;
-      } else {
-        result.push(name1);
-        i += 3;
-      }
-    } else {
-      i++;
-    }
-  }
-
-  return result;
+  const matches = crewStr.match(regex);
+  return matches ? matches : [];
 }
