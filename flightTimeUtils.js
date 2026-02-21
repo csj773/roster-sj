@@ -74,7 +74,10 @@ export function calculateNTFromSTDSTA(stdZ, staZ, flightDate, blhStr) {
   if (blhHour !== null && totalNT > blhHour) {
     totalNT = blhHour;
   }
-
+// ===== 최소 수정: NT 30분 추가 =====
+  totalNT += 0.5;
+  // ==================================
+  
   return hourToTimeStr(totalNT);
 }
 
