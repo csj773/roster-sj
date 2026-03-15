@@ -6,8 +6,8 @@ import { hourToTimeStr } from "./flightTimeUtils.js";
 
 // ------------------- 공항별 PER DIEM -------------------
 export const PERDIEM_RATE = {
-  LAX: 3.42, EWR: 3.44, HNL: 3.01, FRA: 3.18, BCN: 3.11,
-  BKK: 2.14, DAD: 2.01, SFO: 3.42, OSL: 3.24,
+  LAX: 3.42, EWR: 3.44,IAD: 3.44, HNL: 3.01, FRA: 3.18, BCN: 3.11,
+  BKK: 2.14,SIN: 2.14, DAD: 2.01, SFO: 3.42, OSL: 3.24,
   DAC: 33, NRT: 33, HKG: 33
 };
 
