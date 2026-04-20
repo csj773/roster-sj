@@ -4,6 +4,7 @@ on:
   schedule:
     #- cron: "0 0 * * *"       # 매일 KST 09:00 = UTC 00:00
     - cron: "0 * * * *"       # 매 시간 정각 실행
+    #- cron: "0 0,6,12,18 * * *" # 00:00, 06:00, 12:00, 18:00 UTC 실행
   workflow_dispatch:           # 수동 실행 허용
 
 permissions:
