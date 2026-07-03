@@ -35,6 +35,7 @@ jobs:
           node --input-type=module <<'NODE'
           import admin from "firebase-admin";
           import { google } from "googleapis";
+          import { randomUUID } from "node:crypto";
 
           const DEFAULT_EMAIL = "sjchoi787@gmail.com";
           const DEFAULT_COLLECTION = "Pilotlog";
@@ -132,9 +133,6 @@ jobs:
 
           function buildKeyFromRow(headers, row) {
             const lookup = new Map(headers.map((header, index) => [String(header).trim(), row[index] || ""]));
-            const id = String(lookup.get("ID") || "").trim();
-            if (id) return `id:${id}`;
-
             return [
               lookup.get("DATE"),
               lookup.get("FLT"),
@@ -146,9 +144,6 @@ jobs:
           }
 
           function buildKeyFromData(data) {
-            const id = String(valueByKeys(data, ["ID", "id", "docId"]) || "").trim();
-            if (id) return `id:${id}`;
-
             return [
               formatDate(valueByKeys(data, ["Date", "DATE", "date", "flightDate"])),
               normalizeFlightNumber(valueByKeys(data, ["FLT", "F", "Activity", "flightNo"])),
@@ -197,7 +192,7 @@ jobs:
             if (name === "MONTH") return valueByKeys(data, ["MONTH", "Month"]);
             if (name === "MONTH ") return valueByKeys(data, ["MONTH ", "MONTH", "Month"]);
             if (name === "CAP") return valueByKeys(data, ["CAP"]);
-            if (name === "ID") return valueByKeys(data, ["ID", "id", "docId"]);
+            if (name === "ID") return data.generatedId;
 
             return valueByKeys(data, [name]);
           }
@@ -206,7 +201,7 @@ jobs:
             const existingKeys = new Set(existingRows.map((row) => buildKeyFromRow(headers, row)));
 
             return docs
-              .map((doc) => ({ docId: doc.id, ID: doc.id, ...doc.data() }))
+              .map((doc) => ({ docId: doc.id, generatedId: randomUUID().replace(/-/g, "").slice(0, 8), ...doc.data() }))
               .sort((a, b) => sortValue(a) - sortValue(b))
               .filter((data) => {
                 const key = buildKeyFromData(data);
