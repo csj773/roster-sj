@@ -65,7 +65,7 @@ jobs:
             if (value == null) return "";
 
             if (typeof value.toDate === "function") {
-              return value.toDate().toISOString();
+              return value.toDate();
             }
 
             if (value instanceof Date) {
@@ -88,6 +88,39 @@ jobs:
             return value;
           }
 
+          function formatDate(value) {
+            const normalized = normalizeFirestoreValue(value);
+            if (!normalized) return "";
+
+            const date =
+              normalized instanceof Date
+                ? normalized
+                : typeof normalized === "number"
+                  ? new Date(Math.round((normalized - 25569) * 86400 * 1000))
+                  : new Date(normalized);
+
+            if (Number.isNaN(date.getTime())) return String(normalized);
+            return `${date.getUTCFullYear()}. ${date.getUTCMonth() + 1}. ${date.getUTCDate()}`;
+          }
+
+          function valueByKeys(data, keys) {
+            for (const key of keys) {
+              if (data[key] != null && data[key] !== "") return data[key];
+            }
+            return "";
+          }
+
+          function normalizeFlightNumber(value) {
+            const raw = normalizeFirestoreValue(value);
+            return raw == null ? "" : String(raw).replace(/^YP/i, "");
+          }
+
+          function normalizeCell(value) {
+            const normalized = normalizeFirestoreValue(value);
+            if (normalized instanceof Date) return normalized.toISOString();
+            return normalized == null ? "" : normalized;
+          }
+
           function sortValue(data) {
             const candidate = data.Date || data.date || data.flightDate || data.createdAt || data.updatedAt;
             if (!candidate) return 0;
@@ -97,44 +130,91 @@ jobs:
             return Number.isNaN(parsed) ? 0 : parsed;
           }
 
-          function buildTable(docs) {
-            const preferredColumns = [
-              "Date",
-              "FLT",
-              "FROM",
-              "TO",
-              "REG",
-              "DC",
-              "BLK",
-              "PIC",
-              "ET",
-              "NT",
-              "STDz",
-              "STAz",
-              "StartL",
-              "FinishL",
-              "DH",
-              "Email",
-              "owner",
-              "uploadedAt",
-            ];
+          function buildKeyFromRow(headers, row) {
+            const lookup = new Map(headers.map((header, index) => [String(header).trim(), row[index] || ""]));
+            const id = String(lookup.get("ID") || "").trim();
+            if (id) return `id:${id}`;
 
-            const rows = docs.map((doc) => ({ docId: doc.id, ...doc.data() }));
-            const extraColumns = Array.from(
-              rows.reduce((set, row) => {
-                Object.keys(row).forEach((key) => {
-                  if (!preferredColumns.includes(key)) set.add(key);
-                });
-                return set;
-              }, new Set())
-            ).sort();
+            return [
+              lookup.get("DATE"),
+              lookup.get("FLT"),
+              lookup.get("FROM"),
+              lookup.get("TO"),
+              lookup.get("REG"),
+              lookup.get("BLK"),
+            ].map((value) => String(value || "").trim()).join("|");
+          }
 
-            const headers = ["docId", ...preferredColumns, ...extraColumns.filter((key) => key !== "docId")];
-            const body = rows
+          function buildKeyFromData(data) {
+            const id = String(valueByKeys(data, ["ID", "id", "docId"]) || "").trim();
+            if (id) return `id:${id}`;
+
+            return [
+              formatDate(valueByKeys(data, ["Date", "DATE", "date", "flightDate"])),
+              normalizeFlightNumber(valueByKeys(data, ["FLT", "F", "Activity", "flightNo"])),
+              valueByKeys(data, ["FROM", "From", "from"]),
+              valueByKeys(data, ["TO", "To", "to"]),
+              valueByKeys(data, ["REG", "Reg", "A/C ID", "AcReg"]),
+              valueByKeys(data, ["BLK", "BLH", "BH", "Blockhours"]),
+            ].map((value) => String(value || "").trim()).join("|");
+          }
+
+          function valueForHeader(header, index, data) {
+            const name = String(header || "").trim();
+
+            if (name === "NAME") return valueByKeys(data, ["NAME", "Name", "name"]);
+            if (name === "EMPNO" || name === "EMP NO") return valueByKeys(data, ["EMPNO", "EMP NO", "EmpNo"]);
+            if (name === "DATE") return formatDate(valueByKeys(data, ["Date", "DATE", "date", "flightDate"]));
+            if (name === "FLT" || name === "FLT NO") return normalizeFlightNumber(valueByKeys(data, ["FLT", "F", "Activity", "flightNo"]));
+            if (name === "FROM") return valueByKeys(data, ["FROM", "From", "from"]);
+
+            // flt_log has two TO columns: route destination near the front, and takeoff time later.
+            if (name === "TO" && index <= 5) return valueByKeys(data, ["TO", "To", "to"]);
+            if (name === "TO") return valueByKeys(data, ["TO_TIME", "TKO", "TakeOff", "TO 2"]);
+
+            if (name === "REG") return valueByKeys(data, ["REG", "Reg", "A/C ID", "AcReg"]);
+            if (name === "DC") return valueByKeys(data, ["DC", "A/C Type"]);
+            if (name === "RO") return valueByKeys(data, ["RO", "StartL", "STDl", "STDL"]);
+            if (name === "RI") return valueByKeys(data, ["RI", "FinishL", "STAl", "STAL"]);
+            if (name === "BLK") return valueByKeys(data, ["BLK", "BLH", "BH", "Blockhours"]);
+            if (name === "LD") return valueByKeys(data, ["LD", "LDG", "Landing"]);
+            if (name === "ACT") return valueByKeys(data, ["ACT", "ET"]);
+            if (name === "NGT" || name === "NT") return valueByKeys(data, ["NGT", "NT"]);
+            if (name === "INS" || name === "INST") return valueByKeys(data, ["INS", "INST"]);
+            if (name === "이륙") return valueByKeys(data, ["이륙", "TKO", "TakeOff"]);
+            if (name === "착륙") return valueByKeys(data, ["착륙", "LDG", "Landing"]);
+            if (name === "자동착륙") return valueByKeys(data, ["자동착륙", "AutoLanding"]);
+            if (name === "TOGA") return valueByKeys(data, ["TOGA"]);
+            if (name === "PIC" || name === "PIC_com") return valueByKeys(data, [name, "PIC"]);
+            if (name === "EX") return valueByKeys(data, ["EX", "DH"]);
+            if (name === "BLH" || name === "비행시간") return valueByKeys(data, [name, "BLK", "BLH", "BH"]);
+            if (name === "연장시간") return valueByKeys(data, ["연장시간", "ET"]);
+            if (name.includes("야간")) return valueByKeys(data, [name, "NGT", "NT"]);
+            if (name === "remark" || name === "Remarks") return valueByKeys(data, ["remark", "Remarks"]);
+            if (name === "Destination") return valueByKeys(data, ["Destination", "TO", "To"]);
+            if (name === "Destination ") return valueByKeys(data, ["Destination ", "Destination", "TO", "To"]);
+            if (name === "YEAR") return valueByKeys(data, ["YEAR", "Year"]);
+            if (name === "MONTH") return valueByKeys(data, ["MONTH", "Month"]);
+            if (name === "MONTH ") return valueByKeys(data, ["MONTH ", "MONTH", "Month"]);
+            if (name === "CAP") return valueByKeys(data, ["CAP"]);
+            if (name === "ID") return valueByKeys(data, ["ID", "id", "docId"]);
+
+            return valueByKeys(data, [name]);
+          }
+
+          function buildAppendRows(headers, docs, existingRows) {
+            const existingKeys = new Set(existingRows.map((row) => buildKeyFromRow(headers, row)));
+
+            return docs
+              .map((doc) => ({ docId: doc.id, ID: doc.id, ...doc.data() }))
               .sort((a, b) => sortValue(a) - sortValue(b))
-              .map((row) => headers.map((header) => normalizeFirestoreValue(row[header])));
-
-            return [headers, ...body];
+              .filter((data) => {
+                const key = buildKeyFromData(data);
+                if (existingKeys.has(key)) return false;
+                existingKeys.add(key);
+                return true;
+              })
+              .map((data) => headers.map((header, index) => normalizeCell(valueForHeader(header, index, data))));
           }
 
           async function main() {
@@ -166,22 +246,32 @@ jobs:
             const spreadsheetId = spreadsheetIdFromEnv;
 
             const snapshot = await db.collection(collectionName).where("Email", "==", email).get();
-            const values = buildTable(snapshot.docs);
-
-            await sheets.spreadsheets.values.clear({
+            const existing = await sheets.spreadsheets.values.get({
               spreadsheetId,
-              range: `${sheetName}!A:ZZ`,
+              range: `${sheetName}!A1:AZ20000`,
+              valueRenderOption: "FORMATTED_VALUE",
             });
 
-            await sheets.spreadsheets.values.update({
-              spreadsheetId,
-              range: `${sheetName}!A1`,
-              valueInputOption: "RAW",
-              requestBody: { values },
-            });
+            const existingRows = existing.data.values || [];
+            const headers = existingRows[0] || [];
+            if (!headers.length) {
+              throw new Error(`${sheetName} header row is empty`);
+            }
+
+            const rowsToAppend = buildAppendRows(headers, snapshot.docs, existingRows.slice(1));
+
+            if (rowsToAppend.length > 0) {
+              await sheets.spreadsheets.values.append({
+                spreadsheetId,
+                range: `${sheetName}!A1`,
+                valueInputOption: "USER_ENTERED",
+                insertDataOption: "INSERT_ROWS",
+                requestBody: { values: rowsToAppend },
+              });
+            }
 
             console.log(
-              `Synced ${snapshot.size} ${collectionName} document(s) for ${email} to spreadsheet ${spreadsheetId}/${sheetName}`
+              `Checked ${snapshot.size} ${collectionName} document(s) for ${email}; appended ${rowsToAppend.length} new row(s) to ${spreadsheetId}/${sheetName}`
             );
           }
 
