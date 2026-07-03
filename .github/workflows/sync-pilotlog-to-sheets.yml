@@ -18,7 +18,10 @@ jobs:
           node-version: "24"
           package-manager-cache: false
 
-      - run: npm ci
+      - name: Install sync dependencies
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "true"
+        run: npm install --no-audit --no-fund
 
       - name: Sync Firestore Pilotlog to flt_log
         env:
