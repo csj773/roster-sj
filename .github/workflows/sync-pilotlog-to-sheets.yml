@@ -27,7 +27,7 @@ jobs:
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
-          PILOTLOG_SPREADSHEET_ID: ${{ secrets.PILOTLOG_SPREADSHEET_ID }}
+          PILOTLOG_SPREADSHEET_ID: ${{ secrets.PILOTLOG_SPREADSHEET_ID || '1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc' }}
           PILOTLOG_SHEET_NAME: flt_log
           PILOTLOG_COLLECTION: Pilotlog
           PILOTLOG_EMAIL: sjchoi787@gmail.com
@@ -44,7 +44,9 @@ jobs:
           const collectionName = process.env.PILOTLOG_COLLECTION || DEFAULT_COLLECTION;
           const sheetName = process.env.PILOTLOG_SHEET_NAME || DEFAULT_SHEET_NAME;
           const spreadsheetIdFromEnv =
-            process.env.PILOTLOG_SPREADSHEET_ID || process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
+            process.env.PILOTLOG_SPREADSHEET_ID ||
+            process.env.GOOGLE_SHEETS_SPREADSHEET_ID ||
+            "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
 
           function requiredJsonEnv(name) {
             const raw = process.env[name];
