@@ -104,6 +104,13 @@ jobs:
             return `${date.getUTCFullYear()}. ${date.getUTCMonth() + 1}. ${date.getUTCDate()}`;
           }
 
+          function normalizeDateKey(value) {
+            const raw = normalizeFirestoreValue(value);
+            if (!raw) return "";
+            const formatted = formatDate(raw);
+            return String(formatted || raw).replace(/\s+/g, "").replace(/\.$/, "");
+          }
+
           function valueByKeys(data, keys) {
             for (const key of keys) {
               if (data[key] != null && data[key] !== "") return data[key];
@@ -113,7 +120,11 @@ jobs:
 
           function normalizeFlightNumber(value) {
             const raw = normalizeFirestoreValue(value);
-            return raw == null ? "" : String(raw).replace(/^YP/i, "");
+            return raw == null ? "" : String(raw).trim().replace(/^YP/i, "");
+          }
+
+          function normalizeKeyPart(value) {
+            return String(normalizeFirestoreValue(value) || "").trim().toUpperCase();
           }
 
           function normalizeCell(value) {
@@ -132,26 +143,30 @@ jobs:
           }
 
           function buildKeyFromRow(headers, row) {
-            const lookup = new Map(headers.map((header, index) => [String(header).trim(), row[index] || ""]));
+            const valueAt = (name, predicate = () => true) => {
+              const index = headers.findIndex((header, headerIndex) => String(header).trim() === name && predicate(headerIndex));
+              return index >= 0 ? row[index] || "" : "";
+            };
+
             return [
-              lookup.get("DATE"),
-              lookup.get("FLT"),
-              lookup.get("FROM"),
-              lookup.get("TO"),
-              lookup.get("REG"),
-              lookup.get("BLK"),
-            ].map((value) => String(value || "").trim()).join("|");
+              normalizeDateKey(valueAt("DATE")),
+              normalizeFlightNumber(valueAt("FLT")),
+              normalizeKeyPart(valueAt("FROM")),
+              normalizeKeyPart(valueAt("TO", (index) => index <= 5)),
+              normalizeKeyPart(valueAt("REG")),
+              normalizeKeyPart(valueAt("BLK")),
+            ].join("|");
           }
 
           function buildKeyFromData(data) {
             return [
-              formatDate(valueByKeys(data, ["Date", "DATE", "date", "flightDate"])),
+              normalizeDateKey(valueByKeys(data, ["Date", "DATE", "date", "flightDate"])),
               normalizeFlightNumber(valueByKeys(data, ["FLT", "F", "Activity", "flightNo"])),
-              valueByKeys(data, ["FROM", "From", "from"]),
-              valueByKeys(data, ["TO", "To", "to"]),
-              valueByKeys(data, ["REG", "Reg", "A/C ID", "AcReg"]),
-              valueByKeys(data, ["BLK", "BLH", "BH", "Blockhours"]),
-            ].map((value) => String(value || "").trim()).join("|");
+              normalizeKeyPart(valueByKeys(data, ["FROM", "From", "from"])),
+              normalizeKeyPart(valueByKeys(data, ["TO", "To", "to"])),
+              normalizeKeyPart(valueByKeys(data, ["REG", "Reg", "A/C ID", "AcReg"])),
+              normalizeKeyPart(valueByKeys(data, ["BLK", "BLH", "BH", "Blockhours"])),
+            ].join("|");
           }
 
           function valueForHeader(header, index, data) {
