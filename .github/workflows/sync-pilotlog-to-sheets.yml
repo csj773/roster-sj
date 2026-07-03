@@ -1,0 +1,212 @@
+name: Sync Pilotlog to Google Sheets
+
+on:
+  schedule:
+    # Every day at 00:00 UTC / 09:00 KST.
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+jobs:
+  sync-pilotlog:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - run: npm ci
+
+      - name: Sync Firestore Pilotlog to flt_log
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+          PILOTLOG_SPREADSHEET_ID: ${{ secrets.PILOTLOG_SPREADSHEET_ID }}
+          PILOTLOG_SPREADSHEET_NAME: PILOTLOG
+          PILOTLOG_SHEET_NAME: flt_log
+          PILOTLOG_COLLECTION: Pilotlog
+          PILOTLOG_EMAIL: sjchoi787@gmail.com
+        run: |
+          node --input-type=module <<'NODE'
+          import admin from "firebase-admin";
+          import { google } from "googleapis";
+
+          const DEFAULT_EMAIL = "sjchoi787@gmail.com";
+          const DEFAULT_COLLECTION = "Pilotlog";
+          const DEFAULT_SHEET_NAME = "flt_log";
+          const DEFAULT_SPREADSHEET_NAME = "PILOTLOG";
+
+          const email = process.env.PILOTLOG_EMAIL || DEFAULT_EMAIL;
+          const collectionName = process.env.PILOTLOG_COLLECTION || DEFAULT_COLLECTION;
+          const sheetName = process.env.PILOTLOG_SHEET_NAME || DEFAULT_SHEET_NAME;
+          const spreadsheetIdFromEnv =
+            process.env.PILOTLOG_SPREADSHEET_ID || process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
+          const spreadsheetName = process.env.PILOTLOG_SPREADSHEET_NAME || DEFAULT_SPREADSHEET_NAME;
+
+          function requiredJsonEnv(name) {
+            const raw = process.env[name];
+            if (!raw) {
+              throw new Error(`${name} secret is required`);
+            }
+
+            const parsed = JSON.parse(raw);
+            if (parsed.private_key) {
+              parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
+            }
+            return parsed;
+          }
+
+          function normalizeFirestoreValue(value) {
+            if (value == null) return "";
+
+            if (typeof value.toDate === "function") {
+              return value.toDate().toISOString();
+            }
+
+            if (value instanceof Date) {
+              return value.toISOString();
+            }
+
+            if (Array.isArray(value)) {
+              return value
+                .map((item) => {
+                  const normalized = normalizeFirestoreValue(item);
+                  return typeof normalized === "string" ? normalized : JSON.stringify(normalized);
+                })
+                .join(", ");
+            }
+
+            if (typeof value === "object") {
+              return JSON.stringify(value);
+            }
+
+            return value;
+          }
+
+          function sortValue(data) {
+            const candidate = data.Date || data.date || data.flightDate || data.createdAt || data.updatedAt;
+            if (!candidate) return 0;
+
+            if (typeof candidate.toDate === "function") return candidate.toDate().getTime();
+            const parsed = new Date(candidate).getTime();
+            return Number.isNaN(parsed) ? 0 : parsed;
+          }
+
+          function buildTable(docs) {
+            const preferredColumns = [
+              "Date",
+              "FLT",
+              "FROM",
+              "TO",
+              "REG",
+              "DC",
+              "BLK",
+              "PIC",
+              "ET",
+              "NT",
+              "STDz",
+              "STAz",
+              "StartL",
+              "FinishL",
+              "DH",
+              "Email",
+              "owner",
+              "uploadedAt",
+            ];
+
+            const rows = docs.map((doc) => ({ docId: doc.id, ...doc.data() }));
+            const extraColumns = Array.from(
+              rows.reduce((set, row) => {
+                Object.keys(row).forEach((key) => {
+                  if (!preferredColumns.includes(key)) set.add(key);
+                });
+                return set;
+              }, new Set())
+            ).sort();
+
+            const headers = ["docId", ...preferredColumns, ...extraColumns.filter((key) => key !== "docId")];
+            const body = rows
+              .sort((a, b) => sortValue(a) - sortValue(b))
+              .map((row) => headers.map((header) => normalizeFirestoreValue(row[header])));
+
+            return [headers, ...body];
+          }
+
+          async function resolveSpreadsheetId(auth) {
+            if (spreadsheetIdFromEnv) return spreadsheetIdFromEnv;
+
+            const drive = google.drive({ version: "v3", auth });
+            const escapedName = spreadsheetName.replace(/'/g, "\\'");
+            const response = await drive.files.list({
+              q: `name='${escapedName}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`,
+              fields: "files(id,name)",
+              pageSize: 2,
+            });
+
+            const files = response.data.files || [];
+            if (files.length === 0) {
+              throw new Error(
+                `Spreadsheet ID not provided and spreadsheet named "${spreadsheetName}" was not found`
+              );
+            }
+            if (files.length > 1) {
+              throw new Error(
+                `Multiple spreadsheets named "${spreadsheetName}" found. Set PILOTLOG_SPREADSHEET_ID.`
+              );
+            }
+
+            return files[0].id;
+          }
+
+          async function main() {
+            const firebaseServiceAccount = requiredJsonEnv("FIREBASE_SERVICE_ACCOUNT");
+            const sheetsCredentials =
+              process.env.GOOGLE_SHEETS_CREDENTIALS
+                ? requiredJsonEnv("GOOGLE_SHEETS_CREDENTIALS")
+                : requiredJsonEnv("GOOGLE_CALENDAR_CREDENTIALS");
+
+            if (!admin.apps.length) {
+              admin.initializeApp({
+                credential: admin.credential.cert(firebaseServiceAccount),
+              });
+            }
+
+            const auth = new google.auth.GoogleAuth({
+              credentials: sheetsCredentials,
+              scopes: [
+                "https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/drive.readonly",
+              ],
+            });
+
+            const db = admin.firestore();
+            const sheets = google.sheets({ version: "v4", auth });
+            const spreadsheetId = await resolveSpreadsheetId(auth);
+
+            const snapshot = await db.collection(collectionName).where("Email", "==", email).get();
+            const values = buildTable(snapshot.docs);
+
+            await sheets.spreadsheets.values.clear({
+              spreadsheetId,
+              range: `${sheetName}!A:ZZ`,
+            });
+
+            await sheets.spreadsheets.values.update({
+              spreadsheetId,
+              range: `${sheetName}!A1`,
+              valueInputOption: "RAW",
+              requestBody: { values },
+            });
+
+            console.log(
+              `Synced ${snapshot.size} ${collectionName} document(s) for ${email} to ${spreadsheetName}/${sheetName}`
+            );
+          }
+
+          main().catch((error) => {
+            console.error("Pilotlog sync failed:", error);
+            process.exit(1);
+          });
+          NODE
