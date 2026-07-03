@@ -268,20 +268,26 @@ jobs:
               throw new Error(`${sheetName} header row is empty`);
             }
 
-            const rowsToAppend = buildAppendRows(headers, snapshot.docs, existingRows.slice(1));
+            const existingDataRows = existingRows.slice(1).filter((row) => row.some((cell) => cell != null && cell !== ""));
+            const rowsToAppend = buildAppendRows(headers, snapshot.docs, existingDataRows);
+            const rowsToWrite = [...existingDataRows, ...rowsToAppend];
 
-            if (rowsToAppend.length > 0) {
-              await sheets.spreadsheets.values.append({
+            await sheets.spreadsheets.values.clear({
+              spreadsheetId,
+              range: `${sheetName}!A2:AZ20000`,
+            });
+
+            if (rowsToWrite.length > 0) {
+              await sheets.spreadsheets.values.update({
                 spreadsheetId,
                 range: `${sheetName}!A2`,
                 valueInputOption: "USER_ENTERED",
-                insertDataOption: "INSERT_ROWS",
-                requestBody: { values: rowsToAppend },
+                requestBody: { values: rowsToWrite },
               });
             }
 
             console.log(
-              `Checked ${snapshot.size} ${collectionName} document(s) for ${email}; appended ${rowsToAppend.length} new row(s) to ${spreadsheetId}/${sheetName}`
+              `Checked ${snapshot.size} ${collectionName} document(s) for ${email}; rewrote ${rowsToWrite.length} row(s) from row 2 and added ${rowsToAppend.length} new row(s) to ${spreadsheetId}/${sheetName}`
             );
           }
 
