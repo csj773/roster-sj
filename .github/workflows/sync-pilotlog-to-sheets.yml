@@ -28,7 +28,6 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
           PILOTLOG_SPREADSHEET_ID: ${{ secrets.PILOTLOG_SPREADSHEET_ID }}
-          PILOTLOG_SPREADSHEET_NAME: PILOTLOG
           PILOTLOG_SHEET_NAME: flt_log
           PILOTLOG_COLLECTION: Pilotlog
           PILOTLOG_EMAIL: sjchoi787@gmail.com
@@ -40,14 +39,12 @@ jobs:
           const DEFAULT_EMAIL = "sjchoi787@gmail.com";
           const DEFAULT_COLLECTION = "Pilotlog";
           const DEFAULT_SHEET_NAME = "flt_log";
-          const DEFAULT_SPREADSHEET_NAME = "PILOTLOG";
 
           const email = process.env.PILOTLOG_EMAIL || DEFAULT_EMAIL;
           const collectionName = process.env.PILOTLOG_COLLECTION || DEFAULT_COLLECTION;
           const sheetName = process.env.PILOTLOG_SHEET_NAME || DEFAULT_SHEET_NAME;
           const spreadsheetIdFromEnv =
             process.env.PILOTLOG_SPREADSHEET_ID || process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
-          const spreadsheetName = process.env.PILOTLOG_SPREADSHEET_NAME || DEFAULT_SPREADSHEET_NAME;
 
           function requiredJsonEnv(name) {
             const raw = process.env[name];
@@ -138,33 +135,11 @@ jobs:
             return [headers, ...body];
           }
 
-          async function resolveSpreadsheetId(auth) {
-            if (spreadsheetIdFromEnv) return spreadsheetIdFromEnv;
-
-            const drive = google.drive({ version: "v3", auth });
-            const escapedName = spreadsheetName.replace(/'/g, "\\'");
-            const response = await drive.files.list({
-              q: `name='${escapedName}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`,
-              fields: "files(id,name)",
-              pageSize: 2,
-            });
-
-            const files = response.data.files || [];
-            if (files.length === 0) {
-              throw new Error(
-                `Spreadsheet ID not provided and spreadsheet named "${spreadsheetName}" was not found`
-              );
-            }
-            if (files.length > 1) {
-              throw new Error(
-                `Multiple spreadsheets named "${spreadsheetName}" found. Set PILOTLOG_SPREADSHEET_ID.`
-              );
-            }
-
-            return files[0].id;
-          }
-
           async function main() {
+            if (!spreadsheetIdFromEnv) {
+              throw new Error("PILOTLOG_SPREADSHEET_ID secret is required");
+            }
+
             const firebaseServiceAccount = requiredJsonEnv("FIREBASE_SERVICE_ACCOUNT");
             const sheetsCredentials =
               process.env.GOOGLE_SHEETS_CREDENTIALS
@@ -181,13 +156,12 @@ jobs:
               credentials: sheetsCredentials,
               scopes: [
                 "https://www.googleapis.com/auth/spreadsheets",
-                "https://www.googleapis.com/auth/drive.readonly",
               ],
             });
 
             const db = admin.firestore();
             const sheets = google.sheets({ version: "v4", auth });
-            const spreadsheetId = await resolveSpreadsheetId(auth);
+            const spreadsheetId = spreadsheetIdFromEnv;
 
             const snapshot = await db.collection(collectionName).where("Email", "==", email).get();
             const values = buildTable(snapshot.docs);
@@ -205,7 +179,7 @@ jobs:
             });
 
             console.log(
-              `Synced ${snapshot.size} ${collectionName} document(s) for ${email} to ${spreadsheetName}/${sheetName}`
+              `Synced ${snapshot.size} ${collectionName} document(s) for ${email} to spreadsheet ${spreadsheetId}/${sheetName}`
             );
           }
 
