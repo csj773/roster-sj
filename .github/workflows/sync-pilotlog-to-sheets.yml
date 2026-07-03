@@ -212,16 +212,16 @@ jobs:
             return valueByKeys(data, [name]);
           }
 
-          function buildAppendRows(headers, docs, existingRows) {
-            const existingKeys = new Set(existingRows.map((row) => buildKeyFromRow(headers, row)));
+          function buildFirestoreRows(headers, docs) {
+            const seenKeys = new Set();
 
             return docs
               .map((doc) => ({ docId: doc.id, generatedId: randomUUID().replace(/-/g, "").slice(0, 8), ...doc.data() }))
               .sort((a, b) => sortValue(a) - sortValue(b))
               .filter((data) => {
                 const key = buildKeyFromData(data);
-                if (existingKeys.has(key)) return false;
-                existingKeys.add(key);
+                if (seenKeys.has(key)) return false;
+                seenKeys.add(key);
                 return true;
               })
               .map((data) => headers.map((header, index) => normalizeCell(valueForHeader(header, index, data))));
@@ -268,9 +268,7 @@ jobs:
               throw new Error(`${sheetName} header row is empty`);
             }
 
-            const existingDataRows = existingRows.slice(2).filter((row) => row.some((cell) => cell != null && cell !== ""));
-            const rowsToAppend = buildAppendRows(headers, snapshot.docs, existingDataRows);
-            const rowsToWrite = [...existingDataRows, ...rowsToAppend];
+            const rowsToWrite = buildFirestoreRows(headers, snapshot.docs);
 
             await sheets.spreadsheets.values.clear({
               spreadsheetId,
@@ -287,7 +285,7 @@ jobs:
             }
 
             console.log(
-              `Checked ${snapshot.size} ${collectionName} document(s) for ${email}; rewrote ${rowsToWrite.length} row(s) from row 3 and added ${rowsToAppend.length} new row(s) to ${spreadsheetId}/${sheetName}`
+              `Checked ${snapshot.size} ${collectionName} document(s) for ${email}; cleared row 3 down and wrote ${rowsToWrite.length} Firestore row(s) to ${spreadsheetId}/${sheetName}`
             );
           }
 
