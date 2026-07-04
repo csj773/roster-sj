@@ -76,8 +76,8 @@ jobs:
             { header: "BLK", field: "BLK" },
             { header: "NT", fallbackHeaders: ["NGT"], field: "NT" },
             { header: "PIC", field: "PIC" },
-            { header: "이륙", field: "TKO" },
-            { header: "착륙", field: "LDG" },
+            { header: "이륙", field: "TKO", type: "integer" },
+            { header: "착륙", field: "LDG", type: "integer" },
           ];
 
           function requiredJsonEnv(name) {
@@ -182,13 +182,22 @@ jobs:
             return candidates[0] || {};
           }
 
+          function normalizeIntegerValue(value) {
+            if (value == null || value === "") return 0;
+            if (typeof value === "number") return Math.trunc(value);
+            const text = String(value).trim().replace(/[Oo]/g, "0");
+            const parsed = Number.parseInt(text, 10);
+            return Number.isNaN(parsed) ? 0 : parsed;
+          }
+
           function buildUpdateForDoc(headers, data, row) {
             const update = {};
             const seed = seedForSheetRow(row);
-            for (const { header, fallbackHeaders = [], field } of columnUpdates) {
+            for (const { header, fallbackHeaders = [], field, type } of columnUpdates) {
               const values = [header, ...fallbackHeaders].map((name) => cellByHeader(headers, row, name));
               const sheetValue = values.find((value) => value !== "" && value != null) ?? "";
-              update[field] = sheetValue === "" || sheetValue == null ? seed[field] || "" : sheetValue;
+              const rawValue = sheetValue === "" || sheetValue == null ? seed[field] || "" : sheetValue;
+              update[field] = type === "integer" ? normalizeIntegerValue(rawValue) : rawValue;
             }
             return update;
           }
