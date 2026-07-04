@@ -1,4 +1,4 @@
-name: Test Sync PILOTLOG flt_log to Firestore
+name: Sync PILOTLOG flt_log to Firestore
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ on:
       dry_run:
         description: "true = check only, false = update Firestore"
         required: true
-        default: "true"
+        default: "false"
 
 jobs:
   sync-sheet-to-firestore:
@@ -30,7 +30,7 @@ jobs:
           PUPPETEER_SKIP_DOWNLOAD: "true"
         run: npm install --no-audit --no-fund
 
-      - name: Update Firestore from PILOTLOG flt_log test date
+      - name: Update Firestore from PILOTLOG flt_log
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
@@ -50,7 +50,7 @@ jobs:
           const collectionName = process.env.PILOTLOG_COLLECTION || "Pilotlog";
           const email = process.env.PILOTLOG_EMAIL || "sjchoi787@gmail.com";
           const targetDate = process.env.TARGET_DATE || "2023.4.29";
-          const dryRun = String(process.env.DRY_RUN || "true").toLowerCase() !== "false";
+          const dryRun = String(process.env.DRY_RUN || "false").toLowerCase() === "true";
 
           const columnUpdates = [
             { column: "G", fields: ["REG", "Reg", "A/C ID", "AcReg"] },
