@@ -123,6 +123,13 @@ jobs:
             ].join("|");
           }
 
+          function dateFlightKey(parts) {
+            return [
+              normalizeDateKey(parts.date),
+              normalizeFlightNumber(parts.flt),
+            ].join("|");
+          }
+
           function cellByColumn(row, letter) {
             const index = letter.charCodeAt(0) - "A".charCodeAt(0);
             return row[index] ?? "";
@@ -147,6 +154,7 @@ jobs:
               .map((row) => {
                 return {
                   key: flightKey({ date: row[2], flt: row[3], from: row[4], to: row[5] }),
+                  fallbackKey: dateFlightKey({ date: row[2], flt: row[3] }),
                   row,
                 };
               })
@@ -185,35 +193,50 @@ jobs:
 
           const firestoreSnapshot = await db.collection(collectionName).where("Email", "==", email).get();
           const docsByKey = new Map();
+          const docsByFallbackKey = new Map();
           let duplicateFirestoreDocs = 0;
+          let duplicateFallbackDocs = 0;
           for (const doc of firestoreSnapshot.docs) {
             const data = doc.data();
-            if (normalizeDateKey(valueByKeys(data, ["Date", "DATE", "date", "flightDate"])) !== normalizeDateKey(targetDate)) continue;
+            const date = valueByKeys(data, ["Date", "DATE", "date", "flightDate"]);
+            const flt = valueByKeys(data, ["FLT", "F", "Activity", "flightNo"]);
+            if (normalizeDateKey(date) !== normalizeDateKey(targetDate)) continue;
             const key = flightKey({
-              date: valueByKeys(data, ["Date", "DATE", "date", "flightDate"]),
-              flt: valueByKeys(data, ["FLT", "F", "Activity", "flightNo"]),
+              date,
+              flt,
               from: valueByKeys(data, ["FROM", "From", "from"]),
               to: valueByKeys(data, ["TO", "To", "to"]),
             });
+            const fallbackKey = dateFlightKey({ date, flt });
             const existing = docsByKey.get(key);
             if (existing) {
               duplicateFirestoreDocs += 1;
               if (writeSortValue(existing) > writeSortValue(doc)) continue;
             }
             docsByKey.set(key, doc);
+
+            const existingFallback = docsByFallbackKey.get(fallbackKey);
+            if (existingFallback) {
+              duplicateFallbackDocs += 1;
+              if (writeSortValue(existingFallback) > writeSortValue(doc)) continue;
+            }
+            docsByFallbackKey.set(fallbackKey, doc);
           }
 
           let matched = 0;
+          let fallbackMatched = 0;
           let missing = 0;
+          const updatedDocRefs = [];
           const batch = db.batch();
           for (const sheetRow of sheetRows) {
-            const doc = docsByKey.get(sheetRow.key);
+            const doc = docsByKey.get(sheetRow.key) || docsByFallbackKey.get(sheetRow.fallbackKey);
             if (!doc) {
               missing += 1;
-              console.log(`Missing Firestore doc for ${sheetRow.key}`);
+              console.log(`Missing Firestore doc for ${sheetRow.key} fallback=${sheetRow.fallbackKey}`);
               continue;
             }
             matched += 1;
+            if (!docsByKey.has(sheetRow.key)) fallbackMatched += 1;
             const update = buildUpdateForDoc(doc.data(), sheetRow.row);
             console.log(`${dryRun ? "Would update" : "Updating"} ${doc.id} ${sheetRow.key}`, update);
             if (!dryRun) {
@@ -222,10 +245,27 @@ jobs:
                 sheetSyncUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
                 sheetSyncSource: `${sheetName} ${targetDate} G,H,K,O,Q,R,U`,
               });
+              updatedDocRefs.push(doc.ref);
             }
           }
 
           if (!dryRun && matched > 0) await batch.commit();
+
+          if (!dryRun) {
+            for (const ref of updatedDocRefs) {
+              const snap = await ref.get();
+              const data = snap.data() || {};
+              console.log(`After update ${snap.id}`, {
+                REG: valueByKeys(data, ["REG", "Reg", "A/C ID", "AcReg"]),
+                DC: valueByKeys(data, ["DC", "A/C Type"]),
+                BLK: valueByKeys(data, ["BLK", "BLH", "BH", "Blockhours"]),
+                NT: valueByKeys(data, ["NGT", "NT"]),
+                TKO: valueByKeys(data, ["이륙", "TKO", "TakeOff"]),
+                LDG: valueByKeys(data, ["착륙", "LDG", "Landing"]),
+                PIC: valueByKeys(data, ["PIC", "PIC_com"]),
+              });
+            }
+          }
 
           console.log(
             [
@@ -233,8 +273,10 @@ jobs:
               `dry_run=${dryRun}`,
               `sheet_rows=${sheetRows.length}`,
               `matched_docs=${matched}`,
+              `fallback_matched_docs=${fallbackMatched}`,
               `missing_docs=${missing}`,
               `duplicate_firestore_docs=${duplicateFirestoreDocs}`,
+              `duplicate_fallback_docs=${duplicateFallbackDocs}`,
             ].join("; ")
           );
           NODE
