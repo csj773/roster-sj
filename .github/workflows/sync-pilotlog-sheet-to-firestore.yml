@@ -64,13 +64,13 @@ jobs:
           const dryRun = String(process.env.DRY_RUN || "false").toLowerCase() === "true";
 
           const columnUpdates = [
-            { column: "G", primary: "REG", aliases: ["Reg", "A/C ID", "AcReg"] },
-            { column: "H", primary: "DC", aliases: ["A/C Type"] },
-            { column: "K", primary: "BLK", aliases: ["BLH", "BH", "Blockhours"] },
-            { column: "O", primary: "NT", aliases: ["NGT"] },
-            { column: "Q", primary: "TKO", aliases: ["이륙", "TakeOff"] },
-            { column: "R", primary: "LDG", aliases: ["착륙", "Landing"] },
-            { column: "U", primary: "PIC", aliases: ["PIC_com"] },
+            { column: "G", field: "REG" },
+            { column: "H", field: "DC" },
+            { column: "K", field: "BLK" },
+            { column: "O", field: "NT" },
+            { column: "Q", field: "TKO" },
+            { column: "R", field: "LDG" },
+            { column: "U", field: "PIC" },
           ];
 
           function requiredJsonEnv(name) {
@@ -143,12 +143,8 @@ jobs:
 
           function buildUpdateForDoc(data, row) {
             const update = {};
-            for (const { column, primary, aliases } of columnUpdates) {
-              const value = cellByColumn(row, column);
-              update[primary] = value;
-              for (const alias of aliases) {
-                if (Object.prototype.hasOwnProperty.call(data, alias)) update[alias] = value;
-              }
+            for (const { column, field } of columnUpdates) {
+              update[field] = cellByColumn(row, column);
             }
             return update;
           }
@@ -264,13 +260,13 @@ jobs:
               const snap = await ref.get();
               const data = snap.data() || {};
               console.log(`After update ${snap.id}`, {
-                REG: valueByKeys(data, ["REG", "Reg", "A/C ID", "AcReg"]),
-                DC: valueByKeys(data, ["DC", "A/C Type"]),
-                BLK: valueByKeys(data, ["BLK", "BLH", "BH", "Blockhours"]),
-                NT: valueByKeys(data, ["NT", "NGT"]),
-                TKO: valueByKeys(data, ["TKO", "이륙", "TakeOff"]),
-                LDG: valueByKeys(data, ["LDG", "착륙", "Landing"]),
-                PIC: valueByKeys(data, ["PIC", "PIC_com"]),
+                REG: data.REG ?? "",
+                DC: data.DC ?? "",
+                BLK: data.BLK ?? "",
+                NT: data.NT ?? "",
+                TKO: data.TKO ?? "",
+                LDG: data.LDG ?? "",
+                PIC: data.PIC ?? "",
               });
             }
           }
