@@ -268,8 +268,8 @@ jobs:
             return valueByKeys(data, [name]);
           }
 
-          function rowFingerprint(row) {
-            return row.map((value) => String(value ?? "").trim()).join("\u001f");
+          function rowFingerprint(row, width) {
+            return Array.from({ length: width }, (_, index) => String(row[index] ?? "").trim()).join("\u001f");
           }
 
           function existingIdForRow(headers, row) {
@@ -308,47 +308,135 @@ jobs:
             return { rowsByKey, duplicateFirestoreRows };
           }
 
+          function columnLetter(columnNumber) {
+            let value = columnNumber;
+            let letters = "";
+            while (value > 0) {
+              const mod = (value - 1) % 26;
+              letters = String.fromCharCode(65 + mod) + letters;
+              value = Math.floor((value - mod) / 26);
+            }
+            return letters;
+          }
+
+          async function resolveSheetId(sheets, spreadsheetId, title) {
+            const metadata = await sheets.spreadsheets.get({
+              spreadsheetId,
+              fields: "sheets.properties",
+            });
+            const sheet = (metadata.data.sheets || []).find((item) => item.properties?.title === title);
+            if (!sheet) throw new Error(`Sheet not found: ${title}`);
+            return sheet.properties.sheetId;
+          }
+
           function buildExistingRowsByKey(headers, rows) {
             const rowsByKey = new Map();
+            const duplicateRowNumbers = [];
             let duplicateSheetRows = 0;
-            for (const row of rows) {
+            rows.forEach((row, index) => {
               const key = buildKeyFromRow(headers, row);
-              if (!key || key === "||||") continue;
+              if (!key || key === "||||") return;
               if (rowsByKey.has(key)) {
                 duplicateSheetRows += 1;
-                continue;
+                duplicateRowNumbers.push(index + 3);
+                return;
               }
-              rowsByKey.set(key, row);
-            }
-            return { rowsByKey, duplicateSheetRows };
+              rowsByKey.set(key, { row, rowNumber: index + 3 });
+            });
+            return { rowsByKey, duplicateSheetRows, duplicateRowNumbers };
           }
 
           function mergeSheetRows(headers, existingRows, firestoreRowsByKey) {
-            const { rowsByKey: existingRowsByKey, duplicateSheetRows } = buildExistingRowsByKey(headers, existingRows);
-            const finalRows = [];
+            const { rowsByKey: existingRowsByKey, duplicateSheetRows, duplicateRowNumbers } = buildExistingRowsByKey(headers, existingRows);
+            const rowsToAppend = [];
+            const rowsToUpdate = [];
+            const rowNumbersToDelete = [...duplicateRowNumbers];
             let created = 0;
             let updated = 0;
             let unchanged = 0;
 
             for (const [key, firestoreRow] of firestoreRowsByKey.entries()) {
-              const existingRow = existingRowsByKey.get(key);
+              const existingEntry = existingRowsByKey.get(key);
 
-              const existingId = existingRow ? existingIdForRow(headers, existingRow) : "";
+              const existingId = existingEntry ? existingIdForRow(headers, existingEntry.row) : "";
               const nextRow = buildRowFromData(headers, firestoreRow.data, existingId || firestoreRow.data.generatedId);
-              finalRows.push(nextRow);
 
-              if (!existingRow) {
+              if (!existingEntry) {
+                rowsToAppend.push(nextRow);
                 created += 1;
-              } else if (rowFingerprint(existingRow) === rowFingerprint(nextRow)) {
+              } else if (rowFingerprint(existingEntry.row, headers.length) === rowFingerprint(nextRow, headers.length)) {
                 unchanged += 1;
               } else {
+                rowsToUpdate.push({ rowNumber: existingEntry.rowNumber, values: nextRow });
                 updated += 1;
               }
             }
 
-            const deleted = [...existingRowsByKey.keys()].filter((key) => !firestoreRowsByKey.has(key)).length;
+            const deletedKeys = [...existingRowsByKey.keys()].filter((key) => !firestoreRowsByKey.has(key));
+            for (const key of deletedKeys) {
+              rowNumbersToDelete.push(existingRowsByKey.get(key).rowNumber);
+            }
+            const deleted = deletedKeys.length;
 
-            return { finalRows, created, updated, deleted, unchanged, existingCount: existingRowsByKey.size, duplicateSheetRows };
+            return {
+              rowsToAppend,
+              rowsToUpdate,
+              rowNumbersToDelete,
+              created,
+              updated,
+              deleted,
+              unchanged,
+              existingCount: existingRowsByKey.size,
+              duplicateSheetRows,
+            };
+          }
+
+          async function applySheetChanges(sheets, spreadsheetId, sheetName, sheetId, headers, changes) {
+            const lastColumn = columnLetter(headers.length);
+
+            if (changes.rowsToUpdate.length > 0) {
+              await sheets.spreadsheets.values.batchUpdate({
+                spreadsheetId,
+                requestBody: {
+                  valueInputOption: "USER_ENTERED",
+                  data: changes.rowsToUpdate.map((change) => ({
+                    range: `${sheetName}!A${change.rowNumber}:${lastColumn}${change.rowNumber}`,
+                    values: [change.values],
+                  })),
+                },
+              });
+            }
+
+            if (changes.rowsToAppend.length > 0) {
+              await sheets.spreadsheets.values.append({
+                spreadsheetId,
+                range: `${sheetName}!A:${lastColumn}`,
+                valueInputOption: "USER_ENTERED",
+                insertDataOption: "INSERT_ROWS",
+                requestBody: { values: changes.rowsToAppend },
+              });
+            }
+
+            const uniqueRowsToDelete = [...new Set(changes.rowNumbersToDelete)].sort((a, b) => b - a);
+            if (uniqueRowsToDelete.length > 0) {
+              await sheets.spreadsheets.batchUpdate({
+                spreadsheetId,
+                requestBody: {
+                  requests: uniqueRowsToDelete.map((rowNumber) => ({
+                    deleteDimension: {
+                      range: {
+                        sheetId,
+                        dimension: "ROWS",
+                        startIndex: rowNumber - 1,
+                        endIndex: rowNumber,
+                      },
+                    },
+                  })),
+                },
+              });
+            }
+
+            return { deletedRowsApplied: uniqueRowsToDelete.length };
           }
 
           async function main() {
@@ -378,6 +466,7 @@ jobs:
             const db = admin.firestore();
             const sheets = google.sheets({ version: "v4", auth });
             const spreadsheetId = spreadsheetIdFromEnv;
+            const sheetId = await resolveSheetId(sheets, spreadsheetId, sheetName);
 
             const snapshot = await db.collection(collectionName).where("Email", "==", email).get();
             const existing = await sheets.spreadsheets.values.get({
@@ -394,37 +483,26 @@ jobs:
 
             const existingDataRows = existingRows.slice(2);
             const { rowsByKey: firestoreRowsByKey, duplicateFirestoreRows } = buildFirestoreRowsByKey(headers, snapshot.docs);
-            const { finalRows, created, updated, deleted, unchanged, existingCount, duplicateSheetRows } = mergeSheetRows(
+            const changes = mergeSheetRows(
               headers,
               existingDataRows,
               firestoreRowsByKey
             );
-
-            await sheets.spreadsheets.values.clear({
-              spreadsheetId,
-              range: `${sheetName}!A3:AZ20000`,
-            });
-
-            if (finalRows.length > 0) {
-              await sheets.spreadsheets.values.update({
-                spreadsheetId,
-                range: `${sheetName}!A3`,
-                valueInputOption: "USER_ENTERED",
-                requestBody: { values: finalRows },
-              });
-            }
+            const { deletedRowsApplied } = await applySheetChanges(sheets, spreadsheetId, sheetName, sheetId, headers, changes);
 
             console.log(
               [
                 `Checked ${snapshot.size} ${collectionName} document(s) for ${email}`,
-                `sheet existing rows=${existingCount}`,
-                `created=${created}`,
-                `updated=${updated}`,
-                `deleted=${deleted}`,
-                `unchanged=${unchanged}`,
+                `sheet existing rows=${changes.existingCount}`,
+                `created=${changes.created}`,
+                `updated=${changes.updated}`,
+                `deleted=${changes.deleted}`,
+                `unchanged=${changes.unchanged}`,
                 `duplicate firestore rows removed=${duplicateFirestoreRows}`,
-                `duplicate sheet rows removed=${duplicateSheetRows}`,
-                `final rows=${finalRows.length}`,
+                `duplicate sheet rows removed=${changes.duplicateSheetRows}`,
+                `sheet rows updated=${changes.rowsToUpdate.length}`,
+                `sheet rows appended=${changes.rowsToAppend.length}`,
+                `sheet rows deleted=${deletedRowsApplied}`,
                 `target=${spreadsheetId}/${sheetName}`,
               ].join("; ")
             );
