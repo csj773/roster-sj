@@ -1,6 +1,11 @@
 name: Sync PILOTLOG flt_log to Firestore
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/sync-pilotlog-sheet-to-firestore.yml"
   workflow_dispatch:
     inputs:
       target_date:
@@ -38,8 +43,8 @@ jobs:
           PILOTLOG_SHEET_NAME: flt_log
           PILOTLOG_COLLECTION: Pilotlog
           PILOTLOG_EMAIL: sjchoi787@gmail.com
-          TARGET_DATE: ${{ inputs.target_date }}
-          DRY_RUN: ${{ inputs.dry_run }}
+          TARGET_DATE: ${{ github.event.inputs.target_date || '2023.4.29' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         run: |
           node --input-type=module <<'NODE'
           import admin from "firebase-admin";
