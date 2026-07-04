@@ -16,6 +16,10 @@ on:
         description: "true = check only, false = update Firestore"
         required: true
         default: "false"
+      target_flt:
+        description: "Optional FLT to sync"
+        required: true
+        default: "731"
 
 jobs:
   sync-sheet-to-firestore:
@@ -45,6 +49,7 @@ jobs:
           PILOTLOG_EMAIL: sjchoi787@gmail.com
           TARGET_DATE: ${{ github.event.inputs.target_date || '2023.4.29' }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          TARGET_FLT: ${{ github.event.inputs.target_flt || '731' }}
         run: |
           node --input-type=module <<'NODE'
           import admin from "firebase-admin";
@@ -55,16 +60,17 @@ jobs:
           const collectionName = process.env.PILOTLOG_COLLECTION || "Pilotlog";
           const email = process.env.PILOTLOG_EMAIL || "sjchoi787@gmail.com";
           const targetDate = process.env.TARGET_DATE || "2023.4.29";
+          const targetFlt = String(process.env.TARGET_FLT || "").trim();
           const dryRun = String(process.env.DRY_RUN || "false").toLowerCase() === "true";
 
           const columnUpdates = [
-            { column: "G", fields: ["REG", "Reg", "A/C ID", "AcReg"] },
-            { column: "H", fields: ["DC", "A/C Type"] },
-            { column: "K", fields: ["BLK", "BLH", "BH", "Blockhours"] },
-            { column: "O", fields: ["NGT", "NT"] },
-            { column: "Q", fields: ["이륙", "TKO", "TakeOff"] },
-            { column: "R", fields: ["착륙", "LDG", "Landing"] },
-            { column: "U", fields: ["PIC", "PIC_com"] },
+            { column: "G", primary: "REG", aliases: ["Reg", "A/C ID", "AcReg"] },
+            { column: "H", primary: "DC", aliases: ["A/C Type"] },
+            { column: "K", primary: "BLK", aliases: ["BLH", "BH", "Blockhours"] },
+            { column: "O", primary: "NT", aliases: ["NGT"] },
+            { column: "Q", primary: "TKO", aliases: ["이륙", "TakeOff"] },
+            { column: "R", primary: "LDG", aliases: ["착륙", "Landing"] },
+            { column: "U", primary: "PIC", aliases: ["PIC_com"] },
           ];
 
           function requiredJsonEnv(name) {
@@ -135,14 +141,14 @@ jobs:
             return row[index] ?? "";
           }
 
-          function fieldToUpdate(data, candidates) {
-            return candidates.find((field) => Object.prototype.hasOwnProperty.call(data, field)) || candidates[0];
-          }
-
           function buildUpdateForDoc(data, row) {
             const update = {};
-            for (const { column, fields } of columnUpdates) {
-              update[fieldToUpdate(data, fields)] = cellByColumn(row, column);
+            for (const { column, primary, aliases } of columnUpdates) {
+              const value = cellByColumn(row, column);
+              update[primary] = value;
+              for (const alias of aliases) {
+                if (Object.prototype.hasOwnProperty.call(data, alias)) update[alias] = value;
+              }
             }
             return update;
           }
@@ -151,6 +157,7 @@ jobs:
             return rows
               .slice(2)
               .filter((row) => normalizeDateKey(row[2]) === normalizeDateKey(targetDate))
+              .filter((row) => !targetFlt || normalizeFlightNumber(row[3]) === normalizeFlightNumber(targetFlt))
               .map((row) => {
                 return {
                   key: flightKey({ date: row[2], flt: row[3], from: row[4], to: row[5] }),
@@ -201,6 +208,7 @@ jobs:
             const date = valueByKeys(data, ["Date", "DATE", "date", "flightDate"]);
             const flt = valueByKeys(data, ["FLT", "F", "Activity", "flightNo"]);
             if (normalizeDateKey(date) !== normalizeDateKey(targetDate)) continue;
+            if (targetFlt && normalizeFlightNumber(flt) !== normalizeFlightNumber(targetFlt)) continue;
             const key = flightKey({
               date,
               flt,
@@ -259,9 +267,9 @@ jobs:
                 REG: valueByKeys(data, ["REG", "Reg", "A/C ID", "AcReg"]),
                 DC: valueByKeys(data, ["DC", "A/C Type"]),
                 BLK: valueByKeys(data, ["BLK", "BLH", "BH", "Blockhours"]),
-                NT: valueByKeys(data, ["NGT", "NT"]),
-                TKO: valueByKeys(data, ["이륙", "TKO", "TakeOff"]),
-                LDG: valueByKeys(data, ["착륙", "LDG", "Landing"]),
+                NT: valueByKeys(data, ["NT", "NGT"]),
+                TKO: valueByKeys(data, ["TKO", "이륙", "TakeOff"]),
+                LDG: valueByKeys(data, ["LDG", "착륙", "Landing"]),
                 PIC: valueByKeys(data, ["PIC", "PIC_com"]),
               });
             }
@@ -270,6 +278,7 @@ jobs:
           console.log(
             [
               `target_date=${targetDate}`,
+              `target_flt=${targetFlt || "*"}`,
               `dry_run=${dryRun}`,
               `sheet_rows=${sheetRows.length}`,
               `matched_docs=${matched}`,
