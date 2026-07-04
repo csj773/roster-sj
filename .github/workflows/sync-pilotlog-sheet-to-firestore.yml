@@ -68,13 +68,13 @@ jobs:
             : [];
 
           const columnUpdates = [
-            { column: "G", field: "REG" },
-            { column: "H", field: "DC" },
-            { column: "K", field: "BLK" },
-            { column: "O", field: "NT" },
-            { column: "Q", field: "TKO" },
-            { column: "R", field: "LDG" },
-            { column: "U", field: "PIC" },
+            { header: "REG", field: "REG" },
+            { header: "DC", field: "DC" },
+            { header: "BLK", field: "BLK" },
+            { header: "NT", fallbackHeaders: ["NGT"], field: "NT" },
+            { header: "PIC", field: "PIC" },
+            { header: "이륙", field: "TKO" },
+            { header: "착륙", field: "LDG" },
           ];
 
           function requiredJsonEnv(name) {
@@ -140,9 +140,18 @@ jobs:
             ].join("|");
           }
 
-          function cellByColumn(row, letter) {
-            const index = letter.charCodeAt(0) - "A".charCodeAt(0);
-            return row[index] ?? "";
+          function normalizeHeader(value) {
+            return String(value || "").trim().replace(/\s+/g, "").toUpperCase();
+          }
+
+          function headerIndex(headers, name) {
+            const normalizedName = normalizeHeader(name);
+            return headers.findIndex((header) => normalizeHeader(header) === normalizedName);
+          }
+
+          function cellByHeader(headers, row, name) {
+            const index = headerIndex(headers, name);
+            return index >= 0 ? row[index] ?? "" : "";
           }
 
           function dateDistanceDays(left, right) {
@@ -166,11 +175,12 @@ jobs:
             return candidates[0] || {};
           }
 
-          function buildUpdateForDoc(data, row) {
+          function buildUpdateForDoc(headers, data, row) {
             const update = {};
             const seed = seedForSheetRow(row);
-            for (const { column, field } of columnUpdates) {
-              const sheetValue = cellByColumn(row, column);
+            for (const { header, fallbackHeaders = [], field } of columnUpdates) {
+              const values = [header, ...fallbackHeaders].map((name) => cellByHeader(headers, row, name));
+              const sheetValue = values.find((value) => value !== "" && value != null) ?? "";
               update[field] = sheetValue === "" || sheetValue == null ? seed[field] || "" : sheetValue;
             }
             return update;
@@ -284,7 +294,9 @@ jobs:
             range: `${sheetName}!A1:AZ20000`,
             valueRenderOption: "FORMATTED_VALUE",
           });
-          const sheetRows = buildSheetRows(sheetResponse.data.values || []);
+          const sheetValues = sheetResponse.data.values || [];
+          const headers = sheetValues[0] || [];
+          const sheetRows = buildSheetRows(sheetValues);
           if (!sheetRows.length) throw new Error(`No flt_log rows found for ${targetDate}`);
 
           const firestoreSnapshot = await db.collection(collectionName).where("Email", "==", email).get();
@@ -334,13 +346,13 @@ jobs:
             }
             matched += 1;
             if (!docsByKey.has(sheetRow.key)) fallbackMatched += 1;
-            const update = buildUpdateForDoc(doc.data(), sheetRow.row);
+            const update = buildUpdateForDoc(headers, doc.data(), sheetRow.row);
             console.log(`${dryRun ? "Would update" : "Updating"} ${doc.id} ${sheetRow.key}`, update);
             if (!dryRun) {
               batch.update(doc.ref, {
                 ...update,
                 sheetSyncUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                sheetSyncSource: `${sheetName} ${targetDate} G,H,K,O,Q,R,U`,
+                sheetSyncSource: `${sheetName} ${targetDate} REG,DC,BLK,NT,PIC,이륙,착륙`,
               });
               updatedDocRefs.push(doc.ref);
             }
