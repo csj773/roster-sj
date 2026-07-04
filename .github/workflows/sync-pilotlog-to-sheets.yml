@@ -23,12 +23,12 @@ jobs:
           PUPPETEER_SKIP_DOWNLOAD: "true"
         run: npm install --no-audit --no-fund
 
-      - name: Sync Firestore Pilotlog to flt_log1
+      - name: Sync Firestore Pilotlog to flt_log
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
           PILOTLOG_SPREADSHEET_ID: ${{ secrets.PILOTLOG_SPREADSHEET_ID || '1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc' }}
-          PILOTLOG_SHEET_NAME: flt_log1
+          PILOTLOG_SHEET_NAME: flt_log
           PILOTLOG_COLLECTION: Pilotlog
           PILOTLOG_EMAIL: sjchoi787@gmail.com
         run: |
@@ -39,7 +39,7 @@ jobs:
 
           const DEFAULT_EMAIL = "sjchoi787@gmail.com";
           const DEFAULT_COLLECTION = "Pilotlog";
-          const DEFAULT_SHEET_NAME = "flt_log1";
+          const DEFAULT_SHEET_NAME = "flt_log";
 
           const email = process.env.PILOTLOG_EMAIL || DEFAULT_EMAIL;
           const collectionName = process.env.PILOTLOG_COLLECTION || DEFAULT_COLLECTION;
