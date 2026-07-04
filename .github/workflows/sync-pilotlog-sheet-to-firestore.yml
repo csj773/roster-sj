@@ -15,7 +15,7 @@ on:
       target_end_date:
         description: "Last flt_log DATE to sync"
         required: true
-        default: "2026.5.30"
+        default: "2026.6.25"
       dry_run:
         description: "true = check only, false = update Firestore"
         required: true
@@ -52,7 +52,7 @@ jobs:
           PILOTLOG_COLLECTION: Pilotlog
           PILOTLOG_EMAIL: sjchoi787@gmail.com
           TARGET_START_DATE: ${{ github.event.inputs.target_start_date || '2023.4.29' }}
-          TARGET_END_DATE: ${{ github.event.inputs.target_end_date || '2026.5.30' }}
+          TARGET_END_DATE: ${{ github.event.inputs.target_end_date || '2026.6.25' }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
           TARGET_FLT: ${{ github.event.inputs.target_flt || '' }}
         run: |
@@ -66,7 +66,7 @@ jobs:
           const collectionName = process.env.PILOTLOG_COLLECTION || "Pilotlog";
           const email = process.env.PILOTLOG_EMAIL || "sjchoi787@gmail.com";
           const targetStartDate = process.env.TARGET_START_DATE || "2023.4.29";
-          const targetEndDate = process.env.TARGET_END_DATE || "2026.5.30";
+          const targetEndDate = process.env.TARGET_END_DATE || "2026.6.25";
           const targetFlts = String(process.env.TARGET_FLT || "")
             .split(",")
             .map((value) => normalizeFlightNumber(value))
@@ -77,12 +77,12 @@ jobs:
             : [];
 
           const columnUpdates = [
-            { header: "REG", field: "REG" },
-            { header: "DC", field: "DC" },
-            { header: "BLK", field: "BLK" },
-            { header: "NT", fallbackHeaders: ["NGT"], field: "NT" },
-            { header: "INS", field: "INS" },
-            { header: "PIC", field: "PIC" },
+            { header: "REG", field: "REG", type: "string" },
+            { header: "DC", field: "DC", type: "string" },
+            { header: "BLK", field: "BLK", type: "durationNumber" },
+            { header: "NGT", fallbackHeaders: ["NT"], field: "NGT", type: "durationNumber" },
+            { header: "INS", field: "INS", type: "durationNumber" },
+            { header: "PIC", field: "PIC", type: "durationNumber" },
             { header: "이륙", field: "TKO", type: "integer" },
             { header: "착륙", field: "LDG", type: "integer" },
           ];
@@ -213,14 +213,50 @@ jobs:
             return Number.isNaN(parsed) ? 0 : parsed;
           }
 
+          function normalizeDurationNumber(value) {
+            if (value == null || value === "") return 0;
+            if (typeof value === "number") return value;
+            const text = String(value).trim();
+            const match = text.match(/^(-?\d+):(\d{1,2})$/);
+            if (match) {
+              const hours = Number.parseInt(match[1], 10);
+              const minutes = Number.parseInt(match[2], 10);
+              return (hours * 60 + minutes) / 1440;
+            }
+            const parsed = Number.parseFloat(text.replace(/,/g, ""));
+            return Number.isNaN(parsed) ? 0 : parsed;
+          }
+
+          function normalizeStringValue(value) {
+            if (value == null) return "";
+            return String(value).trim();
+          }
+
+          function seedValueForColumn(seed, field, header, fallbackHeaders) {
+            for (const key of [field, header, ...fallbackHeaders]) {
+              if (seed[key] != null && seed[key] !== "") return seed[key];
+            }
+            return "";
+          }
+
           function buildUpdateForDoc(headers, data, row) {
             const update = {};
             const seed = seedForSheetRow(row);
             for (const { header, fallbackHeaders = [], field, type } of columnUpdates) {
               const values = [header, ...fallbackHeaders].map((name) => cellByHeader(headers, row, name));
               const sheetValue = values.find((value) => value !== "" && value != null) ?? "";
-              const rawValue = sheetValue === "" || sheetValue == null ? seed[field] || "" : sheetValue;
-              update[field] = type === "integer" ? normalizeIntegerValue(rawValue) : rawValue;
+              const rawValue = sheetValue === "" || sheetValue == null
+                ? seedValueForColumn(seed, field, header, fallbackHeaders)
+                : sheetValue;
+              if (type === "integer") {
+                update[field] = normalizeIntegerValue(rawValue);
+              } else if (type === "durationNumber") {
+                update[field] = normalizeDurationNumber(rawValue);
+              } else if (type === "string") {
+                update[field] = normalizeStringValue(rawValue);
+              } else {
+                update[field] = rawValue;
+              }
             }
             return update;
           }
@@ -331,7 +367,7 @@ jobs:
           const sheetResponse = await sheets.spreadsheets.values.get({
             spreadsheetId,
             range: `${sheetName}!A1:AZ20000`,
-            valueRenderOption: "FORMATTED_VALUE",
+            valueRenderOption: "UNFORMATTED_VALUE",
           });
           const sheetValues = sheetResponse.data.values || [];
           const headers = sheetValues[0] || [];
@@ -401,7 +437,7 @@ jobs:
               batch.update(doc.ref, {
                 ...update,
                 sheetSyncUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                sheetSyncSource: `${sheetName} ${targetRangeLabel()} REG,DC,BLK,NT,INS,PIC,이륙,착륙`,
+                sheetSyncSource: `${sheetName} ${targetRangeLabel()} REG,DC,BLK,NGT,INS,PIC,이륙,착륙`,
               });
               batchWrites += 1;
               updatedDocRefs.push(doc.ref);
@@ -419,7 +455,7 @@ jobs:
                 REG: data.REG ?? "",
                 DC: data.DC ?? "",
                 BLK: data.BLK ?? "",
-                NT: data.NT ?? "",
+                NGT: data.NGT ?? "",
                 INS: data.INS ?? "",
                 TKO: data.TKO ?? "",
                 LDG: data.LDG ?? "",
