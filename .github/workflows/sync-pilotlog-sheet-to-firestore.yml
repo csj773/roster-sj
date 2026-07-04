@@ -199,6 +199,72 @@ jobs:
             return 0;
           }
 
+          function valueType(value) {
+            if (value == null) return "empty";
+            if (typeof value.toDate === "function") return "timestamp";
+            if (Array.isArray(value)) return "array";
+            return typeof value;
+          }
+
+          function valuePattern(value) {
+            if (value == null || value === "") return "empty";
+            const text = String(normalizeFirestoreValue(value)).trim();
+            if (/^\d+$/.test(text)) return "integer-string";
+            if (/^\d+:\d{1,2}$/.test(text)) return "duration-h:mm";
+            if (/^\d{2}:\d{2}$/.test(text)) return "time-hh:mm";
+            if (/^\d[A-Z]{2}$/.test(text)) return "dc-code";
+            if (/^\d{4}$/.test(text)) return "four-digit";
+            return "text";
+          }
+
+          function summarizeField(values) {
+            const typeCounts = new Map();
+            const patternCounts = new Map();
+            let nonEmpty = 0;
+            for (const value of values) {
+              const type = valueType(value);
+              const pattern = valuePattern(value);
+              typeCounts.set(type, (typeCounts.get(type) || 0) + 1);
+              patternCounts.set(pattern, (patternCounts.get(pattern) || 0) + 1);
+              if (pattern !== "empty") nonEmpty += 1;
+            }
+            const dominant = (counts) =>
+              [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || "empty";
+            return {
+              nonEmpty,
+              type: dominant(typeCounts),
+              pattern: dominant(patternCounts),
+              typeCounts: Object.fromEntries(typeCounts),
+              patternCounts: Object.fromEntries(patternCounts),
+            };
+          }
+
+          function compareWithOtherDocs(targetId, targetData, allDocs) {
+            const fields = columnUpdates.map(({ field }) => field);
+            const otherDocs = allDocs.filter((doc) => doc.id !== targetId).map((doc) => doc.data());
+            const differences = [];
+            for (const field of fields) {
+              const targetValue = targetData[field];
+              const summary = summarizeField(otherDocs.map((data) => data[field]));
+              const targetSummary = {
+                value: targetValue ?? "",
+                type: valueType(targetValue),
+                pattern: valuePattern(targetValue),
+              };
+              if (
+                summary.nonEmpty > 0 &&
+                (targetSummary.type !== summary.type || targetSummary.pattern !== summary.pattern)
+              ) {
+                differences.push({
+                  field,
+                  target: targetSummary,
+                  otherDocs: summary,
+                });
+              }
+            }
+            return differences;
+          }
+
           if (!admin.apps.length) {
             admin.initializeApp({
               credential: admin.credential.cert(requiredJsonEnv("FIREBASE_SERVICE_ACCOUNT")),
@@ -295,6 +361,12 @@ jobs:
                 LDG: data.LDG ?? "",
                 PIC: data.PIC ?? "",
               });
+              const differences = compareWithOtherDocs(snap.id, data, firestoreSnapshot.docs);
+              if (differences.length) {
+                console.log(`Format differences for ${snap.id}`, JSON.stringify(differences, null, 2));
+              } else {
+                console.log(`Format differences for ${snap.id}: none`);
+              }
             }
           }
 
