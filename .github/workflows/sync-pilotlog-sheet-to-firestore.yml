@@ -17,9 +17,9 @@ on:
         required: true
         default: "false"
       target_flt:
-        description: "Optional FLT to sync"
+        description: "Optional FLT to sync. Use comma for multiple flights."
         required: true
-        default: "732"
+        default: "731,732"
 
 jobs:
   sync-sheet-to-firestore:
@@ -49,7 +49,7 @@ jobs:
           PILOTLOG_EMAIL: sjchoi787@gmail.com
           TARGET_DATE: ${{ github.event.inputs.target_date || '2023.4.29' }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
-          TARGET_FLT: ${{ github.event.inputs.target_flt || '732' }}
+          TARGET_FLT: ${{ github.event.inputs.target_flt || '731,732' }}
         run: |
           node --input-type=module <<'NODE'
           import admin from "firebase-admin";
@@ -61,7 +61,10 @@ jobs:
           const collectionName = process.env.PILOTLOG_COLLECTION || "Pilotlog";
           const email = process.env.PILOTLOG_EMAIL || "sjchoi787@gmail.com";
           const targetDate = process.env.TARGET_DATE || "2023.4.29";
-          const targetFlt = String(process.env.TARGET_FLT || "").trim();
+          const targetFlts = String(process.env.TARGET_FLT || "")
+            .split(",")
+            .map((value) => normalizeFlightNumber(value))
+            .filter(Boolean);
           const dryRun = String(process.env.DRY_RUN || "false").toLowerCase() === "true";
           const seedRows = fs.existsSync("work/seed/log_filled_seed.json")
             ? JSON.parse(fs.readFileSync("work/seed/log_filled_seed.json", "utf8"))
@@ -118,6 +121,10 @@ jobs:
 
           function normalizeFlightNumber(value) {
             return String(value || "").trim().replace(/^YP/i, "");
+          }
+
+          function shouldSyncFlight(value) {
+            return !targetFlts.length || targetFlts.includes(normalizeFlightNumber(value));
           }
 
           function normalizeKeyPart(value) {
@@ -190,7 +197,7 @@ jobs:
             return rows
               .slice(2)
               .filter((row) => normalizeDateKey(row[2]) === normalizeDateKey(targetDate))
-              .filter((row) => !targetFlt || normalizeFlightNumber(row[3]) === normalizeFlightNumber(targetFlt))
+              .filter((row) => shouldSyncFlight(row[3]))
               .map((row) => {
                 return {
                   key: flightKey({ date: row[2], flt: row[3], from: row[4], to: row[5] }),
@@ -309,7 +316,7 @@ jobs:
             const date = valueByKeys(data, ["Date", "DATE", "date", "flightDate"]);
             const flt = valueByKeys(data, ["FLT", "F", "Activity", "flightNo"]);
             if (normalizeDateKey(date) !== normalizeDateKey(targetDate)) continue;
-            if (targetFlt && normalizeFlightNumber(flt) !== normalizeFlightNumber(targetFlt)) continue;
+            if (!shouldSyncFlight(flt)) continue;
             const key = flightKey({
               date,
               flt,
@@ -385,7 +392,7 @@ jobs:
           console.log(
             [
               `target_date=${targetDate}`,
-              `target_flt=${targetFlt || "*"}`,
+              `target_flt=${targetFlts.length ? targetFlts.join(",") : "*"}`,
               `dry_run=${dryRun}`,
               `sheet_rows=${sheetRows.length}`,
               `matched_docs=${matched}`,
