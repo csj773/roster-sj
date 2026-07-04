@@ -95,39 +95,96 @@ console.log("✅ UID 및 Config 로드 완료");
   // ------------------- Roster 데이터 추출 -------------------
   console.log("🚀 Roster 데이터 추출");
   await page.waitForSelector("table tr");
-  const rosterRaw = await page.evaluate(() =>
-    Array.from(document.querySelectorAll("table tr"))
-      .map(tr => Array.from(tr.querySelectorAll("td")).map(td => td.innerText.trim()))
-  );
-  if (rosterRaw.length < 2) { console.error("❌ Roster 데이터 비어 있음"); await browser.close(); return; }
-  console.log(`✅ Roster 데이터 ${rosterRaw.length - 1}행 추출 완료`);
+  const rosterRaw = await page.evaluate(() => {
+    const normalize = (value) => value.replace(/\s+/g, " ").trim();
+    const tables = Array.from(document.querySelectorAll("table"));
+    const tableRows = tables
+      .map(table =>
+        Array.from(table.querySelectorAll("tr"))
+          .map(tr => Array.from(tr.querySelectorAll("th,td")).map(td => normalize(td.innerText)))
+      )
+      .filter(rows => rows.length > 1);
+
+    const rosterTable = tableRows.find(rows => {
+      const firstRow = rows[0] || [];
+      return ["Date", "Activity", "From", "To"].every(header =>
+        firstRow.some(cell => cell === header || cell.includes(header))
+      );
+    });
+
+    return rosterTable || tableRows.flat();
+  });
+  const looksLikeRosterHeader = (row) =>
+    ["Date", "Activity", "From", "To"].every(header =>
+      row.some(cell => cell === header || cell.includes(header))
+    );
+  const rosterHeaderIndex = rosterRaw.findIndex(looksLikeRosterHeader);
+  const rosterRows = rosterHeaderIndex >= 0 ? rosterRaw.slice(rosterHeaderIndex) : rosterRaw;
+  if (rosterRows.length < 2) { console.error("❌ Roster 데이터 비어 있음"); await browser.close(); return; }
+  console.log(`✅ Roster 데이터 ${rosterRows.length - 1}행 추출 완료`);
 
   // ------------------- 헤더 매핑 -------------------
   const headers = ["Date","DC","C/I(L)","C/O(L)","Activity","F","From","STD(L)","STD(Z)","To","STA(L)","STA(Z)","BLH","AcReg","Crew"];
-  const siteHeaders = rosterRaw[0];
+  const siteHeaders = rosterRows[0];
   const headerMap = {};
+  const normalizeHeader = (value) => String(value || "").replace(/\s+/g, "").toUpperCase();
+  const headerAliases = {
+    Date: ["DATE"],
+    DC: ["DC"],
+    "C/I(L)": ["C/I(L)", "CI(L)", "CIL"],
+    "C/O(L)": ["C/O(L)", "CO(L)", "COL"],
+    Activity: ["ACTIVITY"],
+    F: ["F", "FLT", "FLIGHT", "FLIGHTNO", "FLIGHTNUMBER"],
+    From: ["FROM"],
+    "STD(L)": ["STD(L)", "STDL"],
+    "STD(Z)": ["STD(Z)", "STDZ"],
+    To: ["TO"],
+    "STA(L)": ["STA(L)", "STAL"],
+    "STA(Z)": ["STA(Z)", "STAZ"],
+    BLH: ["BLH", "BH"],
+    AcReg: ["ACREG", "ACREGISTRATION", "A/CID", "REG"],
+    Crew: ["CREW", "CC"],
+  };
+
   headers.forEach(h => {
-    const idx = siteHeaders.findIndex(col => col.includes(h));
+    const aliases = headerAliases[h] || [h];
+    const idx = siteHeaders.findIndex(col => aliases.includes(normalizeHeader(col)));
     if(idx >= 0) headerMap[h] = idx;
   });
   console.log("✅ 헤더 매핑 완료");
 
-  // ------------------- 행 데이터 정리 -------------------
-  let values = rosterRaw.slice(1).map(row => headers.map(h => {
-    if(h==="AcReg") return row[18]||""; 
-    if(h==="Crew") return row[22]||""; 
-    const idx = headerMap[h]; 
-    return idx!==undefined ? row[idx]||"" : "";
-  }));
-
-  // ------------------- CSV/JSON 저장 전 중복 제거 (기존 Map 로직 유지) -------------------
-  console.log("🚀 CSV/JSON 저장 전 중복 제거");
   const dateIdx = headers.indexOf("Date");
   const dcIdx = headers.indexOf("DC");
+  const activityIdx = headers.indexOf("Activity");
   const flightIdx = headers.indexOf("F");
   const fromIdx = headers.indexOf("From");
   const toIdx = headers.indexOf("To");
 
+  // ------------------- 행 데이터 정리 -------------------
+  const isFlightNumber = (value) => /^YP\d+/i.test(String(value || "").trim());
+  const isRosterDataRow = (row) => {
+    const normalized = row.map(cell => String(cell || "").trim());
+    if (normalized.every(cell => !cell)) return false;
+    if (normalizeHeader(normalized[dateIdx]) === "DATE") return false;
+    if (normalizeHeader(normalized[activityIdx]) === "ACTIVITY") return false;
+    return Boolean(normalized[activityIdx] && (normalized[fromIdx] || normalized[toIdx]));
+  };
+
+  let values = rosterRows.slice(1)
+    .map(row => headers.map(h => {
+      if(h==="AcReg") return (headerMap[h] !== undefined ? row[headerMap[h]] : row[18]) || "";
+      if(h==="Crew") return (headerMap[h] !== undefined ? row[headerMap[h]] : row[22]) || "";
+      const idx = headerMap[h]; 
+      return idx!==undefined ? row[idx]||"" : "";
+    }))
+    .map(row => {
+      if (!row[flightIdx] && isFlightNumber(row[activityIdx])) row[flightIdx] = row[activityIdx];
+      return row;
+    })
+    .filter(isRosterDataRow);
+
+  // ------------------- CSV/JSON 저장 전 중복 제거 (기존 Map 로직 유지) -------------------
+  console.log("🚀 CSV/JSON 저장 전 중복 제거");
   const normalizeDate = (raw) => convertDate(raw) || (raw || "").replace(/[.\s]/g, "");
 
   const mapByKey = new Map();
