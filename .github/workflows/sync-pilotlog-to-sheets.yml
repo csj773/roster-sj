@@ -179,6 +179,27 @@ jobs:
             return Number.isNaN(parsed) ? 0 : parsed;
           }
 
+          function timestampMillis(value) {
+            if (!value) return 0;
+            if (typeof value.toDate === "function") return value.toDate().getTime();
+            if (value instanceof Date) return value.getTime();
+            const parsed = new Date(value).getTime();
+            return Number.isNaN(parsed) ? 0 : parsed;
+          }
+
+          function writeSortValue(data) {
+            return Math.max(
+              timestampMillis(data.updatedAt),
+              timestampMillis(data.UpdatedAt),
+              timestampMillis(data.updateTime),
+              timestampMillis(data.createdAt),
+              timestampMillis(data.CreatedAt),
+              timestampMillis(data.createTime),
+              data.__updateMillis || 0,
+              data.__createMillis || 0
+            );
+          }
+
           function buildKeyFromRow(headers, row) {
             const valueAt = (name, predicate = () => true) => {
               const index = headers.findIndex((header, headerIndex) => String(header).trim() === name && predicate(headerIndex));
@@ -261,34 +282,49 @@ jobs:
           }
 
           function buildFirestoreRowsByKey(headers, docs) {
-            const seenKeys = new Set();
             const rowsByKey = new Map();
+            let duplicateFirestoreRows = 0;
 
             docs
-              .map((doc) => ({ docId: doc.id, generatedId: randomUUID().replace(/-/g, "").slice(0, 8), ...doc.data() }))
+              .map((doc) => ({
+                docId: doc.id,
+                generatedId: randomUUID().replace(/-/g, "").slice(0, 8),
+                __createMillis: doc.createTime?.toDate?.().getTime?.() || 0,
+                __updateMillis: doc.updateTime?.toDate?.().getTime?.() || 0,
+                ...doc.data(),
+              }))
               .sort((a, b) => sortValue(a) - sortValue(b))
               .forEach((data) => {
                 const key = buildKeyFromData(data);
-                if (!key || key === "||||" || seenKeys.has(key)) return;
-                seenKeys.add(key);
+                if (!key || key === "||||") return;
+                const existing = rowsByKey.get(key);
+                if (existing) {
+                  duplicateFirestoreRows += 1;
+                  if (writeSortValue(existing.data) > writeSortValue(data)) return;
+                }
                 rowsByKey.set(key, { data });
               });
 
-            return rowsByKey;
+            return { rowsByKey, duplicateFirestoreRows };
           }
 
           function buildExistingRowsByKey(headers, rows) {
             const rowsByKey = new Map();
+            let duplicateSheetRows = 0;
             for (const row of rows) {
               const key = buildKeyFromRow(headers, row);
-              if (!key || key === "||||" || rowsByKey.has(key)) continue;
+              if (!key || key === "||||") continue;
+              if (rowsByKey.has(key)) {
+                duplicateSheetRows += 1;
+                continue;
+              }
               rowsByKey.set(key, row);
             }
-            return rowsByKey;
+            return { rowsByKey, duplicateSheetRows };
           }
 
           function mergeSheetRows(headers, existingRows, firestoreRowsByKey) {
-            const existingRowsByKey = buildExistingRowsByKey(headers, existingRows);
+            const { rowsByKey: existingRowsByKey, duplicateSheetRows } = buildExistingRowsByKey(headers, existingRows);
             const finalRows = [];
             let created = 0;
             let updated = 0;
@@ -312,7 +348,7 @@ jobs:
 
             const deleted = [...existingRowsByKey.keys()].filter((key) => !firestoreRowsByKey.has(key)).length;
 
-            return { finalRows, created, updated, deleted, unchanged, existingCount: existingRowsByKey.size };
+            return { finalRows, created, updated, deleted, unchanged, existingCount: existingRowsByKey.size, duplicateSheetRows };
           }
 
           async function main() {
@@ -357,8 +393,8 @@ jobs:
             }
 
             const existingDataRows = existingRows.slice(2);
-            const firestoreRowsByKey = buildFirestoreRowsByKey(headers, snapshot.docs);
-            const { finalRows, created, updated, deleted, unchanged, existingCount } = mergeSheetRows(
+            const { rowsByKey: firestoreRowsByKey, duplicateFirestoreRows } = buildFirestoreRowsByKey(headers, snapshot.docs);
+            const { finalRows, created, updated, deleted, unchanged, existingCount, duplicateSheetRows } = mergeSheetRows(
               headers,
               existingDataRows,
               firestoreRowsByKey
@@ -386,6 +422,8 @@ jobs:
                 `updated=${updated}`,
                 `deleted=${deleted}`,
                 `unchanged=${unchanged}`,
+                `duplicate firestore rows removed=${duplicateFirestoreRows}`,
+                `duplicate sheet rows removed=${duplicateSheetRows}`,
                 `final rows=${finalRows.length}`,
                 `target=${spreadsheetId}/${sheetName}`,
               ].join("; ")
