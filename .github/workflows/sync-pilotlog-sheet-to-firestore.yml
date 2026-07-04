@@ -80,7 +80,7 @@ jobs:
             { header: "REG", field: "REG" },
             { header: "DC", field: "DC" },
             { header: "BLK", field: "BLK" },
-            { header: "NT", fallbackHeaders: ["NGT"], field: "NGT" },
+            { header: "NT", fallbackHeaders: ["NGT"], field: "NT" },
             { header: "INS", field: "INS" },
             { header: "PIC", field: "PIC" },
             { header: "이륙", field: "TKO", type: "integer" },
@@ -401,7 +401,7 @@ jobs:
               batch.update(doc.ref, {
                 ...update,
                 sheetSyncUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                sheetSyncSource: `${sheetName} ${targetRangeLabel()} REG,DC,BLK,NGT,INS,PIC,이륙,착륙`,
+                sheetSyncSource: `${sheetName} ${targetRangeLabel()} REG,DC,BLK,NT,INS,PIC,이륙,착륙`,
               });
               batchWrites += 1;
               updatedDocRefs.push(doc.ref);
@@ -419,7 +419,7 @@ jobs:
                 REG: data.REG ?? "",
                 DC: data.DC ?? "",
                 BLK: data.BLK ?? "",
-                NGT: data.NGT ?? "",
+                NT: data.NT ?? "",
                 INS: data.INS ?? "",
                 TKO: data.TKO ?? "",
                 LDG: data.LDG ?? "",
