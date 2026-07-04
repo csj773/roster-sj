@@ -1,0 +1,235 @@
+name: Test Sync PILOTLOG flt_log to Firestore
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: "flt_log DATE to sync"
+        required: true
+        default: "2023.4.29"
+      dry_run:
+        description: "true = check only, false = update Firestore"
+        required: true
+        default: "true"
+
+jobs:
+  sync-sheet-to-firestore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install sync dependencies
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "true"
+        run: npm install --no-audit --no-fund
+
+      - name: Update Firestore from PILOTLOG flt_log test date
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+          PILOTLOG_SPREADSHEET_ID: ${{ secrets.PILOTLOG_SPREADSHEET_ID || '1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc' }}
+          PILOTLOG_SHEET_NAME: flt_log
+          PILOTLOG_COLLECTION: Pilotlog
+          PILOTLOG_EMAIL: sjchoi787@gmail.com
+          TARGET_DATE: ${{ inputs.target_date }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          node --input-type=module <<'NODE'
+          import admin from "firebase-admin";
+          import { google } from "googleapis";
+
+          const spreadsheetId = process.env.PILOTLOG_SPREADSHEET_ID;
+          const sheetName = process.env.PILOTLOG_SHEET_NAME || "flt_log";
+          const collectionName = process.env.PILOTLOG_COLLECTION || "Pilotlog";
+          const email = process.env.PILOTLOG_EMAIL || "sjchoi787@gmail.com";
+          const targetDate = process.env.TARGET_DATE || "2023.4.29";
+          const dryRun = String(process.env.DRY_RUN || "true").toLowerCase() !== "false";
+
+          const columnUpdates = [
+            { column: "G", fields: ["REG", "Reg", "A/C ID", "AcReg"] },
+            { column: "H", fields: ["DC", "A/C Type"] },
+            { column: "K", fields: ["BLK", "BLH", "BH", "Blockhours"] },
+            { column: "O", fields: ["NGT", "NT"] },
+            { column: "Q", fields: ["이륙", "TKO", "TakeOff"] },
+            { column: "R", fields: ["착륙", "LDG", "Landing"] },
+            { column: "U", fields: ["PIC", "PIC_com"] },
+          ];
+
+          function requiredJsonEnv(name) {
+            const raw = process.env[name];
+            if (!raw) throw new Error(`${name} secret is required`);
+            const parsed = JSON.parse(raw);
+            if (parsed.private_key) parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
+            return parsed;
+          }
+
+          function normalizeFirestoreValue(value) {
+            if (value == null) return "";
+            if (typeof value.toDate === "function") return value.toDate();
+            if (value instanceof Date) return value;
+            return value;
+          }
+
+          function parseDateLike(value) {
+            const normalized = normalizeFirestoreValue(value);
+            if (!normalized) return null;
+            if (normalized instanceof Date) return normalized;
+            if (typeof normalized === "number") return new Date(Math.round((normalized - 25569) * 86400 * 1000));
+            const nums = String(normalized).match(/\d+/g)?.map(Number) || [];
+            if (nums.length >= 3) return new Date(Date.UTC(nums[0], nums[1] - 1, nums[2]));
+            const parsed = new Date(normalized);
+            return Number.isNaN(parsed.getTime()) ? null : parsed;
+          }
+
+          function normalizeDateKey(value) {
+            const date = parseDateLike(value);
+            if (!date) return String(value || "").replace(/\s+/g, "").replace(/\.$/, "");
+            return `${date.getUTCFullYear()}.${date.getUTCMonth() + 1}.${date.getUTCDate()}`;
+          }
+
+          function valueByKeys(data, keys) {
+            for (const key of keys) {
+              if (data[key] != null && data[key] !== "") return data[key];
+            }
+            return "";
+          }
+
+          function normalizeFlightNumber(value) {
+            return String(value || "").trim().replace(/^YP/i, "");
+          }
+
+          function normalizeKeyPart(value) {
+            return String(normalizeFirestoreValue(value) || "").trim().toUpperCase();
+          }
+
+          function flightKey(parts) {
+            return [
+              normalizeDateKey(parts.date),
+              normalizeFlightNumber(parts.flt),
+              normalizeKeyPart(parts.from),
+              normalizeKeyPart(parts.to),
+            ].join("|");
+          }
+
+          function cellByColumn(row, letter) {
+            const index = letter.charCodeAt(0) - "A".charCodeAt(0);
+            return row[index] ?? "";
+          }
+
+          function fieldToUpdate(data, candidates) {
+            return candidates.find((field) => Object.prototype.hasOwnProperty.call(data, field)) || candidates[0];
+          }
+
+          function buildUpdateForDoc(data, row) {
+            const update = {};
+            for (const { column, fields } of columnUpdates) {
+              update[fieldToUpdate(data, fields)] = cellByColumn(row, column);
+            }
+            return update;
+          }
+
+          function buildSheetRows(rows) {
+            return rows
+              .slice(2)
+              .filter((row) => normalizeDateKey(row[2]) === normalizeDateKey(targetDate))
+              .map((row) => {
+                return {
+                  key: flightKey({ date: row[2], flt: row[3], from: row[4], to: row[5] }),
+                  row,
+                };
+              })
+              .filter((item) => item.key && item.key !== "|||");
+          }
+
+          function writeSortValue(doc) {
+            const data = doc.data();
+            const updated = data.updatedAt || data.UpdatedAt || data.updateTime;
+            if (updated?.toDate) return updated.toDate().getTime();
+            if (doc.updateTime?.toDate) return doc.updateTime.toDate().getTime();
+            return 0;
+          }
+
+          if (!admin.apps.length) {
+            admin.initializeApp({
+              credential: admin.credential.cert(requiredJsonEnv("FIREBASE_SERVICE_ACCOUNT")),
+            });
+          }
+
+          const auth = new google.auth.GoogleAuth({
+            credentials: requiredJsonEnv("GOOGLE_SHEETS_CREDENTIALS"),
+            scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+          });
+
+          const sheets = google.sheets({ version: "v4", auth });
+          const db = admin.firestore();
+
+          const sheetResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: `${sheetName}!A1:AZ20000`,
+            valueRenderOption: "FORMATTED_VALUE",
+          });
+          const sheetRows = buildSheetRows(sheetResponse.data.values || []);
+          if (!sheetRows.length) throw new Error(`No flt_log rows found for ${targetDate}`);
+
+          const firestoreSnapshot = await db.collection(collectionName).where("Email", "==", email).get();
+          const docsByKey = new Map();
+          let duplicateFirestoreDocs = 0;
+          for (const doc of firestoreSnapshot.docs) {
+            const data = doc.data();
+            if (normalizeDateKey(valueByKeys(data, ["Date", "DATE", "date", "flightDate"])) !== normalizeDateKey(targetDate)) continue;
+            const key = flightKey({
+              date: valueByKeys(data, ["Date", "DATE", "date", "flightDate"]),
+              flt: valueByKeys(data, ["FLT", "F", "Activity", "flightNo"]),
+              from: valueByKeys(data, ["FROM", "From", "from"]),
+              to: valueByKeys(data, ["TO", "To", "to"]),
+            });
+            const existing = docsByKey.get(key);
+            if (existing) {
+              duplicateFirestoreDocs += 1;
+              if (writeSortValue(existing) > writeSortValue(doc)) continue;
+            }
+            docsByKey.set(key, doc);
+          }
+
+          let matched = 0;
+          let missing = 0;
+          const batch = db.batch();
+          for (const sheetRow of sheetRows) {
+            const doc = docsByKey.get(sheetRow.key);
+            if (!doc) {
+              missing += 1;
+              console.log(`Missing Firestore doc for ${sheetRow.key}`);
+              continue;
+            }
+            matched += 1;
+            const update = buildUpdateForDoc(doc.data(), sheetRow.row);
+            console.log(`${dryRun ? "Would update" : "Updating"} ${doc.id} ${sheetRow.key}`, update);
+            if (!dryRun) {
+              batch.update(doc.ref, {
+                ...update,
+                sheetSyncUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                sheetSyncSource: `${sheetName} ${targetDate} G,H,K,O,Q,R,U`,
+              });
+            }
+          }
+
+          if (!dryRun && matched > 0) await batch.commit();
+
+          console.log(
+            [
+              `target_date=${targetDate}`,
+              `dry_run=${dryRun}`,
+              `sheet_rows=${sheetRows.length}`,
+              `matched_docs=${matched}`,
+              `missing_docs=${missing}`,
+              `duplicate_firestore_docs=${duplicateFirestoreDocs}`,
+            ].join("; ")
+          );
+          NODE
