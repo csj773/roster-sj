@@ -1,0 +1,124 @@
+name: Show Pilotlog Firestore Date
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: "Pilotlog date to show"
+        required: true
+        default: "2023.4.29"
+
+jobs:
+  show-pilotlog-firestore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install dependencies
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "true"
+        run: npm install --no-audit --no-fund
+
+      - name: Show Firestore Pilotlog data
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          PILOTLOG_COLLECTION: Pilotlog
+          PILOTLOG_EMAIL: sjchoi787@gmail.com
+          TARGET_DATE: ${{ inputs.target_date }}
+        run: |
+          node --input-type=module <<'NODE'
+          import admin from "firebase-admin";
+
+          const collectionName = process.env.PILOTLOG_COLLECTION || "Pilotlog";
+          const email = process.env.PILOTLOG_EMAIL || "sjchoi787@gmail.com";
+          const targetDate = process.env.TARGET_DATE || "2023.4.29";
+
+          function requiredJsonEnv(name) {
+            const raw = process.env[name];
+            if (!raw) throw new Error(`${name} secret is required`);
+            const parsed = JSON.parse(raw);
+            if (parsed.private_key) parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
+            return parsed;
+          }
+
+          function normalizeFirestoreValue(value) {
+            if (value == null) return "";
+            if (typeof value.toDate === "function") return value.toDate();
+            if (value instanceof Date) return value;
+            return value;
+          }
+
+          function parseDateLike(value) {
+            const normalized = normalizeFirestoreValue(value);
+            if (!normalized) return null;
+            if (normalized instanceof Date) return normalized;
+            if (typeof normalized === "number") return new Date(Math.round((normalized - 25569) * 86400 * 1000));
+            const nums = String(normalized).match(/\d+/g)?.map(Number) || [];
+            if (nums.length >= 3) return new Date(Date.UTC(nums[0], nums[1] - 1, nums[2]));
+            const parsed = new Date(normalized);
+            return Number.isNaN(parsed.getTime()) ? null : parsed;
+          }
+
+          function normalizeDateKey(value) {
+            const date = parseDateLike(value);
+            if (!date) return String(value || "").replace(/\s+/g, "").replace(/\.$/, "");
+            return `${date.getUTCFullYear()}.${date.getUTCMonth() + 1}.${date.getUTCDate()}`;
+          }
+
+          function serialize(value) {
+            if (value == null) return value;
+            if (typeof value.toDate === "function") return value.toDate().toISOString();
+            if (value instanceof Date) return value.toISOString();
+            if (Array.isArray(value)) return value.map(serialize);
+            if (typeof value === "object") {
+              return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, serialize(item)]));
+            }
+            return value;
+          }
+
+          function valueByKeys(data, keys) {
+            for (const key of keys) {
+              if (data[key] != null && data[key] !== "") return data[key];
+            }
+            return "";
+          }
+
+          if (!admin.apps.length) {
+            admin.initializeApp({
+              credential: admin.credential.cert(requiredJsonEnv("FIREBASE_SERVICE_ACCOUNT")),
+            });
+          }
+
+          const db = admin.firestore();
+          const snapshot = await db.collection(collectionName).where("Email", "==", email).get();
+          const rows = [];
+          for (const doc of snapshot.docs) {
+            const data = doc.data();
+            const dateValue = valueByKeys(data, ["Date", "DATE", "date", "flightDate"]);
+            if (normalizeDateKey(dateValue) !== normalizeDateKey(targetDate)) continue;
+            rows.push({
+              id: doc.id,
+              createTime: doc.createTime?.toDate?.().toISOString?.() || "",
+              updateTime: doc.updateTime?.toDate?.().toISOString?.() || "",
+              data: serialize(data),
+            });
+          }
+
+          rows.sort((a, b) => {
+            const fltA = String(a.data.FLT || a.data.F || a.data.Activity || "");
+            const fltB = String(b.data.FLT || b.data.F || b.data.Activity || "");
+            return fltA.localeCompare(fltB);
+          });
+
+          console.log(`target_date=${targetDate}`);
+          console.log(`email=${email}`);
+          console.log(`matched_docs=${rows.length}`);
+          console.log(JSON.stringify(rows, null, 2));
+          NODE
