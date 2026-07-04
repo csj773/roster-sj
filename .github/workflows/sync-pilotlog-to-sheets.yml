@@ -191,7 +191,6 @@ jobs:
               normalizeKeyPart(valueAt("FROM")),
               normalizeKeyPart(valueAt("TO", (index) => index <= 5)),
               normalizeKeyPart(valueAt("REG")),
-              normalizeKeyPart(valueAt("BLK")),
             ].join("|");
           }
 
@@ -202,7 +201,6 @@ jobs:
               normalizeKeyPart(valueByKeys(data, ["FROM", "From", "from"])),
               normalizeKeyPart(valueByKeys(data, ["TO", "To", "to"])),
               normalizeKeyPart(valueByKeys(data, ["REG", "Reg", "A/C ID", "AcReg"])),
-              normalizeKeyPart(valueByKeys(data, ["BLK", "BLH", "BH", "Blockhours"])),
             ].join("|");
           }
 
@@ -249,19 +247,72 @@ jobs:
             return valueByKeys(data, [name]);
           }
 
-          function buildFirestoreRows(headers, docs) {
-            const seenKeys = new Set();
+          function rowFingerprint(row) {
+            return row.map((value) => String(value ?? "").trim()).join("\u001f");
+          }
 
-            return docs
+          function existingIdForRow(headers, row) {
+            const idIndex = headers.findIndex((header) => String(header).trim().toUpperCase() === "ID");
+            return idIndex >= 0 ? String(row[idIndex] || "").trim() : "";
+          }
+
+          function buildRowFromData(headers, data, generatedId) {
+            return headers.map((header, index) => normalizeCell(valueForHeader(header, index, { ...data, generatedId })));
+          }
+
+          function buildFirestoreRowsByKey(headers, docs) {
+            const seenKeys = new Set();
+            const rowsByKey = new Map();
+
+            docs
               .map((doc) => ({ docId: doc.id, generatedId: randomUUID().replace(/-/g, "").slice(0, 8), ...doc.data() }))
               .sort((a, b) => sortValue(a) - sortValue(b))
-              .filter((data) => {
+              .forEach((data) => {
                 const key = buildKeyFromData(data);
-                if (seenKeys.has(key)) return false;
+                if (!key || key === "||||" || seenKeys.has(key)) return;
                 seenKeys.add(key);
-                return true;
-              })
-              .map((data) => headers.map((header, index) => normalizeCell(valueForHeader(header, index, data))));
+                rowsByKey.set(key, { data });
+              });
+
+            return rowsByKey;
+          }
+
+          function buildExistingRowsByKey(headers, rows) {
+            const rowsByKey = new Map();
+            for (const row of rows) {
+              const key = buildKeyFromRow(headers, row);
+              if (!key || key === "||||" || rowsByKey.has(key)) continue;
+              rowsByKey.set(key, row);
+            }
+            return rowsByKey;
+          }
+
+          function mergeSheetRows(headers, existingRows, firestoreRowsByKey) {
+            const existingRowsByKey = buildExistingRowsByKey(headers, existingRows);
+            const finalRows = [];
+            let created = 0;
+            let updated = 0;
+            let unchanged = 0;
+
+            for (const [key, firestoreRow] of firestoreRowsByKey.entries()) {
+              const existingRow = existingRowsByKey.get(key);
+
+              const existingId = existingRow ? existingIdForRow(headers, existingRow) : "";
+              const nextRow = buildRowFromData(headers, firestoreRow.data, existingId || firestoreRow.data.generatedId);
+              finalRows.push(nextRow);
+
+              if (!existingRow) {
+                created += 1;
+              } else if (rowFingerprint(existingRow) === rowFingerprint(nextRow)) {
+                unchanged += 1;
+              } else {
+                updated += 1;
+              }
+            }
+
+            const deleted = [...existingRowsByKey.keys()].filter((key) => !firestoreRowsByKey.has(key)).length;
+
+            return { finalRows, created, updated, deleted, unchanged, existingCount: existingRowsByKey.size };
           }
 
           async function main() {
@@ -305,24 +356,39 @@ jobs:
               throw new Error(`${sheetName} header row is empty`);
             }
 
-            const rowsToWrite = buildFirestoreRows(headers, snapshot.docs);
+            const existingDataRows = existingRows.slice(2);
+            const firestoreRowsByKey = buildFirestoreRowsByKey(headers, snapshot.docs);
+            const { finalRows, created, updated, deleted, unchanged, existingCount } = mergeSheetRows(
+              headers,
+              existingDataRows,
+              firestoreRowsByKey
+            );
 
             await sheets.spreadsheets.values.clear({
               spreadsheetId,
               range: `${sheetName}!A3:AZ20000`,
             });
 
-            if (rowsToWrite.length > 0) {
+            if (finalRows.length > 0) {
               await sheets.spreadsheets.values.update({
                 spreadsheetId,
                 range: `${sheetName}!A3`,
                 valueInputOption: "USER_ENTERED",
-                requestBody: { values: rowsToWrite },
+                requestBody: { values: finalRows },
               });
             }
 
             console.log(
-              `Checked ${snapshot.size} ${collectionName} document(s) for ${email}; cleared row 3 down and wrote ${rowsToWrite.length} Firestore row(s) to ${spreadsheetId}/${sheetName}`
+              [
+                `Checked ${snapshot.size} ${collectionName} document(s) for ${email}`,
+                `sheet existing rows=${existingCount}`,
+                `created=${created}`,
+                `updated=${updated}`,
+                `deleted=${deleted}`,
+                `unchanged=${unchanged}`,
+                `final rows=${finalRows.length}`,
+                `target=${spreadsheetId}/${sheetName}`,
+              ].join("; ")
             );
           }
 
