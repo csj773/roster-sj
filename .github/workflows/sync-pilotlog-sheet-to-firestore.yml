@@ -53,6 +53,7 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import admin from "firebase-admin";
+          import fs from "node:fs";
           import { google } from "googleapis";
 
           const spreadsheetId = process.env.PILOTLOG_SPREADSHEET_ID;
@@ -62,6 +63,9 @@ jobs:
           const targetDate = process.env.TARGET_DATE || "2023.4.29";
           const targetFlt = String(process.env.TARGET_FLT || "").trim();
           const dryRun = String(process.env.DRY_RUN || "false").toLowerCase() === "true";
+          const seedRows = fs.existsSync("work/seed/log_filled_seed.json")
+            ? JSON.parse(fs.readFileSync("work/seed/log_filled_seed.json", "utf8"))
+            : [];
 
           const columnUpdates = [
             { column: "G", field: "REG" },
@@ -141,10 +145,33 @@ jobs:
             return row[index] ?? "";
           }
 
+          function dateDistanceDays(left, right) {
+            const leftDate = parseDateLike(left);
+            const rightDate = parseDateLike(right);
+            if (!leftDate || !rightDate) return Number.MAX_SAFE_INTEGER;
+            return Math.abs(leftDate.getTime() - rightDate.getTime()) / 86400000;
+          }
+
+          function seedForSheetRow(row) {
+            const flt = normalizeFlightNumber(row[3]);
+            const from = normalizeKeyPart(row[4]);
+            const to = normalizeKeyPart(row[5]);
+            const candidates = seedRows
+              .filter((seed) =>
+                normalizeFlightNumber(seed.FLT) === flt &&
+                normalizeKeyPart(seed.FROM) === from &&
+                normalizeKeyPart(seed.TO) === to
+              )
+              .sort((a, b) => dateDistanceDays(a.DATE, row[2]) - dateDistanceDays(b.DATE, row[2]));
+            return candidates[0] || {};
+          }
+
           function buildUpdateForDoc(data, row) {
             const update = {};
+            const seed = seedForSheetRow(row);
             for (const { column, field } of columnUpdates) {
-              update[field] = cellByColumn(row, column);
+              const sheetValue = cellByColumn(row, column);
+              update[field] = sheetValue === "" || sheetValue == null ? seed[field] || "" : sheetValue;
             }
             return update;
           }
