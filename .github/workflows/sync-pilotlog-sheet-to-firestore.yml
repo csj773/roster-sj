@@ -79,10 +79,10 @@ jobs:
           const columnUpdates = [
             { header: "REG", field: "REG", type: "string" },
             { header: "DC", field: "DC", type: "string" },
-            { header: "BLK", field: "BLK", type: "durationNumber" },
-            { header: "NGT", field: "NGT", type: "durationNumber" },
-            { header: "INS", field: "INS", type: "durationNumber" },
-            { header: "PIC", field: "PIC", type: "durationNumber" },
+            { header: "BLK", field: "BLK", type: "durationText" },
+            { header: "NGT", field: "NGT", type: "durationText" },
+            { header: "INS", field: "INS", type: "durationText" },
+            { header: "PIC", field: "PIC", type: "durationText" },
             { header: "이륙", field: "TKO", type: "integer" },
             { header: "착륙", field: "LDG", type: "integer" },
           ];
@@ -213,18 +213,27 @@ jobs:
             return Number.isNaN(parsed) ? 0 : parsed;
           }
 
-          function normalizeDurationNumber(value) {
-            if (value == null || value === "") return 0;
-            if (typeof value === "number") return value;
+          function normalizeDurationText(value) {
+            if (value == null || value === "") return "0:00";
+            if (typeof value === "number") {
+              const totalMinutes = Math.round(value * 1440);
+              const hours = Math.trunc(totalMinutes / 60);
+              const minutes = Math.abs(totalMinutes % 60);
+              return `${hours}:${String(minutes).padStart(2, "0")}`;
+            }
             const text = String(value).trim();
             const match = text.match(/^(-?\d+):(\d{1,2})$/);
             if (match) {
               const hours = Number.parseInt(match[1], 10);
               const minutes = Number.parseInt(match[2], 10);
-              return (hours * 60 + minutes) / 1440;
+              return `${hours}:${String(minutes).padStart(2, "0")}`;
             }
             const parsed = Number.parseFloat(text.replace(/,/g, ""));
-            return Number.isNaN(parsed) ? 0 : parsed;
+            if (Number.isNaN(parsed)) return "0:00";
+            const totalMinutes = Math.round(parsed * 1440);
+            const hours = Math.trunc(totalMinutes / 60);
+            const minutes = Math.abs(totalMinutes % 60);
+            return `${hours}:${String(minutes).padStart(2, "0")}`;
           }
 
           function normalizeStringValue(value) {
@@ -250,8 +259,8 @@ jobs:
                 : sheetValue;
               if (type === "integer") {
                 update[field] = normalizeIntegerValue(rawValue);
-              } else if (type === "durationNumber") {
-                update[field] = normalizeDurationNumber(rawValue);
+              } else if (type === "durationText") {
+                update[field] = normalizeDurationText(rawValue);
               } else if (type === "string") {
                 update[field] = normalizeStringValue(rawValue);
               } else {
