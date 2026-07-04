@@ -1,0 +1,102 @@
+name: Update Pilot Logbook From PILOTLOG
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 15 */10 * *"
+
+permissions:
+  contents: read
+
+jobs:
+  update-logbook:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      LOGBOOK_ROOT: ${{ github.workspace }}
+      TZ: Asia/Seoul
+      AUTHORITATIVE_SPREADSHEET_ID: 1tRvMJQeoqpGvekJ3xzs_Z80e9QnXoGsIEdIuchY7Wqw
+      PILOTLOG_SPREADSHEET_ID: 1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc
+      LOGBOOK_SHEET_NAME: flt_log
+      LOGBOOK_START_DATE: "2023-04-28"
+      LOGBOOK_MIN_FLIGHTS: "296"
+      LOGBOOK_EMAIL_TO: sjchoi787@gmail.com
+      GOOGLE_SERVICE_ACCOUNT_JSON_B64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON_B64 }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON || secrets.GOOGLE_SHEETS_CREDENTIALS }}
+      GMAIL_USERNAME: ${{ secrets.GMAIL_USERNAME }}
+      GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install system render dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y poppler-utils
+
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Run logbook automation
+        run: |
+          set -o pipefail
+          mkdir -p work outputs
+          python work/github_automation.py --skip-email 2>&1 | tee work/automation.log
+
+      - name: Verify generated deliverables
+        run: |
+          find outputs work -maxdepth 1 -type f -print | sort | tee work/generated-files.txt
+          test -s "outputs/log filled.xlsx"
+          test -s "outputs/ICAO_EASA_A4_landscape_logbook.pdf"
+          test -s "outputs/A5_booklet_A4_portrait_duplex.pdf"
+
+      - name: Upload generated deliverables
+        uses: actions/upload-artifact@v6
+        if: ${{ hashFiles('outputs/log filled.xlsx') != '' && hashFiles('outputs/ICAO_EASA_A4_landscape_logbook.pdf') != '' && hashFiles('outputs/A5_booklet_A4_portrait_duplex.pdf') != '' }}
+        with:
+          name: pilot-logbook-deliverables
+          path: |
+            outputs/log filled.xlsx
+            outputs/ICAO_EASA_A4_landscape_logbook.pdf
+            outputs/A5_booklet_A4_portrait_duplex.pdf
+            work/verify_*.png
+          if-no-files-found: error
+
+      - name: Send Gmail delivery
+        run: python work/github_automation.py --send-email-only
+
+      - name: Write diagnostics file list
+        if: always()
+        run: |
+          mkdir -p work
+          {
+            date -u
+            printf '\n== outputs ==\n'
+            find outputs -maxdepth 2 -type f -print 2>/dev/null || true
+            printf '\n== work ==\n'
+            find work -maxdepth 2 -type f -print 2>/dev/null || true
+          } > work/diagnostics.txt
+
+      - name: Upload diagnostics
+        uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pilot-logbook-diagnostics
+          path: |
+            work/automation.log
+            work/generated-files.txt
+            work/diagnostics.txt
+            work/github_automation_summary.json
+            work/PILOTLOG_export.xlsx
+            work/log_filled_authoritative_download.xlsx
+            work/log_filled_authoritative_synced.xlsx
+            work/pilotlog_checkpoint_rows.json
+          if-no-files-found: warn
