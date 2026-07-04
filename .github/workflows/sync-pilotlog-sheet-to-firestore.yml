@@ -80,7 +80,7 @@ jobs:
             { header: "REG", field: "REG", type: "string" },
             { header: "DC", field: "DC", type: "string" },
             { header: "BLK", field: "BLK", type: "durationNumber" },
-            { header: "NGT", fallbackHeaders: ["NT"], field: "NGT", type: "durationNumber" },
+            { header: "NGT", field: "NGT", type: "durationNumber" },
             { header: "INS", field: "INS", type: "durationNumber" },
             { header: "PIC", field: "PIC", type: "durationNumber" },
             { header: "이륙", field: "TKO", type: "integer" },
