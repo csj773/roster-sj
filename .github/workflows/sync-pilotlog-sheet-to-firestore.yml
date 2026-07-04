@@ -8,18 +8,22 @@ on:
       - ".github/workflows/sync-pilotlog-sheet-to-firestore.yml"
   workflow_dispatch:
     inputs:
-      target_date:
-        description: "flt_log DATE to sync"
+      target_start_date:
+        description: "First flt_log DATE to sync"
         required: true
-        default: "2023.4.29"
+        default: "2023.5.3"
+      target_end_date:
+        description: "Last flt_log DATE to sync"
+        required: true
+        default: "2025.3.31"
       dry_run:
         description: "true = check only, false = update Firestore"
         required: true
         default: "false"
       target_flt:
-        description: "Optional FLT to sync. Use comma for multiple flights."
-        required: true
-        default: "731,732"
+        description: "Optional FLT to sync. Empty = all flights. Use comma for multiple flights."
+        required: false
+        default: ""
 
 jobs:
   sync-sheet-to-firestore:
@@ -47,9 +51,10 @@ jobs:
           PILOTLOG_SHEET_NAME: flt_log
           PILOTLOG_COLLECTION: Pilotlog
           PILOTLOG_EMAIL: sjchoi787@gmail.com
-          TARGET_DATE: ${{ github.event.inputs.target_date || '2023.4.29' }}
+          TARGET_START_DATE: ${{ github.event.inputs.target_start_date || '2023.5.3' }}
+          TARGET_END_DATE: ${{ github.event.inputs.target_end_date || '2025.3.31' }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
-          TARGET_FLT: ${{ github.event.inputs.target_flt || '731,732' }}
+          TARGET_FLT: ${{ github.event.inputs.target_flt || '' }}
         run: |
           node --input-type=module <<'NODE'
           import admin from "firebase-admin";
@@ -60,7 +65,8 @@ jobs:
           const sheetName = process.env.PILOTLOG_SHEET_NAME || "flt_log";
           const collectionName = process.env.PILOTLOG_COLLECTION || "Pilotlog";
           const email = process.env.PILOTLOG_EMAIL || "sjchoi787@gmail.com";
-          const targetDate = process.env.TARGET_DATE || "2023.4.29";
+          const targetStartDate = process.env.TARGET_START_DATE || "2023.5.3";
+          const targetEndDate = process.env.TARGET_END_DATE || "2025.3.31";
           const targetFlts = String(process.env.TARGET_FLT || "")
             .split(",")
             .map((value) => normalizeFlightNumber(value))
@@ -110,6 +116,22 @@ jobs:
             const date = parseDateLike(value);
             if (!date) return String(value || "").replace(/\s+/g, "").replace(/\.$/, "");
             return `${date.getUTCFullYear()}.${date.getUTCMonth() + 1}.${date.getUTCDate()}`;
+          }
+
+          function dateSerial(value) {
+            const date = parseDateLike(value);
+            if (!date) return Number.NaN;
+            return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+          }
+
+          function isDateInTargetRange(value) {
+            const serial = dateSerial(value);
+            if (Number.isNaN(serial)) return false;
+            return serial >= dateSerial(targetStartDate) && serial <= dateSerial(targetEndDate);
+          }
+
+          function targetRangeLabel() {
+            return `${targetStartDate}..${targetEndDate}`;
           }
 
           function valueByKeys(data, keys) {
@@ -205,7 +227,7 @@ jobs:
           function buildSheetRows(rows) {
             return rows
               .slice(2)
-              .filter((row) => normalizeDateKey(row[2]) === normalizeDateKey(targetDate))
+              .filter((row) => isDateInTargetRange(row[2]))
               .filter((row) => shouldSyncFlight(row[3]))
               .map((row) => {
                 return {
@@ -313,7 +335,7 @@ jobs:
           const sheetValues = sheetResponse.data.values || [];
           const headers = sheetValues[0] || [];
           const sheetRows = buildSheetRows(sheetValues);
-          if (!sheetRows.length) throw new Error(`No flt_log rows found for ${targetDate}`);
+          if (!sheetRows.length) throw new Error(`No flt_log rows found for ${targetRangeLabel()}`);
 
           const firestoreSnapshot = await db.collection(collectionName).where("Email", "==", email).get();
           const docsByKey = new Map();
@@ -324,7 +346,7 @@ jobs:
             const data = doc.data();
             const date = valueByKeys(data, ["Date", "DATE", "date", "flightDate"]);
             const flt = valueByKeys(data, ["FLT", "F", "Activity", "flightNo"]);
-            if (normalizeDateKey(date) !== normalizeDateKey(targetDate)) continue;
+            if (!isDateInTargetRange(date)) continue;
             if (!shouldSyncFlight(flt)) continue;
             const key = flightKey({
               date,
@@ -352,7 +374,17 @@ jobs:
           let fallbackMatched = 0;
           let missing = 0;
           const updatedDocRefs = [];
-          const batch = db.batch();
+          let batch = db.batch();
+          let batchWrites = 0;
+
+          async function commitBatch(force = false) {
+            if (dryRun || batchWrites === 0) return;
+            if (!force && batchWrites < 450) return;
+            await batch.commit();
+            batch = db.batch();
+            batchWrites = 0;
+          }
+
           for (const sheetRow of sheetRows) {
             const doc = docsByKey.get(sheetRow.key) || docsByFallbackKey.get(sheetRow.fallbackKey);
             if (!doc) {
@@ -368,13 +400,15 @@ jobs:
               batch.update(doc.ref, {
                 ...update,
                 sheetSyncUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                sheetSyncSource: `${sheetName} ${targetDate} REG,DC,BLK,NT,PIC,이륙,착륙`,
+                sheetSyncSource: `${sheetName} ${targetRangeLabel()} REG,DC,BLK,NT,PIC,이륙,착륙`,
               });
+              batchWrites += 1;
               updatedDocRefs.push(doc.ref);
+              await commitBatch();
             }
           }
 
-          if (!dryRun && matched > 0) await batch.commit();
+          await commitBatch(true);
 
           if (!dryRun) {
             for (const ref of updatedDocRefs) {
@@ -400,7 +434,8 @@ jobs:
 
           console.log(
             [
-              `target_date=${targetDate}`,
+              `target_start_date=${targetStartDate}`,
+              `target_end_date=${targetEndDate}`,
               `target_flt=${targetFlts.length ? targetFlts.join(",") : "*"}`,
               `dry_run=${dryRun}`,
               `sheet_rows=${sheetRows.length}`,
