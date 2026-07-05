@@ -60,6 +60,13 @@ jobs:
           test -s "outputs/log filled.xlsx"
           test -s "outputs/ICAO_EASA_A4_landscape_logbook.pdf"
           test -s "outputs/A5_booklet_A4_portrait_duplex.pdf"
+          test -s "outputs/log filled V1.xlsx"
+          test -s "outputs/ICAO_EASA_A4_landscape_logbook_V1.pdf"
+          test -s "outputs/A5_booklet_A4_portrait_duplex_V1.pdf"
+          test -s "outputs/log filled V2.xlsx"
+          test -s "outputs/ICAO_EASA_A4_landscape_logbook_V2.pdf"
+          test -s "outputs/A5_booklet_A4_portrait_duplex_V2.pdf"
+          test -s "outputs/B5_print_logbook_V2.pdf"
 
       - name: Upload generated deliverables
         uses: actions/upload-artifact@v6
@@ -70,6 +77,13 @@ jobs:
             outputs/log filled.xlsx
             outputs/ICAO_EASA_A4_landscape_logbook.pdf
             outputs/A5_booklet_A4_portrait_duplex.pdf
+            outputs/log filled V1.xlsx
+            outputs/ICAO_EASA_A4_landscape_logbook_V1.pdf
+            outputs/A5_booklet_A4_portrait_duplex_V1.pdf
+            outputs/log filled V2.xlsx
+            outputs/ICAO_EASA_A4_landscape_logbook_V2.pdf
+            outputs/A5_booklet_A4_portrait_duplex_V2.pdf
+            outputs/B5_print_logbook_V2.pdf
             work/verify_*.png
           if-no-files-found: error
 

@@ -281,11 +281,14 @@ def update_authoritative_sheet(sheets: Any, synced_xlsx: Path, client_email: str
     execute_google_request(request)
 
 
-def run_python(script: str) -> str:
+def run_python(script: str, env_overrides: dict[str, str] | None = None) -> str:
+    env = {**os.environ, "LOGBOOK_ROOT": str(ROOT)}
+    if env_overrides:
+        env.update(env_overrides)
     result = subprocess.run(
         ["python", str(WORK / script)],
         cwd=str(ROOT),
-        env={**os.environ, "LOGBOOK_ROOT": str(ROOT)},
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -304,6 +307,29 @@ def parse_lines(text: str) -> dict[str, str]:
     return values
 
 
+def prefixed(values: dict[str, str], prefix: str) -> dict[str, str]:
+    return {f"{prefix}_{key}": value for key, value in values.items()}
+
+
+def logbook_attachments() -> list[Path]:
+    preferred = [
+        OUT / "log filled V1.xlsx",
+        OUT / "ICAO_EASA_A4_landscape_logbook_V1.pdf",
+        OUT / "A5_booklet_A4_portrait_duplex_V1.pdf",
+        OUT / "log filled V2.xlsx",
+        OUT / "ICAO_EASA_A4_landscape_logbook_V2.pdf",
+        OUT / "A5_booklet_A4_portrait_duplex_V2.pdf",
+        OUT / "B5_print_logbook_V2.pdf",
+    ]
+    if all(path.exists() for path in preferred[:3]):
+        return [path for path in preferred if path.exists()]
+    return [
+        OUT / "log filled.xlsx",
+        OUT / "ICAO_EASA_A4_landscape_logbook.pdf",
+        OUT / "A5_booklet_A4_portrait_duplex.pdf",
+    ]
+
+
 def send_email(summary: dict[str, str]) -> None:
     if os.environ.get("SEND_EMAIL", "true").lower() in {"0", "false", "no"}:
         print("SEND_EMAIL disabled; skipping SMTP delivery.")
@@ -312,11 +338,7 @@ def send_email(summary: dict[str, str]) -> None:
     password = require_env("GMAIL_APP_PASSWORD")
     recipient = os.environ.get("LOGBOOK_EMAIL_TO", "sjchoi787@gmail.com")
     today = os.environ.get("RUN_DATE", datetime.now().strftime("%Y-%m-%d"))[:10]
-    attachments = [
-        OUT / "log filled.xlsx",
-        OUT / "ICAO_EASA_A4_landscape_logbook.pdf",
-        OUT / "A5_booklet_A4_portrait_duplex.pdf",
-    ]
+    attachments = logbook_attachments()
     for attachment in attachments:
         if not attachment.exists():
             raise RuntimeError(f"Missing attachment: {attachment}")
@@ -333,13 +355,14 @@ def send_email(summary: dict[str, str]) -> None:
                 f"Added rows: {summary.get('SYNC_ADDED', summary.get('ADDED', 'n/a'))}",
                 f"Deleted rows: {summary.get('SYNC_DELETED', summary.get('DELETED', 'n/a'))}",
                 f"Modified rows: {summary.get('SYNC_MODIFIED', summary.get('MODIFIED', 'n/a'))}",
-                f"Final flight count: {summary.get('FINAL_FLIGHTS', 'n/a')}",
-                f"Final A4 PDF pages: {summary.get('FINAL_A4_PAGES', 'n/a')}",
-                f"Final cumulative totals: {summary.get('FINAL_TOTALS', 'n/a')}",
-                f"Formula errors: {summary.get('FORMULA_ERRORS', 'n/a')}",
+                f"V1 flight count: {summary.get('V1_FINAL_FLIGHTS', summary.get('FINAL_FLIGHTS', 'n/a'))}",
+                f"V1 cumulative totals: {summary.get('V1_FINAL_TOTALS', summary.get('FINAL_TOTALS', 'n/a'))}",
+                f"V2 flight count: {summary.get('V2_FINAL_FLIGHTS', 'n/a')}",
+                f"V2 cumulative totals: {summary.get('V2_FINAL_TOTALS', 'n/a')}",
+                f"Formula errors: V1 {summary.get('V1_FORMULA_ERRORS', summary.get('FORMULA_ERRORS', 'n/a'))}, V2 {summary.get('V2_FORMULA_ERRORS', 'n/a')}",
                 "",
-                "Attached files: log filled.xlsx, ICAO_EASA_A4_landscape_logbook.pdf, A5_booklet_A4_portrait_duplex.pdf",
-                "Print note: print the A5 booklet PDF on A4 portrait paper, duplex, short-edge flip.",
+                "Attached files: " + ", ".join(path.name for path in attachments),
+                "Print note: print the A5 booklet PDF on A4 portrait paper, duplex, short-edge flip. V2 also includes a B5 print PDF with cover.",
             ]
         )
     )
@@ -374,8 +397,37 @@ def build_logbook() -> dict[str, str]:
     sync_output = run_python("sync_authoritative_from_pilotlog.py")
     update_authoritative_sheet(sheets, WORK / "log_filled_authoritative_synced.xlsx", client_email)
     upload_checkpoint(sheets, client_email)
-    build_output = run_python("build_final_deliverables.py")
-    summary = {**parse_lines(sync_output), **parse_lines(build_output)}
+
+    v1_output = run_python("build_final_deliverables.py")
+    shutil.copy2(OUT / "log filled.xlsx", OUT / "log filled V1.xlsx")
+    shutil.copy2(OUT / "ICAO_EASA_A4_landscape_logbook.pdf", OUT / "ICAO_EASA_A4_landscape_logbook_V1.pdf")
+    shutil.copy2(OUT / "A5_booklet_A4_portrait_duplex.pdf", OUT / "A5_booklet_A4_portrait_duplex_V1.pdf")
+
+    v2_output = run_python(
+        "build_final_deliverables.py",
+        {
+            "LOGBOOK_SOURCE": "pilotlog",
+            "LOGBOOK_START_DATE": "2026-06-26",
+            "LOGBOOK_END_DATE": "",
+            "LOGBOOK_EXPECTED_FINAL_BLK": "",
+            "LOGBOOK_MIN_FLIGHTS": "0",
+            "LOGBOOK_START_BLK": "16129:03",
+            "LOGBOOK_START_NGT": "5941:52",
+            "LOGBOOK_START_IFR": "11949:36",
+            "LOGBOOK_START_TO": "1827",
+            "LOGBOOK_START_LDG": "1836",
+            "LOGBOOK_START_PIC": "7642:07",
+            "LOGBOOK_XLSX_OUT": str(OUT / "log filled V2.xlsx"),
+            "LOGBOOK_A4_OUT": str(OUT / "ICAO_EASA_A4_landscape_logbook_V2.pdf"),
+            "LOGBOOK_BOOKLET_OUT": str(OUT / "A5_booklet_A4_portrait_duplex_V2.pdf"),
+            "LOGBOOK_B5_OUT": str(OUT / "B5_print_logbook_V2.pdf"),
+        },
+    )
+    summary = {
+        **parse_lines(sync_output),
+        **prefixed(parse_lines(v1_output), "V1"),
+        **prefixed(parse_lines(v2_output), "V2"),
+    }
     SUMMARY_JSON.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"SUMMARY_JSON {SUMMARY_JSON}")
     return summary

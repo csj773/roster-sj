@@ -14,7 +14,7 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 from pypdf import PdfReader, PdfWriter, Transformation
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4, landscape, portrait
+from reportlab.lib.pagesizes import A4, B5, landscape, portrait
 from reportlab.lib.units import mm
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
@@ -26,9 +26,10 @@ WORK = ROOT / "work"
 PILOTLOG_EXPORT_XLSX = WORK / "PILOTLOG_export.xlsx"
 SYNCED_AUTHORITATIVE_XLSX = WORK / "log_filled_authoritative_synced.xlsx"
 
-XLSX_OUT = OUT / "log filled.xlsx"
-A4_OUT = OUT / "ICAO_EASA_A4_landscape_logbook.pdf"
-BOOKLET_OUT = OUT / "A5_booklet_A4_portrait_duplex.pdf"
+XLSX_OUT = Path(os.environ.get("LOGBOOK_XLSX_OUT", OUT / "log filled.xlsx"))
+A4_OUT = Path(os.environ.get("LOGBOOK_A4_OUT", OUT / "ICAO_EASA_A4_landscape_logbook.pdf"))
+BOOKLET_OUT = Path(os.environ.get("LOGBOOK_BOOKLET_OUT", OUT / "A5_booklet_A4_portrait_duplex.pdf"))
+B5_OUT = Path(os.environ["LOGBOOK_B5_OUT"]) if os.environ.get("LOGBOOK_B5_OUT") else None
 
 NAVY = colors.HexColor("#1B3A6B")
 GOLD = colors.HexColor("#B8962E")
@@ -43,6 +44,15 @@ START = {
     "to": 1726,
     "ldg": 1732,
     "pic": 6146 * 60 + 26,
+}
+
+START_ENV_KEYS = {
+    "blk": "LOGBOOK_START_BLK",
+    "ngt": "LOGBOOK_START_NGT",
+    "ifr": "LOGBOOK_START_IFR",
+    "to": "LOGBOOK_START_TO",
+    "ldg": "LOGBOOK_START_LDG",
+    "pic": "LOGBOOK_START_PIC",
 }
 
 ALL_DCS = ["2C1", "3C1", "3C2", "3CX", "4C1", "4C2", "4C3", "4CR", "2CR", "2CO", "4CX"]
@@ -152,6 +162,16 @@ def fmt_time(value: time | None) -> str:
     return "" if not isinstance(value, time) else f"{value.hour:02d}:{value.minute:02d}"
 
 
+def configured_start_totals() -> dict:
+    totals = START.copy()
+    for key, env_key in START_ENV_KEYS.items():
+        raw = os.environ.get(env_key, "").strip()
+        if not raw:
+            continue
+        totals[key] = int(raw) if key in {"to", "ldg"} else round(minutes(raw))
+    return totals
+
+
 def pdf_remarks(value: str) -> str:
     text = "" if value is None else str(value)
     return text if text.isascii() else ""
@@ -205,11 +225,19 @@ def read_pilotlog_export_flights() -> list[Flight]:
 
 
 def read_authoritative_source_flights() -> list[Flight]:
+    if os.environ.get("LOGBOOK_SOURCE", "").strip().lower() == "pilotlog":
+        return read_pilotlog_export_flights()
     if SYNCED_AUTHORITATIVE_XLSX.exists():
         return read_filled_logbook_flights(SYNCED_AUTHORITATIVE_XLSX)
     print(f"WARNING_SYNCED_AUTHORITATIVE_SOURCE_MISSING {SYNCED_AUTHORITATIVE_XLSX}")
     print(f"WARNING_FALLING_BACK_TO_PILOTLOG_EXPORT {PILOTLOG_EXPORT_XLSX}")
     return read_pilotlog_export_flights()
+
+
+def source_label() -> Path:
+    if os.environ.get("LOGBOOK_SOURCE", "").strip().lower() == "pilotlog":
+        return PILOTLOG_EXPORT_XLSX
+    return SYNCED_AUTHORITATIVE_XLSX if SYNCED_AUTHORITATIVE_XLSX.exists() else PILOTLOG_EXPORT_XLSX
 
 
 def normalize_header(value: str | None) -> str:
@@ -495,7 +523,7 @@ def page_chunks(flights: list[Flight]) -> list[list[Flight]]:
 
 
 def compute_totals(pages: list[list[Flight]]) -> list[dict]:
-    prev = START.copy()
+    prev = configured_start_totals()
     totals = []
     for page in pages:
         page_total = {
@@ -550,7 +578,7 @@ def read_authoritative_totals() -> list[dict]:
                 "pic": cumulative["pic"] - page["pic"],
             }
             if not totals:
-                previous = START.copy()
+                previous = configured_start_totals()
             totals.append({"page": page, "previous": previous, "cumulative": cumulative})
             r = page_row + 3
         r += 1
@@ -754,9 +782,9 @@ def write_a4_pdf(flights: list[Flight], totals: list[dict]) -> None:
     c.save()
 
 
-def make_slot_page(path: Path, cover: bool) -> None:
-    c = canvas.Canvas(str(path), pagesize=landscape(A4))
-    w, h = landscape(A4)
+def make_slot_page(path: Path, cover: bool, pagesize=landscape(A4)) -> None:
+    c = canvas.Canvas(str(path), pagesize=pagesize)
+    w, h = pagesize
     c.setFillColor(NAVY if cover else colors.white)
     c.rect(0, 0, w, h, stroke=0, fill=1)
     if cover:
@@ -814,6 +842,30 @@ def write_booklet() -> None:
             sheet.merge_page(PdfReader(str(overlay)).pages[0])
             writer.add_page(sheet)
     with open(BOOKLET_OUT, "wb") as fh:
+        writer.write(fh)
+
+
+def write_b5_pdf() -> None:
+    if not B5_OUT:
+        return
+    reader = PdfReader(str(A4_OUT))
+    cover_path = WORK / "b5_cover_slot.pdf"
+    make_slot_page(cover_path, True, landscape(B5))
+    cover = PdfReader(str(cover_path)).pages[0]
+    writer = PdfWriter()
+    writer.add_page(cover)
+
+    out_w, out_h = landscape(B5)
+    src_w, src_h = landscape(A4)
+    scale = min(out_w / src_w, out_h / src_h)
+    draw_w, draw_h = src_w * scale, src_h * scale
+    xoff = (out_w - draw_w) / 2
+    yoff = (out_h - draw_h) / 2
+    for page in reader.pages:
+        sheet = writer.add_blank_page(width=out_w, height=out_h)
+        sheet.merge_transformed_page(copy(page), Transformation().scale(scale).translate(xoff, yoff), expand=False)
+    B5_OUT.parent.mkdir(parents=True, exist_ok=True)
+    with open(B5_OUT, "wb") as fh:
         writer.write(fh)
 
 
@@ -885,10 +937,12 @@ def validate(flights: list[Flight], totals: list[dict]) -> dict:
                 raise RuntimeError(f"Total mismatch page {pidx + 1} {total_name}: {actual} != {expected}")
     a4_reader = PdfReader(str(A4_OUT))
     booklet_reader = PdfReader(str(BOOKLET_OUT))
+    b5_reader = PdfReader(str(B5_OUT)) if B5_OUT and B5_OUT.exists() else None
     first_text = a4_reader.pages[0].extract_text() or ""
     last_text = a4_reader.pages[-1].extract_text() or ""
     final = totals[-1]["cumulative"]
-    for expected in ["PAGE TOTAL", "PREVIOUS TOTAL", "CUMULATIVE TOTAL", "13135:59", fmt_hmm(final["blk"]), fmt_hmm(final["ngt"]), fmt_hmm(final["ifr"]), str(final["to"]), str(final["ldg"]), fmt_hmm(final["pic"])]:
+    initial = configured_start_totals()
+    for expected in ["PAGE TOTAL", "PREVIOUS TOTAL", "CUMULATIVE TOTAL", fmt_hmm(initial["blk"]), fmt_hmm(final["blk"]), fmt_hmm(final["ngt"]), fmt_hmm(final["ifr"]), str(final["to"]), str(final["ldg"]), fmt_hmm(final["pic"])]:
         if expected not in first_text + last_text:
             raise RuntimeError(f"Missing PDF text: {expected}")
     renders = [
@@ -897,10 +951,13 @@ def validate(flights: list[Flight], totals: list[dict]) -> dict:
         render_page(BOOKLET_OUT, 1, "verify_booklet"),
         render_page(BOOKLET_OUT, max(1, len(booklet_reader.pages) // 2), "verify_booklet"),
     ]
+    if b5_reader:
+        renders.append(render_page(B5_OUT, 1, "verify_b5"))
     return {
         "flight_count": len(flights),
         "a4_pages": len(a4_reader.pages),
         "booklet_pages": len(booklet_reader.pages),
+        "b5_pages": len(b5_reader.pages) if b5_reader else 0,
         "formula_count": len(formulas),
         "formula_errors": formula_errors + literal_errors,
         "final": final,
@@ -932,6 +989,7 @@ def main() -> None:
     write_xlsx(flights, totals)
     write_a4_pdf(flights, totals)
     write_booklet()
+    write_b5_pdf()
     result = validate(flights, totals)
     validate_expected_summary(result)
     final = result["final"]
@@ -941,14 +999,18 @@ def main() -> None:
     print("FINAL_FLIGHTS", result["flight_count"])
     print("FINAL_A4_PAGES", result["a4_pages"])
     print("BOOKLET_PAGES", result["booklet_pages"])
+    if result["b5_pages"]:
+        print("B5_PAGES", result["b5_pages"])
     print("FORMULA_COUNT", result["formula_count"])
     print("FORMULA_ERRORS", result["formula_errors"])
     print("FINAL_TOTALS", {k: fmt_hmm(v) if k in ["blk", "ngt", "ifr", "pic"] else v for k, v in final.items()})
     print("RENDERS", result["renders"])
-    print("SOURCE", SYNCED_AUTHORITATIVE_XLSX if SYNCED_AUTHORITATIVE_XLSX.exists() else PILOTLOG_EXPORT_XLSX)
+    print("SOURCE", source_label())
     print("XLSX", XLSX_OUT)
     print("A4", A4_OUT)
     print("BOOKLET", BOOKLET_OUT)
+    if B5_OUT:
+        print("B5", B5_OUT)
 
 
 if __name__ == "__main__":
