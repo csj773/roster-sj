@@ -289,9 +289,9 @@ def run_python(script: str) -> str:
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        check=True,
     )
     print(result.stdout)
+    result.check_returncode()
     return result.stdout
 
 
