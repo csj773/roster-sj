@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import build_final_deliverables as b
 
@@ -156,7 +157,19 @@ def main() -> None:
     checkpoint = read_checkpoint()
     current_checkpoint = checkpoint_from_flights(pilotlog_flights)
 
-    if not checkpoint:
+    rewrite_from_pilotlog = os.environ.get("PILOTLOG_REWRITE_FROM_PILOTLOG", "true").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+    }
+
+    if rewrite_from_pilotlog:
+        merged_flights = pilotlog_flights
+        added = 0
+        deleted = 0
+        modified = 0
+        print("SYNC_REWRITE_FROM_PILOTLOG true")
+    elif not checkpoint:
         merged_flights = base_flights or pilotlog_flights
         added = 0
         deleted = 0
