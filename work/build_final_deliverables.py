@@ -324,11 +324,12 @@ def infer_csv_dc(flt: str) -> str:
 
 
 def flight_identity(f: Flight) -> tuple:
-    return (f.date.date(), f.flt, f.dep, f.arr, f.reg)
+    return (f.date.date(), f.flt, f.dep, f.arr)
 
 
 def flight_fingerprint(f: Flight) -> tuple:
     return (
+        f.reg,
         f.dc,
         f.off,
         f.on,
@@ -345,6 +346,31 @@ def flight_fingerprint(f: Flight) -> tuple:
         round(f.pic_min),
         f.remarks,
     )
+
+
+def flight_data_quality(f: Flight) -> tuple:
+    return (
+        1 if f.blk_min else 0,
+        1 if f.reg else 0,
+        1 if f.off else 0,
+        1 if f.on else 0,
+        round(f.ngt_min),
+        round(f.ifr_min),
+        round(f.pic_min),
+    )
+
+
+def dedupe_flights(flights: list[Flight], label: str) -> list[Flight]:
+    deduped: dict[tuple, Flight] = {}
+    for flight in flights:
+        key = flight_identity(flight)
+        current = deduped.get(key)
+        if current is None or flight_data_quality(flight) >= flight_data_quality(current):
+            deduped[key] = flight
+    removed = len(flights) - len(deduped)
+    if removed:
+        print(f"DEDUPED_{label} {len(flights)}->{len(deduped)}")
+    return list(deduped.values())
 
 
 def read_filled_logbook_flights(path: Path) -> list[Flight]:
@@ -898,8 +924,8 @@ def validate_expected_summary(result: dict) -> None:
 def main() -> None:
     OUT.mkdir(exist_ok=True)
     WORK.mkdir(exist_ok=True)
-    previous = filter_flights_by_end_date(read_previous_output_flights())
-    flights = filter_flights_by_end_date(read_authoritative_source_flights())
+    previous = dedupe_flights(filter_flights_by_end_date(read_previous_output_flights()), "PREVIOUS")
+    flights = dedupe_flights(filter_flights_by_end_date(read_authoritative_source_flights()), "FINAL")
     added, deleted, modified = compute_changes(previous, flights)
     pages = page_chunks(flights)
     totals = compute_totals(pages)
