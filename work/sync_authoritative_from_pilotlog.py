@@ -10,8 +10,12 @@ CHECKPOINT_HEADER = ["key", "fingerprint"]
 SEED_LOGBOOK_XLSX = b.WORK / "seed" / "log_filled_seed.xlsx"
 
 
+def sync_identity(flight: b.Flight) -> tuple:
+    return (flight.date.date(), flight.flt, flight.dep, flight.arr)
+
+
 def keyed(flights: list[b.Flight]) -> dict[tuple, b.Flight]:
-    return {b.flight_identity(flight): flight for flight in flights}
+    return {sync_identity(flight): flight for flight in flights}
 
 
 def data_quality(flight: b.Flight) -> tuple:
@@ -30,11 +34,19 @@ def merge_prefer_complete(*flight_groups: list[b.Flight]) -> dict[tuple, b.Fligh
     merged: dict[tuple, b.Flight] = {}
     for flights in flight_groups:
         for flight in flights:
-            key = b.flight_identity(flight)
+            key = sync_identity(flight)
             current = merged.get(key)
             if current is None or data_quality(flight) >= data_quality(current):
                 merged[key] = flight
     return merged
+
+
+def dedupe_prefer_complete(flights: list[b.Flight], label: str) -> list[b.Flight]:
+    deduped = merge_prefer_complete(flights)
+    removed = len(flights) - len(deduped)
+    if removed:
+        print(f"SYNC_DEDUPED_{label} {len(flights)}->{len(deduped)}")
+    return list(deduped.values())
 
 
 def field_tuple(flight: b.Flight) -> tuple:
@@ -69,7 +81,17 @@ def json_value(value):
 
 
 def checkpoint_key(flight: b.Flight) -> str:
-    return json.dumps([json_value(value) for value in b.flight_identity(flight)], ensure_ascii=False, sort_keys=True)
+    return json.dumps([json_value(value) for value in sync_identity(flight)], ensure_ascii=False, sort_keys=True)
+
+
+def normalize_checkpoint_key(value: str) -> str:
+    try:
+        parts = json.loads(value)
+    except json.JSONDecodeError:
+        return value
+    if isinstance(parts, list) and len(parts) >= 5:
+        parts = parts[:4]
+    return json.dumps(parts, ensure_ascii=False, sort_keys=True)
 
 
 def checkpoint_fingerprint(flight: b.Flight) -> str:
@@ -88,7 +110,7 @@ def read_checkpoint() -> dict[str, str]:
     for row in rows:
         if len(row) < 2 or row[0] == CHECKPOINT_HEADER[0]:
             continue
-        checkpoint[str(row[0])] = str(row[1])
+        checkpoint[normalize_checkpoint_key(str(row[0]))] = str(row[1])
     return checkpoint
 
 
@@ -114,7 +136,7 @@ def read_base_flights() -> list[b.Flight]:
         print(f"SYNC_BASE_AUTHORITATIVE_FLIGHTS {len(authoritative_flights)}")
         print(f"SYNC_BASE_PREVIOUS_OUTPUT_FLIGHTS {len(previous_output_flights)}")
         print(f"SYNC_BASE_MERGED_FLIGHTS {len(merged)}")
-        return b.filter_flights_by_end_date(list(merged.values()))
+        return b.filter_flights_by_end_date(dedupe_prefer_complete(list(merged.values()), "BASE"))
     if previous_output_flights:
         print(f"SYNC_BASE_FALLBACK {b.XLSX_OUT}")
         return b.filter_flights_by_end_date(previous_output_flights)
@@ -122,8 +144,10 @@ def read_base_flights() -> list[b.Flight]:
 
 
 def main() -> None:
-    pilotlog_flights = b.filter_flights_by_end_date(b.read_pilotlog_export_flights())
-    base_flights = read_base_flights()
+    pilotlog_flights = b.filter_flights_by_end_date(
+        dedupe_prefer_complete(b.read_pilotlog_export_flights(), "PILOTLOG")
+    )
+    base_flights = dedupe_prefer_complete(read_base_flights(), "BASE_FILTERED")
     if not pilotlog_flights:
         raise SystemExit(f"No usable flights found in {b.PILOTLOG_EXPORT_XLSX}")
 
@@ -149,9 +173,7 @@ def main() -> None:
 
         merged_by_key = dict(base_by_key)
         pilotlog_by_checkpoint_key = {checkpoint_key(flight): flight for flight in pilotlog_flights}
-        base_key_by_checkpoint_key = {
-            checkpoint_key(flight): b.flight_identity(flight) for flight in base_flights
-        }
+        base_key_by_checkpoint_key = {checkpoint_key(flight): sync_identity(flight) for flight in base_flights}
 
         for key in deleted_keys | modified_keys:
             base_key = base_key_by_checkpoint_key.get(key)
@@ -161,9 +183,9 @@ def main() -> None:
         for key in added_keys | modified_keys:
             flight = pilotlog_by_checkpoint_key.get(key)
             if flight:
-                merged_by_key[b.flight_identity(flight)] = flight
+                merged_by_key[sync_identity(flight)] = flight
 
-        merged_flights = list(merged_by_key.values())
+        merged_flights = dedupe_prefer_complete(list(merged_by_key.values()), "MERGED")
         added = len(added_keys)
         deleted = len(deleted_keys)
         modified = len(modified_keys)
