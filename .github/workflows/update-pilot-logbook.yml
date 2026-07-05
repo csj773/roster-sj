@@ -16,7 +16,7 @@ jobs:
     env:
       LOGBOOK_ROOT: ${{ github.workspace }}
       TZ: Asia/Seoul
-      AUTHORITATIVE_SPREADSHEET_ID: 1tRvMJQeoqpGvekJ3xzs_Z80e9QnXoGsIEdIuchY7Wqw
+      AUTHORITATIVE_SPREADSHEET_ID: 1XfBR5SV7f2Mh3hofYWB0kGM375DsiHCs
       PILOTLOG_SPREADSHEET_ID: 1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc
       LOGBOOK_SHEET_NAME: flt_log
       LOGBOOK_START_DATE: "2023-04-28"
