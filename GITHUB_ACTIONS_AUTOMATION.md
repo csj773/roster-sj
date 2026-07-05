@@ -10,7 +10,9 @@ This directory can run the same logbook update in GitHub Actions.
 
 Share both Google Sheets with the service account email from the JSON credentials:
 
-- authoritative `log filled`: `1XfBR5SV7f2Mh3hofYWB0kGM375DsiHCs`
+- authoritative `log filled`: `1tRvMJQeoqpGvekJ3xzs_Z80e9QnXoGsIEdIuchY7Wqw`
+
+  `1XfBR5SV7f2Mh3hofYWB0kGM375DsiHCs` is an Office Excel file in Drive, not a native Google Sheets spreadsheet, so it cannot be used with this Sheets API workflow.
 - upstream `PILOTLOG`: `1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc`
 
 Use Editor access. The workflow must be able to read both spreadsheets and write the synced `flt_log` sheet back to the authoritative `log filled` file. The run log prints the service account email as `Using Google service account: ...`.
