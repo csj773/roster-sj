@@ -21,7 +21,7 @@ jobs:
       LOGBOOK_SHEET_NAME: flt_log
       LOGBOOK_START_DATE: "2023-04-29"
       LOGBOOK_END_DATE: "2026-06-25"
-      LOGBOOK_EXPECTED_FINAL_BLK: "16129:03"
+      LOGBOOK_EXPECTED_FINAL_BLK: ""  # Temporarily clear to see actual value
       PILOTLOG_REWRITE_FROM_PILOTLOG: "true"
       LOGBOOK_MIN_FLIGHTS: "288"
       LOGBOOK_EMAIL_TO: sjchoi787@gmail.com
