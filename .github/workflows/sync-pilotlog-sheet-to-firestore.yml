@@ -82,7 +82,7 @@ jobs:
             { header: "REG", field: "REG", type: "string" },
             { header: "DC", field: "DC", type: "string" },
             { header: "BLK", field: "BLK", type: "durationText" },
-            { header: "NGT", field: "NGT", type: "durationText" },
+            { header: "NGT", field: "NT", type: "durationText" },
             { header: "INS", field: "INS", type: "durationText" },
             { header: "PIC", field: "PIC", type: "durationText" },
             { header: "이륙", field: "TKO", type: "integer" },
