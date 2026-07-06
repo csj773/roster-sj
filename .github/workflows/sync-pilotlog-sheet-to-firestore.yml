@@ -76,6 +76,8 @@ jobs:
             ? JSON.parse(fs.readFileSync("work/seed/log_filled_seed.json", "utf8"))
             : [];
 
+          const RO_RI_DATETIME_START = new Date(Date.UTC(2026, 6, 1));
+
           const columnUpdates = [
             { header: "REG", field: "REG", type: "string" },
             { header: "DC", field: "DC", type: "string" },
@@ -85,6 +87,8 @@ jobs:
             { header: "PIC", field: "PIC", type: "durationText" },
             { header: "이륙", field: "TKO", type: "integer" },
             { header: "착륙", field: "LDG", type: "integer" },
+            { header: "RO", field: "RO", type: "datetime" },
+            { header: "RI", field: "RI", type: "datetime" },
           ];
 
           function requiredJsonEnv(name) {
@@ -241,6 +245,20 @@ jobs:
             return String(value).trim();
           }
 
+          function parseTimeValue(value) {
+            if (value == null || value === "") return null;
+            const text = String(value).trim();
+            const match = text.match(/^(\d{1,2}):(\d{1,2})$/);
+            return match ? { hours: Number.parseInt(match[1], 10), minutes: Number.parseInt(match[2], 10) } : null;
+          }
+
+          function combineDateAndTime(dateValue, timeValue) {
+            const date = parseDateLike(dateValue);
+            const time = parseTimeValue(timeValue);
+            if (!date || !time) return null;
+            return admin.firestore.Timestamp.fromDate(new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), time.hours, time.minutes)));
+          }
+
           function seedValueForColumn(seed, field, header, fallbackHeaders) {
             for (const key of [field, header, ...fallbackHeaders]) {
               if (seed[key] != null && seed[key] !== "") return seed[key];
@@ -251,7 +269,9 @@ jobs:
           function buildUpdateForDoc(headers, data, row) {
             const update = {};
             const seed = seedForSheetRow(row);
+            const rowDate = row[2];
             for (const { header, fallbackHeaders = [], field, type } of columnUpdates) {
+              if (type === "datetime" && dateSerial(rowDate) < RO_RI_DATETIME_START.getTime()) continue;
               const values = [header, ...fallbackHeaders].map((name) => cellByHeader(headers, row, name));
               const sheetValue = values.find((value) => value !== "" && value != null) ?? "";
               const rawValue = sheetValue === "" || sheetValue == null
@@ -263,6 +283,9 @@ jobs:
                 update[field] = normalizeDurationText(rawValue);
               } else if (type === "string") {
                 update[field] = normalizeStringValue(rawValue);
+              } else if (type === "datetime") {
+                const ts = combineDateAndTime(rowDate, rawValue);
+                if (ts) update[field] = ts;
               } else {
                 update[field] = rawValue;
               }
@@ -446,7 +469,7 @@ jobs:
               batch.update(doc.ref, {
                 ...update,
                 sheetSyncUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                sheetSyncSource: `${sheetName} ${targetRangeLabel()} REG,DC,BLK,NGT,INS,PIC,이륙,착륙`,
+                sheetSyncSource: `${sheetName} ${targetRangeLabel()} REG,DC,BLK,NGT,INS,PIC,이륙,착륙,RO,RI`,
               });
               batchWrites += 1;
               updatedDocRefs.push(doc.ref);
@@ -469,6 +492,8 @@ jobs:
                 TKO: data.TKO ?? "",
                 LDG: data.LDG ?? "",
                 PIC: data.PIC ?? "",
+                RO: data.RO ?? "",
+                RI: data.RI ?? "",
               });
               const differences = compareWithOtherDocs(snap.id, data, firestoreSnapshot.docs);
               if (differences.length) {
