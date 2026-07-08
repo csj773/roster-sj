@@ -76,8 +76,6 @@ jobs:
             ? JSON.parse(fs.readFileSync("work/seed/log_filled_seed.json", "utf8"))
             : [];
 
-          const RO_RI_DATETIME_START = new Date(Date.UTC(2026, 6, 1));
-
           const columnUpdates = [
             { header: "REG", field: "REG", type: "string" },
             { header: "DC", field: "DC", type: "string" },
@@ -247,8 +245,15 @@ jobs:
 
           function parseTimeValue(value) {
             if (value == null || value === "") return null;
+            if (value instanceof Date) return { hours: value.getUTCHours(), minutes: value.getUTCMinutes() };
+            if (typeof value === "number") {
+              const totalMinutes = Math.round((value % 1) * 1440);
+              return { hours: Math.trunc(totalMinutes / 60) % 24, minutes: totalMinutes % 60 };
+            }
             const text = String(value).trim();
-            const match = text.match(/^(\d{1,2}):(\d{1,2})$/);
+            const isoDate = parseDateLike(text);
+            if (isoDate && /T/.test(text)) return { hours: isoDate.getUTCHours(), minutes: isoDate.getUTCMinutes() };
+            const match = text.match(/^(\d{1,2}):(\d{1,2})(?::\d{1,2})?$/);
             return match ? { hours: Number.parseInt(match[1], 10), minutes: Number.parseInt(match[2], 10) } : null;
           }
 
@@ -271,7 +276,6 @@ jobs:
             const seed = seedForSheetRow(row);
             const rowDate = row[2];
             for (const { header, fallbackHeaders = [], field, type } of columnUpdates) {
-              if (type === "datetime" && dateSerial(rowDate) < RO_RI_DATETIME_START.getTime()) continue;
               const values = [header, ...fallbackHeaders].map((name) => cellByHeader(headers, row, name));
               const sheetValue = values.find((value) => value !== "" && value != null) ?? "";
               const rawValue = sheetValue === "" || sheetValue == null
@@ -519,4 +523,3 @@ jobs:
             ].join("; ")
           );
           NODE
-
