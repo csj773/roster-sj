@@ -519,6 +519,8 @@ def norm_reg(value) -> str:
 
 
 def page_chunks(flights: list[Flight]) -> list[list[Flight]]:
+    if not flights and os.environ.get("LOGBOOK_ALLOW_EMPTY", "").strip().lower() in {"1", "true", "yes"}:
+        return [[]]
     return [flights[i : i + 10] for i in range(0, len(flights), 10)]
 
 

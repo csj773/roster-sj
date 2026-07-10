@@ -411,6 +411,7 @@ def build_logbook() -> dict[str, str]:
             "LOGBOOK_END_DATE": "",
             "LOGBOOK_EXPECTED_FINAL_BLK": "",
             "LOGBOOK_MIN_FLIGHTS": "0",
+            "LOGBOOK_ALLOW_EMPTY": "true",
             "LOGBOOK_START_BLK": "16129:03",
             "LOGBOOK_START_NGT": "5941:52",
             "LOGBOOK_START_IFR": "11949:36",
