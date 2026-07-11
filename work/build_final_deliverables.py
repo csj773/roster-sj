@@ -132,6 +132,11 @@ def cell_time(value) -> time | None:
         text = value.strip()
         if not text:
             return None
+        if "T" in text:
+            try:
+                return datetime.fromisoformat(text.replace("Z", "+00:00")).time()
+            except ValueError:
+                pass
         pm = "오후" in text
         text = text.replace("오전", "").replace("오후", "").strip()
         match = re.match(r"^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$", text)
