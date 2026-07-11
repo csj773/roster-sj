@@ -104,6 +104,31 @@ jobs:
             return `${date.getUTCFullYear()}. ${date.getUTCMonth() + 1}. ${date.getUTCDate()}`;
           }
 
+          function formatTime(value) {
+            const normalized =
+              value && typeof value.toDate === "function"
+                ? value.toDate()
+                : value instanceof Date
+                  ? value
+                  : normalizeFirestoreValue(value);
+            if (!normalized) return "";
+
+            if (typeof normalized === "number") {
+              const totalMinutes = Math.round((normalized % 1) * 1440);
+              const hours = Math.trunc(totalMinutes / 60) % 24;
+              const minutes = totalMinutes % 60;
+              return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+            }
+
+            const text = String(normalized).trim();
+            const timeOnly = text.match(/^(\d{1,2}):(\d{1,2})(?::\d{1,2})?$/);
+            if (timeOnly) return `${String(Number(timeOnly[1])).padStart(2, "0")}:${String(Number(timeOnly[2])).padStart(2, "0")}`;
+
+            const date = normalized instanceof Date ? normalized : new Date(text);
+            if (Number.isNaN(date.getTime())) return text;
+            return `${String(date.getUTCHours()).padStart(2, "0")}:${String(date.getUTCMinutes()).padStart(2, "0")}`;
+          }
+
           function formatMonthNumber(value) {
             const raw = String(normalizeFirestoreValue(value) || "").trim();
             if (!raw) return "";
@@ -240,8 +265,8 @@ jobs:
 
             if (name === "REG") return valueByKeys(data, ["REG", "Reg", "A/C ID", "AcReg"]);
             if (name === "DC") return valueByKeys(data, ["DC", "A/C Type"]);
-            if (name === "RO") return valueByKeys(data, ["RO", "StartL", "STDl", "STDL"]);
-            if (name === "RI") return valueByKeys(data, ["RI", "FinishL", "STAl", "STAL"]);
+            if (name === "RO") return formatTime(valueByKeys(data, ["RO", "StartL", "STDl", "STDL"]));
+            if (name === "RI") return formatTime(valueByKeys(data, ["RI", "FinishL", "STAl", "STAL"]));
             if (name === "BLK") return valueByKeys(data, ["BLK", "BLH", "BH", "Blockhours"]);
             if (name === "LD") return valueByKeys(data, ["LD", "LDG", "Landing"]);
             if (name === "ACT") return valueByKeys(data, ["ACT", "ET"]);
