@@ -211,8 +211,8 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
     const row = flightRows[i];
     const [DateStr,, , , Activity,, FromRaw, STDL, STDZ, ToRaw,, STAZ] = row;
 
-    const From = FromRaw?.trim() || "UNKNOWN";
-    const To = ToRaw?.trim() || "UNKNOWN";
+    const From = FromRaw?.trim().toUpperCase() || "UNKNOWN";
+    const To = ToRaw?.trim().toUpperCase() || "UNKNOWN";
 
     let LocalDateFormatted = resolvedDateForRow(row);
     let DateFormatted = LocalDateFormatted;
@@ -370,6 +370,24 @@ function uniqueSheetId(usedIds) {
   return id;
 }
 
+function safeDocIdPart(value) {
+  return String(value ?? "")
+    .trim()
+    .replace(/[^A-Za-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "blank";
+}
+
+function buildPerDiemDocId(item) {
+  return [
+    item.Year,
+    item.Month,
+    item.Date,
+    item.Activity,
+    item.From,
+    item.Destination,
+  ].map(safeDocIdPart).join("_");
+}
+
 function buildPerDiemSheetRow(item, id) {
   return [
     id,
@@ -453,7 +471,21 @@ export async function uploadPerDiemFirestore(perdiemList) {
   const collectionRef = db.collection("Perdiem");
 
   for (let item of perdiemList) {
-    const docId = `${item.Year}${item.Month}${item.Date.replace(/\./g, "")}_${item.Destination}`;
+    const docId = buildPerDiemDocId(item);
+    const legacyDocId = `${item.Year}${item.Month}${item.Date.replace(/\./g, "")}_${item.Destination}`;
+    const duplicateSnapshot = await collectionRef
+      .where("owner", "==", owner)
+      .where("Date", "==", item.Date)
+      .where("Activity", "==", item.Activity)
+      .where("From", "==", item.From)
+      .where("Destination", "==", item.Destination)
+      .get();
+
+    for (const duplicateDoc of duplicateSnapshot.docs) {
+      if (duplicateDoc.id !== docId) await duplicateDoc.ref.delete();
+    }
+
+    if (legacyDocId !== docId) await collectionRef.doc(legacyDocId).delete().catch(() => {});
     await collectionRef.doc(docId).set({ owner, ...item });
   }
 
