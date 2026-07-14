@@ -264,7 +264,7 @@ const spreadsheetId="1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
   // ------------------- PerDiem 처리 -------------------
   console.log("🚀 PerDiem 처리 시작");
   const perdiemList = await generatePerDiemList(path.join(publicDir,"roster.json"), flutterflowUid);
-  const flightPerDiemList = perdiemList.filter(p => p.Destination && p.RI && p.RO);
+  const flightPerDiemList = perdiemList.filter(p => p.Destination && (p.RI || p.RO || p.TransportFee));
   savePerDiemCSV(flightPerDiemList, path.join(publicDir,"perdiem.csv"));
   await uploadPerDiemFirestore(flightPerDiemList, flutterflowUid);
   await appendPerDiemGoogleSheet(flightPerDiemList, sheetsApi, spreadsheetId, "Perdiem");

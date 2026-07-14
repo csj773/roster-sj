@@ -16,6 +16,7 @@ const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Se
 const MONTH_NAME_TO_NUMBER = Object.fromEntries(MONTH_NAMES.map((name, index) => [name.toLowerCase(), index + 1]));
 const WEEKDAY_INDEX = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+const TRANSPORT_FEE_PER_FLIGHT = 7000;
 
 // ------------------- Date 변환 -------------------
 export function convertDate(input) {
@@ -271,17 +272,31 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
 
     let { StayHours, Total } = calculatePerDiem(riValid, roValid, Rate);
 
-    if (From === "ICN") StayHours = "0:00";
+    if (From === "ICN") {
+      StayHours = "0:00";
+      Rate = 0;
+      Total = 0;
+    }
     if (isQuickTurnReturn) {
       Total = 33;
       Rate = 33;
     }
 
-    const assigned = monthYearFromKst(roValid, DateFormatted);
+    let assignedDate = roValid;
+    if (From === "ICN" && To !== "ICN") {
+      const pairedReturnRow = flightRows.slice(i + 1).find(nextRow => (
+        (nextRow[6] || "").trim() === To &&
+        (nextRow[9] || "").trim() === "ICN"
+      ));
+      if (pairedReturnRow) {
+        const pairedReturnDate = resolvedDateForRow(pairedReturnRow);
+        assignedDate = parseHHMMOffset(pairedReturnRow[8], pairedReturnDate);
+      }
+    }
+    const assigned = monthYearFromKst(assignedDate, DateFormatted);
 
     // ===== 교통비 =====
-    let TransportFee = 14000;
-    if (isQuickTurnReturn) TransportFee = 14000;
+    const TransportFee = TRANSPORT_FEE_PER_FLIGHT;
 
     perdiemList.push({
       Date: DateFormatted,
