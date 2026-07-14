@@ -67,6 +67,115 @@ function convertDate(input) {
   return `${year}-${String(month).padStart(2,"0")}-${day}`;
 }
 
+const MONTH_NAMES = {
+  jan: 1, january: 1,
+  feb: 2, february: 2,
+  mar: 3, march: 3,
+  apr: 4, april: 4,
+  may: 5,
+  jun: 6, june: 6,
+  jul: 7, july: 7,
+  aug: 8, august: 8,
+  sep: 9, sept: 9, september: 9,
+  oct: 10, october: 10,
+  nov: 11, november: 11,
+  dec: 12, december: 12,
+};
+
+const WEEKDAY_RE = /\b(mon|tue|wed|thu|fri|sat|sun)\b/i;
+const WEEKDAY_INDEX = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+
+function formatYMD(year, month, day) {
+  return `${year}-${String(month).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+}
+
+function nextMonth(year, month) {
+  if(month === 12) return { year: year + 1, month: 1 };
+  return { year, month: month + 1 };
+}
+
+function addMonths(year, month, delta) {
+  const date = new Date(Date.UTC(year, month - 1 + delta, 1));
+  return { year: date.getUTCFullYear(), month: date.getUTCMonth() + 1 };
+}
+
+function findMonthMatchingWeekday(year, month, day, weekdayToken) {
+  if(!weekdayToken) return null;
+  const expected = WEEKDAY_INDEX[weekdayToken];
+  if(expected === undefined) return null;
+
+  for(const delta of [0, 1, 2, -1]) {
+    const candidate = addMonths(year, month, delta);
+    const actual = new Date(Date.UTC(candidate.year, candidate.month - 1, day)).getUTCDay();
+    if(actual === expected) return candidate;
+  }
+  return null;
+}
+
+function parseRosterDateText(input) {
+  if(!input || typeof input !== "string") return null;
+  const dayMatch = input.match(/\d{1,2}/);
+  if(!dayMatch) return null;
+
+  let explicitMonth = null;
+  let weekday = null;
+  const monthMatch = input.match(/\b([A-Za-z]{3,9})\b/g);
+  if(monthMatch) {
+    for(const token of monthMatch) {
+      const key = token.toLowerCase();
+      if(MONTH_NAMES[key]) {
+        explicitMonth = MONTH_NAMES[key];
+        break;
+      }
+      if(WEEKDAY_INDEX[key] !== undefined) weekday = key;
+    }
+  }
+
+  return {
+    day: Number(dayMatch[0]),
+    explicitMonth,
+    weekday,
+    hasWeekday: WEEKDAY_RE.test(input),
+  };
+}
+
+function resolveRosterDateSequence(rows, dateIndex) {
+  const resolved = new WeakMap();
+  const now = new Date();
+  let year = now.getFullYear();
+  let month = now.getMonth() + 1;
+  let lastDay = null;
+  let currentDate = null;
+
+  for(const row of rows) {
+    const parsed = parseRosterDateText(row[dateIndex]);
+
+    if(parsed) {
+      if(parsed.explicitMonth) {
+        if(parsed.explicitMonth < month && month - parsed.explicitMonth > 6) year += 1;
+        month = parsed.explicitMonth;
+      } else if(lastDay !== null && parsed.hasWeekday && parsed.day < lastDay) {
+        const next = nextMonth(year, month);
+        year = next.year;
+        month = next.month;
+      } else if(parsed.weekday) {
+        const matched = findMonthMatchingWeekday(year, month, parsed.day, parsed.weekday);
+        if(matched) {
+          year = matched.year;
+          month = matched.month;
+        }
+      }
+
+      currentDate = formatYMD(year, month, parsed.day);
+      lastDay = parsed.day;
+    }
+
+    if(currentDate) resolved.set(row, currentDate);
+  }
+
+  return resolved;
+}
+
 // ------------------- Google Calendar 초기화 -------------------
 const auth = new google.auth.GoogleAuth({ credentials: creds, scopes:["https://www.googleapis.com/auth/calendar"] });
 const calendar = google.calendar({ version:"v3", auth });
@@ -144,6 +253,7 @@ async function removeDuplicates() {
   const headers = values[0];
   const idx = {};
   headers.forEach((h,i)=>idx[h]=i);
+  const resolvedDates = resolveRosterDateSequence(values.slice(1), idx["Date"]);
 
   for(let r=1;r<values.length;r++){
     const row = values[r];
@@ -151,7 +261,7 @@ async function removeDuplicates() {
     if(!activity||!activity.trim()) continue;
 
     const rawDate = row[idx["Date"]];
-    const convDate = convertDate(rawDate);
+    const convDate = resolvedDates.get(row) || convertDate(rawDate);
     if(!convDate) continue;
    
     const from = row[idx["From"]] || "ICN";
