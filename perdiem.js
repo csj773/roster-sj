@@ -152,7 +152,7 @@ function monthYearFromRosterDate(fallbackDateFormatted) {
   const monthIndex = Number(dfParts[1] || "1") - 1;
   return {
     Year: dfParts[0] || String(new Date().getUTCFullYear()),
-    Month: monthIndex + 1,
+    Month: MONTH_NAMES[monthIndex] || "Unknown",
   };
 }
 
@@ -162,7 +162,7 @@ function monthYearFromLocalTime(localTimeText, baseDateFormatted) {
 
   return {
     Year: String(localDate.getUTCFullYear()),
-    Month: localDate.getUTCMonth() + 1,
+    Month: MONTH_NAMES[localDate.getUTCMonth()] || "Unknown",
   };
 }
 
@@ -241,7 +241,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
 
         let prevSnapshot = await db.collection("Perdiem")
           .where("owner", "==", owner)
-          .where("Month", "==", prevMonthNum)
+          .where("Month", "==", prevMonthName)
           .where("Year", "==", prevYear)
           .where("Destination", "==", From)
           .orderBy("Date", "desc")
@@ -251,7 +251,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
         if (prevSnapshot.empty) {
           prevSnapshot = await db.collection("Perdiem")
             .where("owner", "==", owner)
-            .where("Month", "==", prevMonthName)
+            .where("Month", "==", prevMonthNum)
             .where("Year", "==", prevYear)
             .where("Destination", "==", From)
             .orderBy("Date", "desc")
