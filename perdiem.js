@@ -282,17 +282,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       Rate = 33;
     }
 
-    let assignedDate = roValid;
-    if (From === "ICN" && To !== "ICN") {
-      const pairedReturnRow = flightRows.slice(i + 1).find(nextRow => (
-        (nextRow[6] || "").trim() === To &&
-        (nextRow[9] || "").trim() === "ICN"
-      ));
-      if (pairedReturnRow) {
-        const pairedReturnDate = resolvedDateForRow(pairedReturnRow);
-        assignedDate = parseHHMMOffset(pairedReturnRow[8], pairedReturnDate);
-      }
-    }
+    const assignedDate = roValid || riValid;
     const assigned = monthYearFromKst(assignedDate, DateFormatted);
 
     // ===== 교통비 =====
