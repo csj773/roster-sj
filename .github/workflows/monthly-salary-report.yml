@@ -44,10 +44,8 @@ jobs:
           node-version: 20
           cache: npm
 
-      - run: npm ci
-
       - name: Install salary report runtime dependencies
-        run: npm install --no-save exceljs firebase-admin nodemailer
+        run: npm install --no-save --package-lock=false exceljs firebase-admin nodemailer
 
       - name: Send monthly salary report
         run: |
