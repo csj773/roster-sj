@@ -17,6 +17,8 @@ const MONTH_NAME_TO_NUMBER = Object.fromEntries(MONTH_NAMES.map((name, index) =>
 const WEEKDAY_INDEX = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const TRANSPORT_FEE_PER_FLIGHT = 7000;
+const FLIGHT_ACTIVITY_RE = /^YP\d+/i;
+const PERDIEM_SHEET_HEADER = ["ID", "Date", "Activity", "From", "Destination", "RI", "RO", "StayHours", "Rate", "Total", "TransportFee", "Month", "Year"];
 
 // ------------------- Date 변환 -------------------
 export function convertDate(input) {
@@ -191,7 +193,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
     const activity = (r[4] || "").trim().toUpperCase();
     const from = (r[6] || "").trim();
     const to = (r[9] || "").trim();
-    return activity && !["OFF", "REST", "RSV"].includes(activity) && from && to;
+    return FLIGHT_ACTIVITY_RE.test(activity) && from && to && from !== to;
   });
 
   for (let i = 0; i < flightRows.length; i++) {
@@ -366,13 +368,9 @@ function buildPerDiemSheetRow(item, id) {
   ];
 }
 
-function sameSheetRow(a, b) {
-  return JSON.stringify(a.map(value => String(value ?? ""))) === JSON.stringify(b.map(value => String(value ?? "")));
-}
-
-// ------------------- Google Sheets upsert -------------------
+// ------------------- Google Sheets sync -------------------
 export async function appendPerDiemGoogleSheet(perdiemList, sheetsApi, spreadsheetId, sheetName = "Perdiem") {
-  if (!Array.isArray(perdiemList) || perdiemList.length === 0 || !sheetsApi || !spreadsheetId) return;
+  if (!Array.isArray(perdiemList) || !sheetsApi || !spreadsheetId) return;
 
   const existing = await sheetsApi.spreadsheets.values.get({
     spreadsheetId,
@@ -386,51 +384,41 @@ export async function appendPerDiemGoogleSheet(perdiemList, sheetsApi, spreadshe
   const existingRows = existing.data.values || [];
   const hasHeader = existingRows[0]?.[0] === "ID";
   const dataRows = hasHeader ? existingRows.slice(1) : existingRows;
-  const firstDataRowNumber = hasHeader ? 2 : 1;
   const usedIds = new Set(dataRows.map(row => row[0]).filter(Boolean));
-  const existingByKey = new Map(dataRows.map((row, index) => [buildPerDiemSheetKey({
-    Date: row[1] || "",
-    Activity: row[2] || "",
-    From: row[3] || "",
-    Destination: row[4] || "",
-    RI: row[5] || "",
-    RO: row[6] || "",
-  }), { row, rowNumber: firstDataRowNumber + index }]));
+  const existingIdByKey = new Map();
+  for (const row of dataRows) {
+    const key = buildPerDiemSheetKey({
+      Date: row[1] || "",
+      Activity: row[2] || "",
+      From: row[3] || "",
+      Destination: row[4] || "",
+      RI: row[5] || "",
+      RO: row[6] || "",
+    });
+    if (!existingIdByKey.has(key) && row[0]) existingIdByKey.set(key, row[0]);
+  }
 
-  const rowsToAppend = [];
-  const rowsToUpdate = [];
-
+  const syncedRows = [];
+  const seenKeys = new Set();
   for (const item of perdiemList) {
     const key = buildPerDiemSheetKey(item);
-    const existingRow = existingByKey.get(key);
-    const row = buildPerDiemSheetRow(item, existingRow?.row?.[0] || uniqueSheetId(usedIds));
-
-    if (!existingRow) {
-      rowsToAppend.push(row);
-    } else if (!sameSheetRow(existingRow.row, row)) {
-      rowsToUpdate.push({ rowNumber: existingRow.rowNumber, row });
-    }
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    syncedRows.push(buildPerDiemSheetRow(item, existingIdByKey.get(key) || uniqueSheetId(usedIds)));
   }
 
-  for (const update of rowsToUpdate) {
-    await sheetsApi.spreadsheets.values.update({
-      spreadsheetId,
-      range: `${sheetName}!A${update.rowNumber}:M${update.rowNumber}`,
-      valueInputOption: "RAW",
-      requestBody: { values: [update.row] },
-    });
-  }
+  await sheetsApi.spreadsheets.values.clear({
+    spreadsheetId,
+    range: `${sheetName}!A:M`,
+  });
 
-  if (rowsToAppend.length > 0) {
-    await sheetsApi.spreadsheets.values.append({
-      spreadsheetId,
-      range: `${sheetName}!A:M`,
-      valueInputOption: "RAW",
-      insertDataOption: "INSERT_ROWS",
-      requestBody: { values: rowsToAppend },
-    });
-  }
-  console.log(`✅ Google Sheets ${sheetName} PerDiem upsert 완료 (update ${rowsToUpdate.length}건, append ${rowsToAppend.length}건)`);
+  await sheetsApi.spreadsheets.values.update({
+    spreadsheetId,
+    range: `${sheetName}!A1`,
+    valueInputOption: "RAW",
+    requestBody: { values: [PERDIEM_SHEET_HEADER, ...syncedRows] },
+  });
+  console.log(`✅ Google Sheets ${sheetName} PerDiem sync 완료 (${syncedRows.length}건, 중복/삭제 정리 포함)`);
 }
 
 // ------------------- Firestore 업로드 -------------------
