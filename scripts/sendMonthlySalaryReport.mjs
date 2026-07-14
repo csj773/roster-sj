@@ -4,6 +4,7 @@ import {google} from "googleapis";
 import nodemailer from "nodemailer";
 import {mkdir} from "node:fs/promises";
 import path from "node:path";
+import {spawnSync} from "node:child_process";
 
 const config = {
   timeZone: process.env.REPORT_TIME_ZONE || "Asia/Seoul",
@@ -74,8 +75,8 @@ async function runMonthlySalaryReport({year, month, force = false}) {
     const googleAuth = createGoogleAuth();
 
     await mkdir(outputDir, {recursive: true});
-    await updateSalarySheet({auth: googleAuth, year, month, rows, totalPay});
-    await exportSalarySpreadsheet({auth: googleAuth, outputPath});
+    const sheetValues = await updateSalarySheet({auth: googleAuth, year, month, rows, totalPay});
+    await exportSalarySpreadsheet({auth: googleAuth, outputPath, values: sheetValues});
     await sendEmail({year, month, fileName, outputPath, rowCount: rows.length, totalPay});
 
     await runRef.set({
@@ -205,23 +206,31 @@ async function updateSalarySheet({auth, year, month, rows, totalPay}) {
       },
     });
   }
+
+  return values;
 }
 
-async function exportSalarySpreadsheet({auth, outputPath}) {
+async function exportSalarySpreadsheet({auth, outputPath, values}) {
   const spreadsheetId = requireConfig("SALARY_SPREADSHEET_ID", config.salarySpreadsheetId);
   const drive = google.drive({version: "v3", auth});
-  const response = await drive.files.export(
-    {
-      fileId: spreadsheetId,
-      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    },
-    {responseType: "arraybuffer"},
-  );
+  try {
+    const response = await drive.files.export(
+      {
+        fileId: spreadsheetId,
+        mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      },
+      {responseType: "arraybuffer"},
+    );
 
-  await import("node:fs/promises").then(({writeFile}) => writeFile(outputPath, Buffer.from(response.data)));
+    await import("node:fs/promises").then(({writeFile}) => writeFile(outputPath, Buffer.from(response.data)));
+  } catch (error) {
+    console.warn(`Google Drive export failed; writing local XLSX fallback: ${error.message}`);
+    writeLocalXlsx(outputPath, values);
+  }
 }
 
 async function sendEmail({year, month, fileName, outputPath, rowCount, totalPay}) {
+  console.log(`Sending salary report email to ${process.env.MAIL_TO || "sjchoi787@gmail.com"} with attachment ${fileName}`);
   const transporter = nodemailer.createTransport({
     host: requireEnv("MAIL_HOST"),
     port: Number(process.env.MAIL_PORT || 465),
@@ -253,9 +262,10 @@ function initializeFirebase() {
     return;
   }
 
-  if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+  const credentialsJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.FIREBASE_SERVICE_ACCOUNT;
+  if (credentialsJson) {
     initializeApp({
-      credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)),
+      credential: cert(JSON.parse(credentialsJson)),
     });
     return;
   }
@@ -264,7 +274,12 @@ function initializeFirebase() {
 }
 
 function createGoogleAuth() {
-  const credentials = JSON.parse(requireEnv("FIREBASE_SERVICE_ACCOUNT_JSON"));
+  const credentialsJson = process.env.GOOGLE_SHEETS_CREDENTIALS ||
+    process.env.GOOGLE_SERVICE_ACCOUNT_JSON ||
+    process.env.FIREBASE_SERVICE_ACCOUNT_JSON ||
+    process.env.FIREBASE_SERVICE_ACCOUNT;
+  const credentials = JSON.parse(requireConfig("GOOGLE_SHEETS_CREDENTIALS or FIREBASE_SERVICE_ACCOUNT_JSON", credentialsJson));
+  if (credentials.private_key) credentials.private_key = credentials.private_key.replace(/\\n/g, "\n");
   return new google.auth.GoogleAuth({
     credentials,
     scopes: [
@@ -272,6 +287,42 @@ function createGoogleAuth() {
       "https://www.googleapis.com/auth/drive.readonly",
     ],
   });
+}
+
+function writeLocalXlsx(outputPath, values) {
+  const payload = JSON.stringify({outputPath, values});
+  const script = `
+import json
+import sys
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill
+from openpyxl.utils import get_column_letter
+
+payload = json.loads(sys.stdin.read())
+wb = Workbook()
+ws = wb.active
+ws.title = "Salary"
+for row in payload["values"]:
+    ws.append(row)
+
+for cell in ws[1]:
+    cell.font = Font(bold=True)
+    cell.fill = PatternFill("solid", fgColor="D9EAF7")
+
+for column_cells in ws.columns:
+    width = max(len(str(cell.value or "")) for cell in column_cells) + 2
+    ws.column_dimensions[get_column_letter(column_cells[0].column)].width = min(width, 28)
+
+wb.save(payload["outputPath"])
+`;
+  const result = spawnSync("python", ["-c", script], {
+    input: payload,
+    encoding: "utf-8",
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  if (result.status !== 0) {
+    throw new Error(`Local XLSX fallback failed: ${result.stderr || result.stdout}`);
+  }
 }
 
 function parseArgs(argv) {

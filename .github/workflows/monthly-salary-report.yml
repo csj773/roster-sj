@@ -34,6 +34,7 @@ jobs:
       SALARY_MONTH_CELL: ${{ vars.SALARY_MONTH_CELL }}
       SALARY_TOTAL_CELL: ${{ vars.SALARY_TOTAL_CELL }}
       FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON || secrets.FIREBASE_SERVICE_ACCOUNT }}
+      GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
       MAIL_HOST: ${{ secrets.MAIL_HOST || 'smtp.gmail.com' }}
       MAIL_PORT: ${{ secrets.MAIL_PORT || '465' }}
       MAIL_SECURE: ${{ secrets.MAIL_SECURE || 'true' }}
@@ -52,6 +53,7 @@ jobs:
       - name: Install salary report runtime dependencies
         run: |
           rm -rf node_modules /tmp/salary-runtime
+          python -m pip install --upgrade openpyxl
           npm install --prefix /tmp/salary-runtime --no-package-lock --omit=dev firebase-admin@13.10.0 googleapis@131.0.0 nodemailer@9.0.3
           ln -s /tmp/salary-runtime/node_modules node_modules
 
