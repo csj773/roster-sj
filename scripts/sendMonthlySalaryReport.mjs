@@ -155,6 +155,8 @@ function buildDedupeKey(id, data) {
 async function updateSalarySheet({auth, year, month, rows, totalPay}) {
   const spreadsheetId = requireConfig("SALARY_SPREADSHEET_ID", config.salarySpreadsheetId);
   const sheets = google.sheets({version: "v4", auth});
+  const sheetTitle = sheetTitleFromRange(config.salaryWriteRange);
+  await ensureSheetExists(sheets, spreadsheetId, sheetTitle);
   const monthLabel = `${monthName(month)} ${year}`;
   const values = [
     ["Payment Doc ID", "Employee ID", "Employee Name", "Pay Period", "Payment Date", "TotalPay", "Updated At"],
@@ -211,6 +213,34 @@ async function updateSalarySheet({auth, year, month, rows, totalPay}) {
   }
 
   return values;
+}
+
+function sheetTitleFromRange(range) {
+  const sheetPart = String(range || "Salary!A1").split("!")[0] || "Salary";
+  return sheetPart.replace(/^'|'$/g, "").replace(/''/g, "'");
+}
+
+async function ensureSheetExists(sheets, spreadsheetId, title) {
+  const metadata = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: "sheets.properties.title",
+  });
+  const exists = (metadata.data.sheets || []).some((sheet) => sheet.properties?.title === title);
+  if (exists) return;
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          addSheet: {
+            properties: {title},
+          },
+        },
+      ],
+    },
+  });
+  console.log(`Created missing sheet tab: ${title}`);
 }
 
 async function exportSalarySpreadsheet({auth, outputPath, values}) {
