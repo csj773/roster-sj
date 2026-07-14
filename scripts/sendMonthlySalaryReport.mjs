@@ -220,6 +220,7 @@ async function updateSalarySheet({auth, year, month, rows, totalPay}) {
   const spreadsheetId = requireConfig("SALARY_SPREADSHEET_ID", config.salarySpreadsheetId);
   const sheets = google.sheets({version: "v4", auth});
   const sheetTitle = sheetTitleFromRange(config.salaryWriteRange);
+  const startCell = startCellFromRange(config.salaryWriteRange);
   await ensureSheetExists(sheets, spreadsheetId, sheetTitle);
   const monthLabel = `${monthName(month)} ${year}`;
   const values = [
@@ -327,7 +328,7 @@ async function updateSalarySheet({auth, year, month, rows, totalPay}) {
     });
   }
 
-  const verifyRange = `${quoteSheetTitle(sheetTitle)}!A1:AB${values.length}`;
+  const verifyRange = buildVerifyRange(sheetTitle, startCell, values.length, values[0].length);
   const verify = await sheets.spreadsheets.values.get({
     spreadsheetId,
     range: verifyRange,
@@ -351,6 +352,33 @@ async function updateSalarySheet({auth, year, month, rows, totalPay}) {
 function sheetTitleFromRange(range) {
   const sheetPart = String(range || "Salary!A1").split("!")[0] || "Salary";
   return sheetPart.replace(/^'|'$/g, "").replace(/''/g, "'");
+}
+
+function startCellFromRange(range) {
+  const cellPart = String(range || "Salary!A1").split("!")[1] || "A1";
+  const match = /^([A-Z]+)(\d+)/i.exec(cellPart);
+  return match ? {column: match[1].toUpperCase(), row: Number(match[2])} : {column: "A", row: 1};
+}
+
+function buildVerifyRange(sheetTitle, startCell, rowCount, columnCount) {
+  const endRow = startCell.row + rowCount - 1;
+  const endColumn = columnName(columnNumber(startCell.column) + columnCount - 1);
+  return `${quoteSheetTitle(sheetTitle)}!${startCell.column}${startCell.row}:${endColumn}${endRow}`;
+}
+
+function columnNumber(name) {
+  return String(name).toUpperCase().split("").reduce((total, char) => total * 26 + char.charCodeAt(0) - 64, 0);
+}
+
+function columnName(number) {
+  let name = "";
+  let current = number;
+  while (current > 0) {
+    const remainder = (current - 1) % 26;
+    name = String.fromCharCode(65 + remainder) + name;
+    current = Math.floor((current - 1) / 26);
+  }
+  return name;
 }
 
 function quoteSheetTitle(title) {
