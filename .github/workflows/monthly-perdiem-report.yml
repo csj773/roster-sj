@@ -39,11 +39,58 @@ jobs:
           PERDIEM_TARGET_YEAR: ${{ inputs.target_year }}
         run: node scripts/monthly_perdiem_report.mjs
 
+      - name: Convert PerDiem report to Excel
+        run: |
+          python -m pip install --upgrade openpyxl
+          python - <<'PY'
+          import csv
+          import glob
+          from pathlib import Path
+          from openpyxl import Workbook
+          from openpyxl.styles import Font, PatternFill
+          from openpyxl.utils import get_column_letter
+
+          csv_files = sorted(glob.glob("outputs/Perdiem_*.csv"))
+          if not csv_files:
+              print("No PerDiem CSV generated; skipping Excel conversion.")
+              raise SystemExit(0)
+
+          csv_path = Path(csv_files[-1])
+          xlsx_path = csv_path.with_suffix(".xlsx")
+
+          wb = Workbook()
+          ws = wb.active
+          ws.title = "Perdiem"
+
+          with csv_path.open(newline="", encoding="utf-8") as handle:
+              for row in csv.reader(handle):
+                  ws.append(row)
+
+          header_fill = PatternFill("solid", fgColor="D9EAF7")
+          for cell in ws[1]:
+              cell.font = Font(bold=True)
+              cell.fill = header_fill
+
+          for row in ws.iter_rows():
+              for cell in row:
+                  if isinstance(cell.value, str):
+                      raw = cell.value.strip()
+                      if raw and raw.replace(".", "", 1).isdigit():
+                          cell.value = float(raw) if "." in raw else int(raw)
+
+          for column_cells in ws.columns:
+              width = max(len(str(cell.value or "")) for cell in column_cells) + 2
+              ws.column_dimensions[get_column_letter(column_cells[0].column)].width = min(width, 24)
+
+          wb.save(xlsx_path)
+          print(f"Wrote {xlsx_path}")
+          PY
+
       - name: Upload PerDiem report artifact
         uses: actions/upload-artifact@v6
         with:
           name: monthly-perdiem-report
-          path: outputs/Perdiem_*.csv
+          path: outputs/Perdiem_*.xlsx
           if-no-files-found: ignore
 
       - name: Send Gmail delivery
@@ -60,15 +107,15 @@ jobs:
           from email.message import EmailMessage
           from pathlib import Path
 
-          csv_files = sorted(glob.glob("outputs/Perdiem_*.csv"))
+          xlsx_files = sorted(glob.glob("outputs/Perdiem_*.xlsx"))
           summary_files = sorted(glob.glob("outputs/Perdiem_*.json"))
-          if not csv_files:
-              print("No PerDiem report file generated; skipping email.")
+          if not xlsx_files:
+              print("No PerDiem Excel report file generated; skipping email.")
               raise SystemExit(0)
           if not summary_files:
               raise RuntimeError("PerDiem summary JSON missing")
 
-          csv_path = Path(csv_files[-1])
+          xlsx_path = Path(xlsx_files[-1])
           summary = json.loads(Path(summary_files[-1]).read_text())
           sender = os.environ["GMAIL_USERNAME"]
           password = os.environ["GMAIL_APP_PASSWORD"]
@@ -90,14 +137,14 @@ jobs:
           )
 
           msg.add_attachment(
-              csv_path.read_bytes(),
-              maintype="text",
-              subtype="csv",
-              filename=csv_path.name,
+              xlsx_path.read_bytes(),
+              maintype="application",
+              subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              filename=xlsx_path.name,
           )
 
           with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
               smtp.login(sender, password)
               smtp.send_message(msg)
-          print(f"Sent {csv_path.name} to {recipient}")
+          print(f"Sent {xlsx_path.name} to {recipient}")
           PY
