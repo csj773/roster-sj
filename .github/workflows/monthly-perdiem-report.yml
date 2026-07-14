@@ -1,0 +1,103 @@
+name: Monthly PerDiem Report
+
+on:
+  schedule:
+    # KST 00:10 on the 29th-1st window. The script only sends on KST day 1,
+    # so this behaves like a month-end close for the previous month.
+    - cron: "10 15 28-31 * *"
+  workflow_dispatch:
+    inputs:
+      target_month:
+        description: "Target month number, 1-12. Defaults to previous/current KST month."
+        required: false
+      target_year:
+        description: "Target year. Defaults to KST target year."
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - run: npm install
+
+      - name: Build monthly PerDiem report
+        env:
+          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+          GOOGLE_SHEETS_SPREADSHEET_ID: 1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc
+          PERDIEM_TARGET_MONTH: ${{ inputs.target_month }}
+          PERDIEM_TARGET_YEAR: ${{ inputs.target_year }}
+        run: node scripts/monthly_perdiem_report.mjs
+
+      - name: Upload PerDiem report artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: monthly-perdiem-report
+          path: outputs/Perdiem_*.csv
+          if-no-files-found: ignore
+
+      - name: Send Gmail delivery
+        env:
+          GMAIL_USERNAME: ${{ secrets.GMAIL_USERNAME }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          PERDIEM_EMAIL_TO: sjchoi787@gmail.com
+        run: |
+          python - <<'PY'
+          import glob
+          import json
+          import os
+          import smtplib
+          from email.message import EmailMessage
+          from pathlib import Path
+
+          csv_files = sorted(glob.glob("outputs/Perdiem_*.csv"))
+          summary_files = sorted(glob.glob("outputs/Perdiem_*.json"))
+          if not csv_files:
+              print("No PerDiem report file generated; skipping email.")
+              raise SystemExit(0)
+          if not summary_files:
+              raise RuntimeError("PerDiem summary JSON missing")
+
+          csv_path = Path(csv_files[-1])
+          summary = json.loads(Path(summary_files[-1]).read_text())
+          sender = os.environ["GMAIL_USERNAME"]
+          password = os.environ["GMAIL_APP_PASSWORD"]
+          recipient = os.environ.get("PERDIEM_EMAIL_TO", "sjchoi787@gmail.com")
+
+          msg = EmailMessage()
+          msg["From"] = sender
+          msg["To"] = recipient
+          msg["Subject"] = f"PerDiem report {summary['month']} {summary['year']}"
+          msg.set_content(
+              "\n".join([
+                  f"PerDiem monthly report for {summary['month']} {summary['year']}.",
+                  "",
+                  f"Rows: {summary['rows']}",
+                  f"Total PerDiem: {summary['totalPerdiem']:.2f}",
+                  f"Transport Fee Total: {summary['totalTransportFee']:.2f}",
+                  f"Grand Total: {summary['grandTotal']:.2f}",
+              ])
+          )
+
+          msg.add_attachment(
+              csv_path.read_bytes(),
+              maintype="text",
+              subtype="csv",
+              filename=csv_path.name,
+          )
+
+          with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+              smtp.login(sender, password)
+              smtp.send_message(msg)
+          print(f"Sent {csv_path.name} to {recipient}")
+          PY
