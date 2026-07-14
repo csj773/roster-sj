@@ -33,20 +33,20 @@ jobs:
       SALARY_CLEAR_RANGE: ${{ vars.SALARY_CLEAR_RANGE }}
       SALARY_MONTH_CELL: ${{ vars.SALARY_MONTH_CELL }}
       SALARY_TOTAL_CELL: ${{ vars.SALARY_TOTAL_CELL }}
-      FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
-      MAIL_HOST: ${{ secrets.MAIL_HOST }}
-      MAIL_PORT: ${{ secrets.MAIL_PORT }}
-      MAIL_SECURE: ${{ secrets.MAIL_SECURE }}
-      MAIL_USER: ${{ secrets.MAIL_USER }}
-      MAIL_PASS: ${{ secrets.MAIL_PASS }}
-      MAIL_FROM: ${{ secrets.MAIL_FROM }}
+      FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON || secrets.FIREBASE_SERVICE_ACCOUNT }}
+      MAIL_HOST: ${{ secrets.MAIL_HOST || 'smtp.gmail.com' }}
+      MAIL_PORT: ${{ secrets.MAIL_PORT || '465' }}
+      MAIL_SECURE: ${{ secrets.MAIL_SECURE || 'true' }}
+      MAIL_USER: ${{ secrets.MAIL_USER || secrets.GMAIL_USERNAME }}
+      MAIL_PASS: ${{ secrets.MAIL_PASS || secrets.GMAIL_APP_PASSWORD }}
+      MAIL_FROM: ${{ secrets.MAIL_FROM || secrets.GMAIL_USERNAME }}
       MAIL_TO: sjchoi787@gmail.com
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install salary report runtime dependencies
@@ -65,3 +65,11 @@ jobs:
             args+=("--force")
           fi
           node scripts/sendMonthlySalaryReport.mjs "${args[@]}"
+
+      - name: Upload salary report artifact
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: monthly-salary-report
+          path: artifacts/salary-reports/*.xlsx
+          if-no-files-found: ignore
