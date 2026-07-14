@@ -21,7 +21,6 @@ export const PERDIEM_RATE = {
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const MONTH_NAME_TO_NUMBER = Object.fromEntries(MONTH_NAMES.map((name, index) => [name.toLowerCase(), index + 1]));
 const WEEKDAY_INDEX = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
-const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const TRANSPORT_FEE_PER_FLIGHT = 7000;
 const QUICK_TURN_THRESHOLD_HOURS = 12;
 const QUICK_TURN_MINIMUM_TOTAL = 33;
@@ -148,15 +147,7 @@ function resolveRosterDateSequence(rows, dateIndex = 0) {
   return resolved;
 }
 
-function monthYearFromKst(date, fallbackDateFormatted) {
-  const target = date instanceof Date && !isNaN(date) ? new Date(date.getTime() + KST_OFFSET_MS) : null;
-  if (target) {
-    return {
-      Year: String(target.getUTCFullYear()),
-      Month: MONTH_NAMES[target.getUTCMonth()] || "Unknown",
-    };
-  }
-
+function monthYearFromRosterDate(fallbackDateFormatted) {
   const dfParts = String(fallbackDateFormatted || "").split(".");
   const monthIndex = Number(dfParts[1] || "1") - 1;
   return {
@@ -165,44 +156,13 @@ function monthYearFromKst(date, fallbackDateFormatted) {
   };
 }
 
-function kstMonthStartUtcMs(year, monthIndex) {
-  return Date.UTC(year, monthIndex, 1) - KST_OFFSET_MS;
-}
+function monthYearFromLocalTime(localTimeText, baseDateFormatted) {
+  const localDate = parseHHMMOffset(localTimeText, baseDateFormatted);
+  if (!localDate || isNaN(localDate)) return monthYearFromRosterDate(baseDateFormatted);
 
-function monthYearFromStayWindow(riDate, roDate, fallbackDateFormatted) {
-  const riValid = riDate instanceof Date && !isNaN(riDate);
-  const roValid = roDate instanceof Date && !isNaN(roDate);
-  if (!riValid || !roValid || riDate >= roDate) return monthYearFromKst(roDate || riDate, fallbackDateFormatted);
-
-  const monthHours = new Map();
-  let cursor = riDate.getTime();
-  const end = roDate.getTime();
-
-  while (cursor < end) {
-    const kstCursor = new Date(cursor + KST_OFFSET_MS);
-    const year = kstCursor.getUTCFullYear();
-    const monthIndex = kstCursor.getUTCMonth();
-    const nextMonthStart = kstMonthStartUtcMs(year, monthIndex + 1);
-    const segmentEnd = Math.min(end, nextMonthStart);
-    const key = `${year}-${monthIndex}`;
-    monthHours.set(key, (monthHours.get(key) || 0) + (segmentEnd - cursor));
-    cursor = segmentEnd;
-  }
-
-  let selectedKey = null;
-  let selectedMs = -1;
-  for (const [key, ms] of monthHours.entries()) {
-    if (ms >= selectedMs) {
-      selectedKey = key;
-      selectedMs = ms;
-    }
-  }
-
-  if (!selectedKey) return monthYearFromKst(roDate, fallbackDateFormatted);
-  const [year, monthIndex] = selectedKey.split("-").map(Number);
   return {
-    Year: String(year),
-    Month: MONTH_NAMES[monthIndex] || "Unknown",
+    Year: String(localDate.getUTCFullYear()),
+    Month: MONTH_NAMES[localDate.getUTCMonth()] || "Unknown",
   };
 }
 
@@ -249,15 +209,17 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
 
   for (let i = 0; i < flightRows.length; i++) {
     const row = flightRows[i];
-    const [DateStr,, , , Activity,, FromRaw,, STDZ, ToRaw,, STAZ] = row;
+    const [DateStr,, , , Activity,, FromRaw, STDL, STDZ, ToRaw,, STAZ] = row;
 
     const From = FromRaw?.trim() || "UNKNOWN";
     const To = ToRaw?.trim() || "UNKNOWN";
 
-    let DateFormatted = resolvedDateForRow(row);
+    let LocalDateFormatted = resolvedDateForRow(row);
+    let DateFormatted = LocalDateFormatted;
     if (!DateFormatted || !DateFormatted.includes(".")) {
       DateFormatted = i > 0 ? resolvedDateForRow(flightRows[i - 1])
         : `${now.getUTCFullYear()}.${String(now.getUTCMonth() + 1).padStart(2, "0")}.${String(now.getUTCDate()).padStart(2, "0")}`;
+      LocalDateFormatted = DateFormatted;
     }
 
     const dfParts = DateFormatted.split(".");
@@ -332,10 +294,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       Total = calculateQuickTurnTotal(Rate);
     }
 
-    const isInboundLayover = To === "ICN" && From !== "ICN" && Hours >= QUICK_TURN_THRESHOLD_HOURS;
-    const assigned = isInboundLayover
-      ? monthYearFromStayWindow(riValid, roValid, DateFormatted)
-      : monthYearFromKst(roValid || riValid, DateFormatted);
+    const assigned = monthYearFromLocalTime(STDL, LocalDateFormatted);
 
     // ===== 교통비 =====
     const TransportFee = TRANSPORT_FEE_PER_FLIGHT;
