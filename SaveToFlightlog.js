@@ -2,105 +2,76 @@ import fs from "fs";
 import path from "path";
 import csv from "csv-parser";
 import admin from "firebase-admin";
+import { google } from "googleapis";
 import dayjs from "dayjs";
 import customParseFormat from "dayjs/plugin/customParseFormat.js";
+
+import {
+  calculateET,
+  calculateNTFromSTDSTA,
+  parseCrewString,
+} from "./flightTimeUtils.js";
+
 dayjs.extend(customParseFormat);
 
-// ------------------- ET/NT 계산 유틸 -------------------
+const ROSTER_HEADERS = [
+  "Date",
+  "DC",
+  "C/I(L)",
+  "C/O(L)",
+  "Activity",
+  "F",
+  "From",
+  "STD(L)",
+  "STD(Z)",
+  "To",
+  "STA(L)",
+  "STA(Z)",
+  "BLH",
+  "AcReg",
+  "Crew",
+];
 
-function blhStrToHour(str) {
-  if (!str) return 0;
-  if (typeof str !== "string") str = String(str);
-  str = str.trim();
-  if (str.includes(":")) {
-    const [h, m] = str.split(":").map(Number);
-    return h + m / 60;
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const HEADER_MAP_FIRESTORE = {
+  "C/I(L)": "CIL",
+  "C/O(L)": "COL",
+  "STD(L)": "STDL",
+  "STD(Z)": "STDZ",
+  "STA(L)": "STAL",
+  "STA(Z)": "STAZ",
+};
+
+function requiredJsonEnv(name) {
+  const raw = process.env[name];
+  if (!raw) {
+    console.error(`❌ ${name} Secret이 없습니다.`);
+    process.exit(1);
   }
-  if (/^\d{3,4}$/.test(str)) {
-    const h = Number(str.slice(0, -2));
-    const m = Number(str.slice(-2));
-    return h + m / 60;
-  }
-  if (/^\d+(\.\d+)?$/.test(str)) return Number(str);
-  return 0;
+  const parsed = JSON.parse(raw);
+  if (parsed.private_key) parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
+  return parsed;
 }
 
-function hourToTimeStr(hour) {
-  if (hour == null || Number.isNaN(hour)) return "00:00";
-  const h = Math.floor(hour);
-  let m = Math.round((hour - h) * 60);
-  if (m === 60) return hourToTimeStr(h + 1);
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-}
-
-function calculateET(blhStr) {
-  const blh = blhStrToHour(blhStr);
-  return blh > 8 ? hourToTimeStr(blh - 8) : "00:00";
-}
-
-function parseTimeWithOffset(t) {
-  if (!t) return null;
-  t = t.trim();
-  const m = t.match(/^(\d{1,2})(\d{2})([+-]\d)?$/);
-  if (!m) return null;
-  return { hh: Number(m[1]), mm: Number(m[2]), offsetDays: m[3] ? Number(m[3]) : 0 };
-}
-
-function calculateNTFromSTDSTA(stdZ, staZ, flightDate, blhStr) {
-  if (!stdZ || !staZ) return "00:00";
-  const pStd = parseTimeWithOffset(stdZ);
-  const pSta = parseTimeWithOffset(staZ);
-  if (!pStd || !pSta) return "00:00";
-
-  const y = flightDate.getUTCFullYear();
-  const m = flightDate.getUTCMonth();
-  const d = flightDate.getUTCDate();
-
-  const stdDate = new Date(Date.UTC(y, m, d, pStd.hh, pStd.mm, 0));
-  stdDate.setUTCDate(stdDate.getUTCDate() + pStd.offsetDays);
-
-  const staDate = new Date(Date.UTC(y, m, d, pSta.hh, pSta.mm, 0));
-  staDate.setUTCDate(staDate.getUTCDate() + pSta.offsetDays);
-  if (staDate < stdDate) staDate.setUTCDate(staDate.getUTCDate() + 1);
-
-  const startDay = new Date(Date.UTC(stdDate.getUTCFullYear(), stdDate.getUTCMonth(), stdDate.getUTCDate()));
-  const endDay = new Date(Date.UTC(staDate.getUTCFullYear(), staDate.getUTCMonth(), staDate.getUTCDate()));
-
-  let cursor = new Date(startDay);
-  let totalNT = 0;
-
-  while (cursor <= endDay) {
-    const ntStart = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate(), 13, 0, 0));
-    const ntEnd = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate(), 21, 0, 0));
-    const overlapStart = new Date(Math.max(stdDate, ntStart));
-    const overlapEnd = new Date(Math.min(staDate, ntEnd));
-    if (overlapStart < overlapEnd) totalNT += (overlapEnd - overlapStart) / 3600000;
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
-  }
-
-  const blhHour = blhStrToHour(blhStr);
-  const finalNT = Math.min(totalNT, blhHour || Infinity, 8);
-  return hourToTimeStr(finalNT);
-}
-
-// ------------------- Firebase 초기화 -------------------
-
-if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
-  console.error("❌ FIREBASE_SERVICE_ACCOUNT Secret이 없습니다.");
-  process.exit(1);
-}
-
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-if (serviceAccount.private_key)
-  serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
-
-if (!admin.apps.length)
-  admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-
+const serviceAccount = requiredJsonEnv("FIREBASE_SERVICE_ACCOUNT");
+if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
-const FIREBASE_UID = process.env.FIREBASE_UID || "manual_upload";
 
-// ------------------- CSV 탐색 -------------------
+const firestoreCollection = process.env.INPUT_FIRESTORE_COLLECTION || process.env.FIRESTORE_COLLECTION || "roster";
+const owner = process.env.INPUT_ADMIN_FIREBASE_UID || process.env.FIRESTORE_ADMIN_UID || process.env.FIREBASE_UID || "manual_upload";
+const userEmail = process.env.USER_ID || "";
+const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID || "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
+const sheetName = process.env.ROSTER_SHEET_NAME || "Roster1";
+
+let sheetsApi = null;
+if (process.env.GOOGLE_SHEETS_CREDENTIALS) {
+  const sheetsCredentials = requiredJsonEnv("GOOGLE_SHEETS_CREDENTIALS");
+  const sheetsAuth = new google.auth.GoogleAuth({
+    credentials: sheetsCredentials,
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  });
+  sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
+}
 
 function findCsvFile(filename = "my_flightlog.csv", dir = process.cwd()) {
   for (const f of fs.readdirSync(dir)) {
@@ -114,95 +85,181 @@ function findCsvFile(filename = "my_flightlog.csv", dir = process.cwd()) {
   return null;
 }
 
-const csvFile = process.argv[2] || findCsvFile();
-if (!csvFile) {
-  console.error("❌ my_flightlog.csv 파일을 찾을 수 없습니다.");
-  process.exit(1);
-}
-console.log(`📄 CSV 파일 발견: ${csvFile}`);
+function normalizeDateText(csvDateStr) {
+  const raw = String(csvDateStr || "").trim();
+  if (!raw) return "";
 
-// ------------------- CSV 파싱 및 Firestore 업로드 -------------------
-
-function parseFlightDate(csvDateStr) {
-  if (!csvDateStr) return new Date();
-
-  const normalized = csvDateStr
+  const normalized = raw
     .replace(/(\d+)\.(\w+)\.(\d{2,4})/, "$1 $2 $3")
     .replace(/\s+/g, " ")
     .trim();
 
-  const parsed = dayjs(normalized, ["D MMM YY", "DD MMM YY", "D MMM YYYY"], "en", true);
-  if (parsed.isValid()) return parsed.toDate();
+  const parsed = dayjs(normalized, ["D MMM YY", "DD MMM YY", "D MMM YYYY", "DD MMM YYYY"], "en", true);
+  if (parsed.isValid()) return parsed.format("YYYY.MM.DD");
 
-  console.warn(`⚠️ 날짜 파싱 실패 → ${csvDateStr}, 현재시간으로 대체`);
-  return new Date();
+  const dotMatch = raw.match(/^(\d{4})\.(\d{1,2})\.(\d{1,2})$/);
+  if (dotMatch) {
+    return `${dotMatch[1]}.${String(dotMatch[2]).padStart(2, "0")}.${String(dotMatch[3]).padStart(2, "0")}`;
+  }
+
+  console.warn(`⚠️ 날짜 파싱 실패: ${csvDateStr}`);
+  return raw;
 }
 
-const rows = [];
-fs.createReadStream(csvFile)
-  .pipe(csv())
-  .on("data", (d) => rows.push(d))
-  .on("end", async () => {
-    if (!rows.length) {
-      console.error("❌ CSV에 데이터가 없습니다.");
-      process.exit(1);
-    }
-    console.log(`📄 ${rows.length}개 행 로드 완료`);
+function dateObjectFromDots(dateText) {
+  const match = String(dateText || "").match(/^(\d{4})\.(\d{1,2})\.(\d{1,2})$/);
+  if (!match) return new Date();
+  return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+}
 
-    for (const [i, row] of rows.entries()) {
-      try {
-        const csvDateStr = (row.Date || "").trim();
-        const flightDate = parseFlightDate(csvDateStr);
-        const flightTimestamp = admin.firestore.Timestamp.fromDate(flightDate);
+function yearMonthFromDate(dateText) {
+  const match = String(dateText || "").match(/^(\d{4})\.(\d{1,2})\.(\d{1,2})$/);
+  if (!match) return { Year: "", Month: "" };
+  return { Year: match[1], Month: MONTH_NAMES[Number(match[2]) - 1] || "" };
+}
 
-        const blk = (row.BH || row.BLK || "00:00").trim();
-        const stdZ = (row.StartZ || row["STD(Z)"] || "").trim();
-        const staZ = (row.FinishZ || row["STA(Z)"] || "").trim();
+function getValue(row, keys, fallback = "") {
+  for (const key of keys) {
+    const value = row[key];
+    if (value != null && String(value).trim() !== "") return String(value).trim();
+  }
+  return fallback;
+}
 
-        const ET = calculateET(blk);
-        const NT = calculateNTFromSTDSTA(stdZ, staZ, flightDate, blk);
+function csvRowToRosterRow(row) {
+  const activity = getValue(row, ["Activity", "FLT", "F"]);
+  return [
+    normalizeDateText(getValue(row, ["Date"])),
+    getValue(row, ["DC"]),
+    getValue(row, ["CI", "C/I(L)", "CIL", "StartCI"]),
+    getValue(row, ["CO", "C/O(L)", "COL", "FinishCO"]),
+    activity,
+    getValue(row, ["F", "FLT"], activity),
+    getValue(row, ["From", "FROM"]),
+    getValue(row, ["StartL", "STD(L)", "STDL"]),
+    getValue(row, ["StartZ", "STD(Z)", "STDZ"]),
+    getValue(row, ["To", "TO"]),
+    getValue(row, ["FinishL", "STA(L)", "STAL"]),
+    getValue(row, ["FinishZ", "STA(Z)", "STAZ"]),
+    getValue(row, ["BH", "BLH", "BLK"], "00:00"),
+    getValue(row, ["AcReg", "A/C ID", "REG"]),
+    getValue(row, ["Crew"]),
+  ];
+}
 
-        const docData = {
-          Date: flightTimestamp, // ✅ Firestore Timestamp 저장
-          FLT: row.Activity || row.FLT || "",
-          FROM: row.From || "",
-          TO: row.To || "",
-          REG: row["A/C ID"] || "",
-          DC: row["A/C Type"] || row.DC || "",
-          BLK: blk,
-          PIC: row.PIC || "",
-          ET,
-          NT,
-          STDz: stdZ,
-          STAz: staZ,
-          StartL: row.StartL || "",
-          FinishL: row.FinishL || "",
-          DH: (row.DH || "00:00").trim(),
-          owner: FIREBASE_UID,
-          uploadedAt: admin.firestore.FieldValue.serverTimestamp(),
-        };
-
-        // 중복 제거 (같은 날짜·FLT·FROM·TO)
-        const dupQuery = await db
-          .collection("Flightlog")
-          .where("Date", "==", flightTimestamp)
-          .where("FLT", "==", docData.FLT)
-          .where("FROM", "==", docData.FROM)
-          .where("TO", "==", docData.TO)
-          .get();
-
-        if (!dupQuery.empty) {
-          await Promise.all(dupQuery.docs.map((d) => db.collection("Flightlog").doc(d.id).delete()));
-        }
-
-        await db.collection("Flightlog").add(docData);
-        console.log(
-          `✅ ${i + 1}/${rows.length} 저장 완료 (${csvDateStr} → ${flightDate.toISOString().split("T")[0]}) [${docData.FLT}]`
-        );
-      } catch (err) {
-        console.error(`❌ ${i + 1}행 오류: ${err.message}`);
-      }
-    }
-
-    console.log("🎯 Firestore Flightlog 업로드 완료!");
+function buildDocData(rosterRow) {
+  const docData = {};
+  ROSTER_HEADERS.forEach((header, index) => {
+    const value = rosterRow[index] || "";
+    docData[header] = value;
+    docData[HEADER_MAP_FIRESTORE[header] || header] = value;
   });
+
+  docData.DateRaw = docData.Date;
+  docData.owner = owner;
+  docData.pdc_user_name = "csv_upload";
+  docData.email = userEmail;
+  docData.ET = calculateET(docData.BLH);
+  docData.NT = docData.From !== docData.To
+    ? calculateNTFromSTDSTA(docData.STDZ, docData.STAZ, dateObjectFromDots(docData.Date), docData.BLH)
+    : "00:00";
+  docData.CrewArray = parseCrewString(docData.Crew);
+  const { Year, Month } = yearMonthFromDate(docData.Date);
+  docData.Year = Year;
+  docData.Month = Month;
+  docData.uploadedAt = admin.firestore.FieldValue.serverTimestamp();
+
+  Object.keys(docData).forEach((key) => {
+    if (docData[key] === undefined) delete docData[key];
+  });
+  return docData;
+}
+
+async function uploadRosterDoc(docData, index) {
+  const querySnapshot = await db.collection(firestoreCollection)
+    .where("Date", "==", docData.Date)
+    .where("DC", "==", docData.DC)
+    .where("Activity", "==", docData.Activity)
+    .where("From", "==", docData.From)
+    .where("To", "==", docData.To)
+    .get();
+
+  if (!querySnapshot.empty) {
+    for (const duplicate of querySnapshot.docs) {
+      await duplicate.ref.delete();
+    }
+  }
+
+  const ref = await db.collection(firestoreCollection).add(docData);
+  console.log(
+    `✅ ${index}행 roster 저장 완료: ${ref.id}, Date=${docData.Date}, Activity=${docData.Activity}, NT=${docData.NT}, ET=${docData.ET}`
+  );
+}
+
+async function updateRosterSheet(values) {
+  if (!sheetsApi) {
+    console.warn("⚠️ GOOGLE_SHEETS_CREDENTIALS 없음: Google Sheets 저장은 건너뜁니다.");
+    return;
+  }
+
+  await sheetsApi.spreadsheets.values.update({
+    spreadsheetId,
+    range: `${sheetName}!A1`,
+    valueInputOption: "RAW",
+    requestBody: { values },
+  });
+  console.log(`✅ Google Sheets ${sheetName} 업로드 완료 (${values.length - 1}행)`);
+}
+
+async function readCsvRows(csvFile) {
+  return new Promise((resolve, reject) => {
+    const rows = [];
+    fs.createReadStream(csvFile)
+      .pipe(csv())
+      .on("data", (data) => rows.push(data))
+      .on("error", reject)
+      .on("end", () => resolve(rows));
+  });
+}
+
+async function main() {
+  const csvFile = process.argv[2] || findCsvFile();
+  if (!csvFile) {
+    console.error("❌ my_flightlog.csv 파일을 찾을 수 없습니다.");
+    process.exit(1);
+  }
+  console.log(`📄 CSV 파일 발견: ${csvFile}`);
+
+  const csvRows = await readCsvRows(csvFile);
+  if (!csvRows.length) {
+    console.error("❌ CSV에 데이터가 없습니다.");
+    process.exit(1);
+  }
+  console.log(`📄 ${csvRows.length}개 행 로드 완료`);
+
+  const rosterRows = csvRows
+    .map(csvRowToRosterRow)
+    .filter((row) => row[4] && row[6] && row[9]);
+
+  const mapByKey = new Map();
+  for (const row of rosterRows) {
+    const key = `${row[0]}||${row[1]}||${row[4]}||${row[6]}||${row[9]}`;
+    mapByKey.set(key, row);
+  }
+
+  const values = [ROSTER_HEADERS, ...mapByKey.values()];
+  console.log(`✅ CSV 중복 제거 완료. 최종 roster 행 수: ${values.length - 1}`);
+
+  for (let i = 1; i < values.length; i++) {
+    const docData = buildDocData(values[i]);
+    await uploadRosterDoc(docData, i);
+  }
+
+  await updateRosterSheet(values);
+  console.log("🎯 CSV roster 컬렉션 및 Google Sheets 업로드 완료!");
+}
+
+main().catch((err) => {
+  console.error("❌ CSV roster 업로드 실패:", err);
+  process.exit(1);
+});
