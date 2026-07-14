@@ -1,0 +1,61 @@
+name: Monthly Salary Report
+
+on:
+  schedule:
+    # 18:00 KST on days that may be month-end. The script exits unless it is
+    # actually the last day of the month in Asia/Seoul.
+    - cron: "0 9 28-31 * *"
+  workflow_dispatch:
+    inputs:
+      month:
+        description: "Report month in YYYY-MM format. Empty means current KST month."
+        required: false
+        type: string
+      force:
+        description: "Send even if this month was already marked sent."
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  send-report:
+    runs-on: ubuntu-latest
+    env:
+      REPORT_TIME_ZONE: Asia/Seoul
+      PAYMENTS_COLLECTION: Payments
+      RUN_LOG_COLLECTION: salaryReportRuns
+      PAYMENT_DATE_FIELD: paymentDate
+      TOTAL_PAY_FIELD: TotalPay
+      UPDATED_AT_FIELD: updatedAt
+      DEDUPE_KEY_FIELDS: employeeId,payPeriod
+      FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+      MAIL_HOST: ${{ secrets.MAIL_HOST }}
+      MAIL_PORT: ${{ secrets.MAIL_PORT }}
+      MAIL_SECURE: ${{ secrets.MAIL_SECURE }}
+      MAIL_USER: ${{ secrets.MAIL_USER }}
+      MAIL_PASS: ${{ secrets.MAIL_PASS }}
+      MAIL_FROM: ${{ secrets.MAIL_FROM }}
+      MAIL_TO: ${{ secrets.MAIL_TO }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install salary report runtime dependencies
+        run: npm install --no-save exceljs firebase-admin nodemailer
+
+      - name: Send monthly salary report
+        run: |
+          args=()
+          if [ -n "${{ inputs.month }}" ]; then
+            args+=("--month=${{ inputs.month }}")
+          fi
+          if [ "${{ inputs.force }}" = "true" ]; then
+            args+=("--force")
+          fi
+          node scripts/sendMonthlySalaryReport.mjs "${args[@]}"
