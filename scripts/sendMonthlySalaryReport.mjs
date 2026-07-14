@@ -27,6 +27,7 @@ const config = {
     .map((field) => field.trim())
     .filter(Boolean),
 };
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 initializeFirebase();
 
@@ -124,7 +125,7 @@ async function fetchLatestPaymentRows(year, month) {
 
   sourceDocs.forEach((doc) => {
     const data = doc.data();
-    const row = normalizePaymentDoc(doc.id, data);
+    const row = normalizePaymentDoc(doc.id, data, {year, month});
     const dedupeKey = buildDedupeKey(doc.id, data);
     const existing = latestByKey.get(dedupeKey);
 
@@ -168,18 +169,19 @@ function matchesTargetMonth(data, month) {
   return monthName(month).toLowerCase() === String(value).trim().toLowerCase();
 }
 
-function normalizePaymentDoc(id, data) {
+function normalizePaymentDoc(id, data, target = {}) {
   const paymentDate = toDate(data[config.paymentDateField]);
   const updatedAt = toDate(data[config.updatedAtField]) || paymentDate || new Date(0);
   const salary = numberValue(data.Salary);
   const totalPay = Number(data.TotalPay || 0);
   const reportPay = numberValue(data[config.totalPayField]);
+  const reportMonth = monthNumberValue(data[config.monthField], target.month);
 
   return {
     id,
     owner: stringValue(data.owner),
-    year: stringValue(data[config.yearField]),
-    month: stringValue(data[config.monthField]),
+    year: stringValue(data[config.yearField] || target.year || ""),
+    month: reportMonth,
     employeeId: stringValue(data.employeeId),
     employeeName: stringValue(data.employeeName || data.name),
     payPeriod: stringValue(data.payPeriod),
@@ -561,7 +563,7 @@ function getPart(date, timeZone, part) {
 }
 
 function monthName(month) {
-  return new Intl.DateTimeFormat("en-US", {month: "short"}).format(new Date(Date.UTC(2026, month - 1, 1)));
+  return MONTH_NAMES[month - 1] || "";
 }
 
 function toDate(value) {
@@ -591,6 +593,17 @@ function stringValue(value) {
 function numberValue(value) {
   const number = Number(value ?? 0);
   return Number.isFinite(number) ? number : 0;
+}
+
+function monthNumberValue(value, fallbackMonth) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric >= 1 && numeric <= 12) return numeric;
+  const text = String(value ?? "").trim().toLowerCase();
+  if (text) {
+    const index = Array.from({length: 12}, (_, i) => monthName(i + 1).toLowerCase()).indexOf(text);
+    if (index >= 0) return index + 1;
+  }
+  return Number(fallbackMonth) || "";
 }
 
 function requireEnv(name) {
