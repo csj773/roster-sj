@@ -30,8 +30,7 @@ jobs:
       TOTAL_PAY_FIELD: Salary
       UPDATED_AT_FIELD: updatedAt
       DEDUPE_KEY_FIELDS: employeeId,payPeriod
-      GOOGLE_SHEETS_SPREADSHEET_ID: 1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc
-      SALARY_SPREADSHEET_ID: ${{ secrets.SALARY_SPREADSHEET_ID || '1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc' }}
+      SALARY_SPREADSHEET_ID: ${{ secrets.SALARY_SPREADSHEET_ID }}
       SALARY_WRITE_RANGE: ${{ vars.SALARY_WRITE_RANGE || 'Salary!A2' }}
       SALARY_CLEAR_RANGE: ${{ vars.SALARY_CLEAR_RANGE || 'Salary!A2:AB' }}
       SALARY_MONTH_CELL: ${{ vars.SALARY_MONTH_CELL }}

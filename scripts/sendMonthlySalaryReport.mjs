@@ -15,9 +15,7 @@ const config = {
   monthField: process.env.MONTH_FIELD || "Month",
   totalPayField: process.env.TOTAL_PAY_FIELD || "Salary",
   updatedAtField: process.env.UPDATED_AT_FIELD || "updatedAt",
-  salarySpreadsheetId: process.env.SALARY_SPREADSHEET_ID ||
-    process.env.GOOGLE_SHEETS_SPREADSHEET_ID ||
-    "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc",
+  salarySpreadsheetId: process.env.SALARY_SPREADSHEET_ID || "",
   salaryWriteRange: process.env.SALARY_WRITE_RANGE || "Salary!A1",
   salaryClearRange: process.env.SALARY_CLEAR_RANGE || "",
   salaryMonthCell: process.env.SALARY_MONTH_CELL || "",
@@ -218,6 +216,7 @@ function buildDedupeKey(id, data) {
 
 async function updateSalarySheet({auth, year, month, rows, totalPay}) {
   const spreadsheetId = requireConfig("SALARY_SPREADSHEET_ID", config.salarySpreadsheetId);
+  console.log(`Salary sheet target: https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`);
   const sheets = google.sheets({version: "v4", auth});
   const sheetTitle = sheetTitleFromRange(config.salaryWriteRange);
   const startCell = startCellFromRange(config.salaryWriteRange);
