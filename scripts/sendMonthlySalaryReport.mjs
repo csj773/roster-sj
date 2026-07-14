@@ -1,5 +1,6 @@
-import admin from "firebase-admin";
-import ExcelJS from "exceljs";
+import {cert, getApps, initializeApp} from "firebase-admin/app";
+import {FieldValue, Timestamp, getFirestore} from "firebase-admin/firestore";
+import {google} from "googleapis";
 import nodemailer from "nodemailer";
 import {mkdir} from "node:fs/promises";
 import path from "node:path";
@@ -11,6 +12,11 @@ const config = {
   paymentDateField: process.env.PAYMENT_DATE_FIELD || "paymentDate",
   totalPayField: process.env.TOTAL_PAY_FIELD || "TotalPay",
   updatedAtField: process.env.UPDATED_AT_FIELD || "updatedAt",
+  salarySpreadsheetId: process.env.SALARY_SPREADSHEET_ID || "",
+  salaryWriteRange: process.env.SALARY_WRITE_RANGE || "Salary!A1",
+  salaryClearRange: process.env.SALARY_CLEAR_RANGE || "",
+  salaryMonthCell: process.env.SALARY_MONTH_CELL || "",
+  salaryTotalCell: process.env.SALARY_TOTAL_CELL || "",
   dedupeKeyFields: (process.env.DEDUPE_KEY_FIELDS || "employeeId,payPeriod")
     .split(",")
     .map((field) => field.trim())
@@ -19,7 +25,7 @@ const config = {
 
 initializeFirebase();
 
-const db = admin.firestore();
+const db = getFirestore();
 const args = parseArgs(process.argv.slice(2));
 const now = new Date();
 const target = args.month ? parseMonth(args.month) : {
@@ -53,7 +59,7 @@ async function runMonthlySalaryReport({year, month, force = false}) {
 
       transaction.set(runRef, {
         status: "running",
-        startedAt: admin.firestore.FieldValue.serverTimestamp(),
+        startedAt: FieldValue.serverTimestamp(),
         runner: "github-actions",
       }, {merge: true});
     });
@@ -65,15 +71,18 @@ async function runMonthlySalaryReport({year, month, force = false}) {
     const fileName = `Salary_${monthName(month)}_${year}.xlsx`;
     const outputDir = path.join(process.cwd(), "artifacts", "salary-reports");
     const outputPath = path.join(outputDir, fileName);
+    const googleAuth = createGoogleAuth();
 
     await mkdir(outputDir, {recursive: true});
-    await buildWorkbook({year, month, rows, totalPay, outputPath});
+    await updateSalarySheet({auth: googleAuth, year, month, rows, totalPay});
+    await exportSalarySpreadsheet({auth: googleAuth, outputPath});
     await sendEmail({year, month, fileName, outputPath, rowCount: rows.length, totalPay});
 
     await runRef.set({
       status: "sent",
-      sentAt: admin.firestore.FieldValue.serverTimestamp(),
+      sentAt: FieldValue.serverTimestamp(),
       fileName,
+      spreadsheetId: config.salarySpreadsheetId,
       rowCount: rows.length,
       totalPay,
       runner: "github-actions",
@@ -83,7 +92,7 @@ async function runMonthlySalaryReport({year, month, force = false}) {
   } catch (error) {
     await runRef.set({
       status: "failed",
-      failedAt: admin.firestore.FieldValue.serverTimestamp(),
+      failedAt: FieldValue.serverTimestamp(),
       error: error.message,
       runner: "github-actions",
     }, {merge: true});
@@ -95,8 +104,8 @@ async function fetchLatestPaymentRows(year, month) {
   const {start, end} = monthBounds(year, month);
   const snapshot = await db
     .collection(config.paymentsCollection)
-    .where(config.paymentDateField, ">=", admin.firestore.Timestamp.fromDate(start))
-    .where(config.paymentDateField, "<", admin.firestore.Timestamp.fromDate(end))
+    .where(config.paymentDateField, ">=", Timestamp.fromDate(start))
+    .where(config.paymentDateField, "<", Timestamp.fromDate(end))
     .get();
 
   const latestByKey = new Map();
@@ -139,68 +148,77 @@ function buildDedupeKey(id, data) {
   return parts.every(Boolean) ? parts.join("|") : id;
 }
 
-async function buildWorkbook({year, month, rows, totalPay, outputPath}) {
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = "roster-sj salary workflow";
-  workbook.created = new Date();
-
-  const summary = workbook.addWorksheet("Summary");
-  summary.columns = [
-    {header: "Metric", key: "metric", width: 24},
-    {header: "Value", key: "value", width: 24},
-  ];
-  summary.addRows([
-    {metric: "Report Month", value: `${monthName(month)} ${year}`},
-    {metric: "Unique Payment Rows", value: rows.length},
-    {metric: "TotalPay", value: totalPay},
-    {metric: "Dedupe Key Fields", value: config.dedupeKeyFields.join(", ")},
-  ]);
-  summary.getCell("B3").numFmt = "$#,##0.00";
-  styleHeader(summary.getRow(1));
-
-  const payments = workbook.addWorksheet("Payments");
-  payments.columns = [
-    {header: "Payment Doc ID", key: "id", width: 32},
-    {header: "Employee ID", key: "employeeId", width: 18},
-    {header: "Employee Name", key: "employeeName", width: 24},
-    {header: "Pay Period", key: "payPeriod", width: 18},
-    {header: "Payment Date", key: "paymentDate", width: 16},
-    {header: "TotalPay", key: "totalPay", width: 16},
-    {header: "Updated At", key: "updatedAt", width: 22},
+async function updateSalarySheet({auth, year, month, rows, totalPay}) {
+  const spreadsheetId = requireConfig("SALARY_SPREADSHEET_ID", config.salarySpreadsheetId);
+  const sheets = google.sheets({version: "v4", auth});
+  const monthLabel = `${monthName(month)} ${year}`;
+  const values = [
+    ["Payment Doc ID", "Employee ID", "Employee Name", "Pay Period", "Payment Date", "TotalPay", "Updated At"],
+    ...rows.map((row) => [
+      row.id,
+      row.employeeId,
+      row.employeeName,
+      row.payPeriod,
+      formatDate(row.paymentDate),
+      row.totalPay,
+      formatDateTime(row.updatedAt),
+    ]),
+    ["", "", "", "Total", "", totalPay, ""],
   ];
 
-  payments.addRows(rows.map((row) => ({
-    id: row.id,
-    employeeId: row.employeeId,
-    employeeName: row.employeeName,
-    payPeriod: row.payPeriod,
-    paymentDate: row.paymentDate,
-    totalPay: row.totalPay,
-    updatedAt: row.updatedAt,
-  })));
+  if (config.salaryClearRange) {
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: config.salaryClearRange,
+    });
+  }
 
-  styleHeader(payments.getRow(1));
-  payments.getColumn("paymentDate").numFmt = "yyyy-mm-dd";
-  payments.getColumn("updatedAt").numFmt = "yyyy-mm-dd hh:mm";
-  payments.getColumn("totalPay").numFmt = "$#,##0.00";
-  payments.views = [{state: "frozen", ySplit: 1}];
-  payments.autoFilter = "A1:G1";
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: config.salaryWriteRange,
+    valueInputOption: "USER_ENTERED",
+    requestBody: {values},
+  });
 
-  const totalRow = payments.addRow({payPeriod: "Total", totalPay});
-  totalRow.font = {bold: true};
-  totalRow.getCell("totalPay").numFmt = "$#,##0.00";
+  const extraRanges = [];
+  const extraValues = [];
 
-  await workbook.xlsx.writeFile(outputPath);
+  if (config.salaryMonthCell) {
+    extraRanges.push(config.salaryMonthCell);
+    extraValues.push([[monthLabel]]);
+  }
+
+  if (config.salaryTotalCell) {
+    extraRanges.push(config.salaryTotalCell);
+    extraValues.push([[totalPay]]);
+  }
+
+  if (extraRanges.length) {
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        valueInputOption: "USER_ENTERED",
+        data: extraRanges.map((range, index) => ({
+          range,
+          values: extraValues[index],
+        })),
+      },
+    });
+  }
 }
 
-function styleHeader(row) {
-  row.font = {bold: true, color: {argb: "FFFFFFFF"}};
-  row.fill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: {argb: "FF1F4E79"},
-  };
-  row.alignment = {vertical: "middle"};
+async function exportSalarySpreadsheet({auth, outputPath}) {
+  const spreadsheetId = requireConfig("SALARY_SPREADSHEET_ID", config.salarySpreadsheetId);
+  const drive = google.drive({version: "v3", auth});
+  const response = await drive.files.export(
+    {
+      fileId: spreadsheetId,
+      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    },
+    {responseType: "arraybuffer"},
+  );
+
+  await import("node:fs/promises").then(({writeFile}) => writeFile(outputPath, Buffer.from(response.data)));
 }
 
 async function sendEmail({year, month, fileName, outputPath, rowCount, totalPay}) {
@@ -217,10 +235,11 @@ async function sendEmail({year, month, fileName, outputPath, rowCount, totalPay}
   const monthLabel = `${monthName(month)} ${year}`;
   await transporter.sendMail({
     from: process.env.MAIL_FROM || process.env.MAIL_USER,
-    to: requireEnv("MAIL_TO"),
+    to: process.env.MAIL_TO || "sjchoi787@gmail.com",
     subject: `Salary Report - ${monthLabel}`,
     text: [
       `Attached is the salary report for ${monthLabel}.`,
+      `The Google Sheets Salary tab was updated before export.`,
       "",
       `Unique payment rows: ${rowCount}`,
       `TotalPay: ${formatCurrency(totalPay)}`,
@@ -230,18 +249,29 @@ async function sendEmail({year, month, fileName, outputPath, rowCount, totalPay}
 }
 
 function initializeFirebase() {
-  if (admin.apps.length) {
+  if (getApps().length) {
     return;
   }
 
   if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-    admin.initializeApp({
-      credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)),
+    initializeApp({
+      credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)),
     });
     return;
   }
 
-  admin.initializeApp();
+  initializeApp();
+}
+
+function createGoogleAuth() {
+  const credentials = JSON.parse(requireEnv("FIREBASE_SERVICE_ACCOUNT_JSON"));
+  return new google.auth.GoogleAuth({
+    credentials,
+    scopes: [
+      "https://www.googleapis.com/auth/spreadsheets",
+      "https://www.googleapis.com/auth/drive.readonly",
+    ],
+  });
 }
 
 function parseArgs(argv) {
@@ -368,6 +398,40 @@ function requireEnv(name) {
     throw new Error(`Missing required environment variable: ${name}`);
   }
   return value;
+}
+
+function requireConfig(name, value) {
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return value;
+}
+
+function formatDate(value) {
+  if (!value) {
+    return "";
+  }
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: config.timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(value);
+}
+
+function formatDateTime(value) {
+  if (!value) {
+    return "";
+  }
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: config.timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(value);
 }
 
 function formatCurrency(value) {

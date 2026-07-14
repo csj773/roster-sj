@@ -28,6 +28,11 @@ jobs:
       TOTAL_PAY_FIELD: TotalPay
       UPDATED_AT_FIELD: updatedAt
       DEDUPE_KEY_FIELDS: employeeId,payPeriod
+      SALARY_SPREADSHEET_ID: ${{ secrets.SALARY_SPREADSHEET_ID }}
+      SALARY_WRITE_RANGE: ${{ vars.SALARY_WRITE_RANGE || 'Salary!A1' }}
+      SALARY_CLEAR_RANGE: ${{ vars.SALARY_CLEAR_RANGE }}
+      SALARY_MONTH_CELL: ${{ vars.SALARY_MONTH_CELL }}
+      SALARY_TOTAL_CELL: ${{ vars.SALARY_TOTAL_CELL }}
       FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
       MAIL_HOST: ${{ secrets.MAIL_HOST }}
       MAIL_PORT: ${{ secrets.MAIL_PORT }}
@@ -35,7 +40,7 @@ jobs:
       MAIL_USER: ${{ secrets.MAIL_USER }}
       MAIL_PASS: ${{ secrets.MAIL_PASS }}
       MAIL_FROM: ${{ secrets.MAIL_FROM }}
-      MAIL_TO: ${{ secrets.MAIL_TO }}
+      MAIL_TO: sjchoi787@gmail.com
     steps:
       - uses: actions/checkout@v4
 
@@ -45,7 +50,10 @@ jobs:
           cache: npm
 
       - name: Install salary report runtime dependencies
-        run: npm install --no-save --package-lock=false exceljs firebase-admin nodemailer
+        run: |
+          rm -rf node_modules /tmp/salary-runtime
+          npm install --prefix /tmp/salary-runtime --no-package-lock --omit=dev firebase-admin@13.10.0 googleapis@131.0.0 nodemailer@9.0.3
+          ln -s /tmp/salary-runtime/node_modules node_modules
 
       - name: Send monthly salary report
         run: |
