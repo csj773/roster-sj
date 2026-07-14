@@ -165,6 +165,47 @@ function monthYearFromKst(date, fallbackDateFormatted) {
   };
 }
 
+function kstMonthStartUtcMs(year, monthIndex) {
+  return Date.UTC(year, monthIndex, 1) - KST_OFFSET_MS;
+}
+
+function monthYearFromStayWindow(riDate, roDate, fallbackDateFormatted) {
+  const riValid = riDate instanceof Date && !isNaN(riDate);
+  const roValid = roDate instanceof Date && !isNaN(roDate);
+  if (!riValid || !roValid || riDate >= roDate) return monthYearFromKst(roDate || riDate, fallbackDateFormatted);
+
+  const monthHours = new Map();
+  let cursor = riDate.getTime();
+  const end = roDate.getTime();
+
+  while (cursor < end) {
+    const kstCursor = new Date(cursor + KST_OFFSET_MS);
+    const year = kstCursor.getUTCFullYear();
+    const monthIndex = kstCursor.getUTCMonth();
+    const nextMonthStart = kstMonthStartUtcMs(year, monthIndex + 1);
+    const segmentEnd = Math.min(end, nextMonthStart);
+    const key = `${year}-${monthIndex}`;
+    monthHours.set(key, (monthHours.get(key) || 0) + (segmentEnd - cursor));
+    cursor = segmentEnd;
+  }
+
+  let selectedKey = null;
+  let selectedMs = -1;
+  for (const [key, ms] of monthHours.entries()) {
+    if (ms >= selectedMs) {
+      selectedKey = key;
+      selectedMs = ms;
+    }
+  }
+
+  if (!selectedKey) return monthYearFromKst(roDate, fallbackDateFormatted);
+  const [year, monthIndex] = selectedKey.split("-").map(Number);
+  return {
+    Year: String(year),
+    Month: MONTH_NAMES[monthIndex] || "Unknown",
+  };
+}
+
 function monthForSheet(month) {
   if (typeof month === "number") return month;
   const monthNum = MONTH_NAME_TO_NUMBER[String(month || "").toLowerCase()];
@@ -291,8 +332,10 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       Total = calculateQuickTurnTotal(Rate);
     }
 
-    const assignedDate = roValid || riValid;
-    const assigned = monthYearFromKst(assignedDate, DateFormatted);
+    const isInboundLayover = To === "ICN" && From !== "ICN" && Hours >= QUICK_TURN_THRESHOLD_HOURS;
+    const assigned = isInboundLayover
+      ? monthYearFromStayWindow(riValid, roValid, DateFormatted)
+      : monthYearFromKst(roValid || riValid, DateFormatted);
 
     // ===== 교통비 =====
     const TransportFee = TRANSPORT_FEE_PER_FLIGHT;
