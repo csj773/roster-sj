@@ -33,6 +33,29 @@ const AIRPORT_TIMEZONES = {
 };
 
 // ------------------- 유틸 함수 -------------------
+function getTimeZoneOffsetMs(date, timeZone) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+  const parts = Object.fromEntries(formatter.formatToParts(date).map(part => [part.type, part.value]));
+  const zonedAsUtc = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour),
+    Number(parts.minute),
+    Number(parts.second)
+  );
+  return zonedAsUtc - date.getTime();
+}
+
 function parseHHMMOffset(str, baseDateStr, airport) {
   if(!str) return null;
   const match = str.match(/^(\d{2})(\d{2})([+-]\d+)?$/);
@@ -42,16 +65,18 @@ function parseHHMMOffset(str, baseDateStr, airport) {
 
   // baseDateStr 형식: YYYY-MM-DD
   const [year, month, day] = baseDateStr.split("-").map(Number);
-  const local = new Date(Date.UTC(year, month - 1, day, hh, mm));
+  const dayOffset = offset ? Number(offset) : 0;
+  const localWallTimeAsUtc = Date.UTC(year, month - 1, day + dayOffset, Number(hh), Number(mm));
 
-  // 실제 현지 타임존과 UTC 시간의 차이를 계산 → DST 자동 반영
-  const utcTime = new Date(local.toLocaleString("en-US", { timeZone: "UTC" }));
-  const localTime = new Date(local.toLocaleString("en-US", { timeZone: tz }));
-  const offsetMs = localTime - utcTime;
+  // 로컬 시스템 타임존 파싱을 피하고, 공항 타임존의 offset만 이용해 UTC instant로 변환한다.
+  const firstGuess = new Date(localWallTimeAsUtc);
+  let offsetMs = getTimeZoneOffsetMs(firstGuess, tz);
+  let utcTime = new Date(localWallTimeAsUtc - offsetMs);
 
-  const finalDate = new Date(local.getTime() - offsetMs);
-  if(offset) finalDate.setUTCDate(finalDate.getUTCDate() + Number(offset));
-  return finalDate;
+  // DST 전환 경계에서는 변환 후 offset이 달라질 수 있어 한 번 더 보정한다.
+  offsetMs = getTimeZoneOffsetMs(utcTime, tz);
+  utcTime = new Date(localWallTimeAsUtc - offsetMs);
+  return utcTime;
 }
 
 function convertDate(input) {
@@ -60,9 +85,9 @@ function convertDate(input) {
   if(!m) return null;
   const day = String(m[0]).padStart(2,"0");
   const now = new Date();
-  let month = now.getMonth()+1;
-  if(parseInt(day) < now.getDate()-15) month +=1;
-  let year = now.getFullYear();
+  let month = now.getUTCMonth()+1;
+  if(parseInt(day) < now.getUTCDate()-15) month +=1;
+  let year = now.getUTCFullYear();
   if(month>12){ month=1; year+=1; }
   return `${year}-${String(month).padStart(2,"0")}-${day}`;
 }
@@ -142,8 +167,8 @@ function parseRosterDateText(input) {
 function resolveRosterDateSequence(rows, dateIndex) {
   const resolved = new WeakMap();
   const now = new Date();
-  let year = now.getFullYear();
-  let month = now.getMonth() + 1;
+  let year = now.getUTCFullYear();
+  let month = now.getUTCMonth() + 1;
   let lastDay = null;
   let currentDate = null;
 
@@ -313,8 +338,8 @@ CREATED_BY_GCALJS
         summary: activity,
         location: `${from} → ${to}`,
         description,
-        start:{dateTime:startLocal.toISOString(), timeZone: AIRPORT_TIMEZONES[from] || "Asia/Seoul"},
-        end:{dateTime:endLocal.toISOString(), timeZone: AIRPORT_TIMEZONES[to] || "Asia/Seoul"},
+        start:{dateTime:startLocal.toISOString(), timeZone: "UTC"},
+        end:{dateTime:endLocal.toISOString(), timeZone: "UTC"},
       }
     });
     console.log(`✅ 비행 추가 (DST): ${activity} (${from}→${to}) [${startLocal.toISOString()}]`);
