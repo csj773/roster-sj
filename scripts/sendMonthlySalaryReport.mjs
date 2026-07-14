@@ -29,12 +29,13 @@ initializeFirebase();
 const db = getFirestore();
 const args = parseArgs(process.argv.slice(2));
 const now = new Date();
+const isManualRun = process.env.GITHUB_EVENT_NAME === "workflow_dispatch";
 const target = args.month ? parseMonth(args.month) : {
   year: getPart(now, config.timeZone, "year"),
   month: getPart(now, config.timeZone, "month"),
 };
 
-if (!args.month && !args.force && !isLastDayOfMonth(now, config.timeZone)) {
+if (!args.month && !args.force && !isManualRun && !isLastDayOfMonth(now, config.timeZone)) {
   console.log("Not the last day of the month in KST; skipping salary report.");
   process.exit(0);
 }

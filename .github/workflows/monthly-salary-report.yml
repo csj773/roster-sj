@@ -63,7 +63,7 @@ jobs:
           if [ -n "${{ inputs.month }}" ]; then
             args+=("--month=${{ inputs.month }}")
           fi
-          if [ "${{ inputs.force }}" = "true" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "${{ inputs.force }}" = "true" ]; then
             args+=("--force")
           fi
           node scripts/sendMonthlySalaryReport.mjs "${args[@]}"
