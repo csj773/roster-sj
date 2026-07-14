@@ -63,15 +63,12 @@ const userEmail = process.env.USER_ID || "";
 const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID || "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
 const sheetName = process.env.ROSTER_SHEET_NAME || "Roster1";
 
-let sheetsApi = null;
-if (process.env.GOOGLE_SHEETS_CREDENTIALS) {
-  const sheetsCredentials = requiredJsonEnv("GOOGLE_SHEETS_CREDENTIALS");
-  const sheetsAuth = new google.auth.GoogleAuth({
-    credentials: sheetsCredentials,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-  });
-  sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
-}
+const sheetsCredentials = requiredJsonEnv("GOOGLE_SHEETS_CREDENTIALS");
+const sheetsAuth = new google.auth.GoogleAuth({
+  credentials: sheetsCredentials,
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+});
+const sheetsApi = google.sheets({ version: "v4", auth: sheetsAuth });
 
 function findCsvFile(filename = "my_flightlog.csv", dir = process.cwd()) {
   for (const f of fs.readdirSync(dir)) {
@@ -197,10 +194,12 @@ async function uploadRosterDoc(docData, index) {
 }
 
 async function updateRosterSheet(values) {
-  if (!sheetsApi) {
-    console.warn("⚠️ GOOGLE_SHEETS_CREDENTIALS 없음: Google Sheets 저장은 건너뜁니다.");
-    return;
-  }
+  console.log(`🚀 Google Sheets ${sheetName} 초기화 및 업로드 시작: ${spreadsheetId}`);
+
+  await sheetsApi.spreadsheets.values.clear({
+    spreadsheetId,
+    range: `${sheetName}!A:O`,
+  });
 
   await sheetsApi.spreadsheets.values.update({
     spreadsheetId,
