@@ -13,7 +13,9 @@ const config = {
   paymentDateField: process.env.PAYMENT_DATE_FIELD || "paymentDate",
   totalPayField: process.env.TOTAL_PAY_FIELD || "TotalPay",
   updatedAtField: process.env.UPDATED_AT_FIELD || "updatedAt",
-  salarySpreadsheetId: process.env.SALARY_SPREADSHEET_ID || "",
+  salarySpreadsheetId: process.env.SALARY_SPREADSHEET_ID ||
+    process.env.GOOGLE_SHEETS_SPREADSHEET_ID ||
+    "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc",
   salaryWriteRange: process.env.SALARY_WRITE_RANGE || "Salary!A1",
   salaryClearRange: process.env.SALARY_CLEAR_RANGE || "",
   salaryMonthCell: process.env.SALARY_MONTH_CELL || "",
