@@ -13,7 +13,7 @@ const config = {
   paymentDateField: process.env.PAYMENT_DATE_FIELD || "paymentDate",
   yearField: process.env.YEAR_FIELD || "Year",
   monthField: process.env.MONTH_FIELD || "Month",
-  totalPayField: process.env.TOTAL_PAY_FIELD || "TotalPay",
+  totalPayField: process.env.TOTAL_PAY_FIELD || "Salary",
   updatedAtField: process.env.UPDATED_AT_FIELD || "updatedAt",
   salarySpreadsheetId: process.env.SALARY_SPREADSHEET_ID ||
     process.env.GOOGLE_SHEETS_SPREADSHEET_ID ||
@@ -73,7 +73,7 @@ async function runMonthlySalaryReport({year, month, force = false}) {
 
   try {
     const rows = await fetchLatestPaymentRows(year, month);
-    const totalPay = rows.reduce((sum, row) => sum + row.totalPay, 0);
+    const totalPay = rows.reduce((sum, row) => sum + row.reportPay, 0);
     const fileName = `Salary_${monthName(month)}_${year}.xlsx`;
     const outputDir = path.join(process.cwd(), "artifacts", "salary-reports");
     const outputPath = path.join(outputDir, fileName);
@@ -171,7 +171,9 @@ function matchesTargetMonth(data, month) {
 function normalizePaymentDoc(id, data) {
   const paymentDate = toDate(data[config.paymentDateField]);
   const updatedAt = toDate(data[config.updatedAtField]) || paymentDate || new Date(0);
-  const totalPay = Number(data[config.totalPayField] || 0);
+  const salary = numberValue(data.Salary);
+  const totalPay = Number(data.TotalPay || 0);
+  const reportPay = numberValue(data[config.totalPayField]);
 
   return {
     id,
@@ -192,7 +194,7 @@ function normalizePaymentDoc(id, data) {
     hourlyRate: numberValue(data.HourlyRate),
     basicSalary: numberValue(data.BasicSalary),
     basicAllowance: numberValue(data.BasicAllowance),
-    salary: numberValue(data.Salary),
+    salary,
     etPay: numberValue(data.ETpay),
     ntPay: numberValue(data.NTpay),
     otPay: numberValue(data.OTpay),
@@ -201,6 +203,7 @@ function normalizePaymentDoc(id, data) {
     taxRate: numberValue(data.TaxRate),
     tax: numberValue(data.Tax),
     totalPay,
+    reportPay,
     updatedAt,
     updatedAtMillis: updatedAt.getTime(),
   };
@@ -244,6 +247,7 @@ async function updateSalarySheet({auth, year, month, rows, totalPay}) {
       "Deduction",
       "TaxRate",
       "Tax",
+      "ReportSalary",
       "TotalPay",
       "Updated At",
     ],
@@ -273,10 +277,11 @@ async function updateSalarySheet({auth, year, month, rows, totalPay}) {
       row.deduction,
       row.taxRate,
       row.tax,
+      row.reportPay,
       row.totalPay,
       formatDateTime(row.updatedAt),
     ]),
-    ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "Total", totalPay, ""],
+    ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "Total Salary", totalPay, ""],
   ];
 
   if (config.salaryClearRange) {
@@ -391,7 +396,7 @@ async function sendEmail({year, month, fileName, outputPath, rowCount, totalPay}
       `The Google Sheets Salary tab was updated before export.`,
       "",
       `Unique payment rows: ${rowCount}`,
-      `TotalPay: ${formatCurrency(totalPay)}`,
+      `Salary: ${formatCurrency(totalPay)}`,
     ].join("\n"),
     attachments: [{filename: fileName, path: outputPath}],
   });
