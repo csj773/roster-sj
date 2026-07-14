@@ -11,6 +11,11 @@ export const PERDIEM_RATE = {
   DAC: 33, NRT: 33, HKG: 33
 };
 
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MONTH_NAME_TO_NUMBER = Object.fromEntries(MONTH_NAMES.map((name, index) => [name.toLowerCase(), index + 1]));
+const WEEKDAY_INDEX = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
 // ------------------- Date 변환 -------------------
 export function convertDate(input) {
   if (!input || typeof input !== "string") return input;
@@ -18,7 +23,7 @@ export function convertDate(input) {
   if (parts.length < 2) return input;
 
   const now = new Date();
-  const year = now.getFullYear();
+  const year = now.getUTCFullYear();
 
   const monthMap = {
     Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",
@@ -30,7 +35,7 @@ export function convertDate(input) {
     month = monthMap[parts[0]];
     dayStr = parts[1].padStart(2, "0");
   } else {
-    month = String(now.getMonth() + 1).padStart(2, "0");
+    month = String(now.getUTCMonth() + 1).padStart(2, "0");
     dayStr = parts[1].padStart(2, "0");
   }
 
@@ -44,15 +49,108 @@ function parseHHMMOffset(str, baseDateStr) {
   if (!match) return null;
   const [, hh, mm, offset] = match;
   const baseDateParts = baseDateStr.split(".");
-  let date = new Date(
+  const dayOffset = offset ? Number(offset) : 0;
+  return new Date(Date.UTC(
     Number(baseDateParts[0]),
     Number(baseDateParts[1]) - 1,
-    Number(baseDateParts[2]),
+    Number(baseDateParts[2]) + dayOffset,
     Number(hh),
     Number(mm)
-  );
-  if (offset) date.setDate(date.getDate() + Number(offset));
-  return date;
+  ));
+}
+
+function formatDateDots(year, month, day) {
+  return `${year}.${String(month).padStart(2, "0")}.${String(day).padStart(2, "0")}`;
+}
+
+function incrementMonth(year, month) {
+  return month === 12 ? { year: year + 1, month: 1 } : { year, month: month + 1 };
+}
+
+function addMonths(year, month, delta) {
+  const date = new Date(Date.UTC(year, month - 1 + delta, 1));
+  return { year: date.getUTCFullYear(), month: date.getUTCMonth() + 1 };
+}
+
+function findMonthMatchingWeekday(year, month, day, weekdayToken) {
+  const expected = WEEKDAY_INDEX[weekdayToken];
+  if (expected === undefined) return null;
+
+  for (const delta of [0, 1, 2, -1]) {
+    const candidate = addMonths(year, month, delta);
+    const actual = new Date(Date.UTC(candidate.year, candidate.month - 1, day)).getUTCDay();
+    if (actual === expected) return candidate;
+  }
+  return null;
+}
+
+function parseRosterDateText(input) {
+  if (!input || typeof input !== "string") return null;
+  const dayMatch = input.match(/\d{1,2}/);
+  if (!dayMatch) return null;
+
+  let explicitMonth = null;
+  let weekday = null;
+  const tokens = input.match(/\b([A-Za-z]{3,9})\b/g) || [];
+  for (const token of tokens) {
+    const key = token.toLowerCase();
+    if (MONTH_NAME_TO_NUMBER[key]) {
+      explicitMonth = MONTH_NAME_TO_NUMBER[key];
+      break;
+    }
+    if (WEEKDAY_INDEX[key] !== undefined) weekday = key;
+  }
+
+  return { day: Number(dayMatch[0]), explicitMonth, weekday };
+}
+
+function resolveRosterDateSequence(rows, dateIndex = 0) {
+  const resolved = new WeakMap();
+  const now = new Date();
+  let year = now.getUTCFullYear();
+  let month = now.getUTCMonth() + 1;
+  let lastDay = null;
+  let currentDate = null;
+
+  for (const row of rows) {
+    const parsed = parseRosterDateText(row[dateIndex]);
+
+    if (parsed) {
+      if (parsed.explicitMonth) {
+        if (parsed.explicitMonth < month && month - parsed.explicitMonth > 6) year += 1;
+        month = parsed.explicitMonth;
+      } else if (lastDay !== null && parsed.weekday && parsed.day < lastDay) {
+        ({ year, month } = incrementMonth(year, month));
+      } else if (parsed.weekday) {
+        const matched = findMonthMatchingWeekday(year, month, parsed.day, parsed.weekday);
+        if (matched) ({ year, month } = matched);
+      }
+
+      currentDate = formatDateDots(year, month, parsed.day);
+      lastDay = parsed.day;
+    }
+
+    if (currentDate) resolved.set(row, currentDate);
+  }
+
+  return resolved;
+}
+
+function monthYearFromKst(date, fallbackDateFormatted) {
+  const target = date instanceof Date && !isNaN(date) ? new Date(date.getTime() + KST_OFFSET_MS) : null;
+  if (target) {
+    return {
+      Year: String(target.getUTCFullYear()),
+      Month: MONTH_NAMES[target.getUTCMonth()] || "Unknown",
+    };
+  }
+
+  const dfParts = String(fallbackDateFormatted || "").split(".");
+  const monthIndex = Number(dfParts[1] || "1") - 1;
+  return {
+    Year: dfParts[0] || String(new Date().getUTCFullYear()),
+    Month: MONTH_NAMES[monthIndex] || "Unknown",
+  };
 }
 
 // ------------------- PerDiem 계산 -------------------
@@ -67,8 +165,8 @@ function calculatePerDiem(riDate, roDate, rate) {
 export async function generatePerDiemList(rosterJsonPath, owner) {
   const raw = JSON.parse(fs.readFileSync(rosterJsonPath, "utf-8"));
   const rows = raw.values.slice(1);
-
-  rows.sort((a, b) => new Date(convertDate(a[0])) - new Date(convertDate(b[0])));
+  const resolvedDates = resolveRosterDateSequence(rows);
+  const resolvedDateForRow = (row) => resolvedDates.get(row) || convertDate(row[0]);
 
   const perdiemList = [];
   const now = new Date();
@@ -95,22 +193,15 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
     const From = FromRaw?.trim() || "UNKNOWN";
     const To = ToRaw?.trim() || "UNKNOWN";
 
-    let DateFormatted = convertDate(DateStr);
+    let DateFormatted = resolvedDateForRow(row);
     if (!DateFormatted || !DateFormatted.includes(".")) {
-      DateFormatted = i > 0 ? convertDate(flightRows[i - 1][0])
-        : `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, "0")}.${String(now.getDate()).padStart(2, "0")}`;
+      DateFormatted = i > 0 ? resolvedDateForRow(flightRows[i - 1])
+        : `${now.getUTCFullYear()}.${String(now.getUTCMonth() + 1).padStart(2, "0")}.${String(now.getUTCDate()).padStart(2, "0")}`;
     }
 
-    // ✅ Month를 Oct 형식으로 변환
     const dfParts = DateFormatted.split(".");
-    const Year = dfParts[0] || String(now.getFullYear());
+    const Year = dfParts[0] || String(now.getUTCFullYear());
     const monthNum = (dfParts[1] || "01").padStart(2, "0");
-    const monthNameMap = {
-      "01": "Jan", "02": "Feb", "03": "Mar", "04": "Apr",
-      "05": "May", "06": "Jun", "07": "Jul", "08": "Aug",
-      "09": "Sep", "10": "Oct", "11": "Nov", "12": "Dec"
-    };
-    const Month = monthNameMap[monthNum] || "Unknown";
 
     let Rate = From === "ICN" ? 0 : PERDIEM_RATE[From] || 3;
     let riDate = null, roDate = null;
@@ -122,7 +213,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       if (i === 0) {
         const curMonthNum = Number(monthNum);
         const prevMonthNum = curMonthNum - 1 >= 1 ? curMonthNum - 1 : 12;
-        const prevMonth = String(prevMonthNum).padStart(2, "0");
+        const prevMonth = MONTH_NAMES[prevMonthNum - 1] || "Unknown";
         const prevYear = prevMonthNum === 12 ? String(Number(Year) - 1) : Year;
 
         const prevSnapshot = await db.collection("Perdiem")
@@ -140,7 +231,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
         }
       } else {
         const prevRow = flightRows[i - 1];
-        riDate = parseHHMMOffset(prevRow[11], convertDate(prevRow[0]));
+        riDate = parseHHMMOffset(prevRow[11], resolvedDateForRow(prevRow));
       }
     }
     // ===== 출발편 (ICN → 해외) =====
@@ -158,11 +249,11 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
     if (To === "ICN" && QUICK_DESTS.includes(From) && i > 0) {
       const prevRow = flightRows[i - 1];
       if (prevRow[6] === "ICN" && prevRow[9] === From) {
-        const prevRI = parseHHMMOffset(prevRow[11], convertDate(prevRow[0]));
+        const prevRI = parseHHMMOffset(prevRow[11], resolvedDateForRow(prevRow));
         if (prevRI instanceof Date && !isNaN(prevRI)) {
           isQuickTurnReturn = true;
           riDate = prevRI;
-          if (!DateStr || !DateStr.trim()) DateFormatted = convertDate(prevRow[0]);
+          if (!DateStr || !DateStr.trim()) DateFormatted = resolvedDateForRow(prevRow);
         }
       }
     }
@@ -179,6 +270,8 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       Rate = 33;
     }
 
+    const assigned = monthYearFromKst(roValid, DateFormatted);
+
     // ===== 교통비 =====
     let TransportFee = 14000;
     if (isQuickTurnReturn) TransportFee = 14000;
@@ -194,8 +287,8 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       Rate,
       Total,
       TransportFee,
-      Month,
-      Year
+      Month: assigned.Month,
+      Year: assigned.Year
     });
   }
 
