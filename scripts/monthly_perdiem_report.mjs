@@ -4,6 +4,8 @@ import { google } from "googleapis";
 
 const SPREADSHEET_ID = process.env.GOOGLE_SHEETS_SPREADSHEET_ID || "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
 const SHEET_NAME = process.env.PERDIEM_SHEET_NAME || "Perdiem";
+const SALARY_SPREADSHEET_ID = process.env.SALARY_SPREADSHEET_ID || "";
+const SALARY_SHEET_NAME = process.env.SALARY_SHEET_NAME || "Salary";
 const OUTPUT_DIR = process.env.PERDIEM_REPORT_DIR || "outputs";
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -87,7 +89,7 @@ async function main() {
 
   const auth = new google.auth.GoogleAuth({
     credentials,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
   const sheets = google.sheets({ version: "v4", auth });
 
@@ -134,8 +136,9 @@ async function main() {
     ["Transport Fee Total", totalTransportFee.toFixed(2)],
     ["Grand Total", grandTotal.toFixed(2)],
   ];
+  const reportRows = [header, ...filteredRows, ...summaryRows];
 
-  fs.writeFileSync(csvPath, `${toCsv([header, ...filteredRows, ...summaryRows])}\n`, "utf-8");
+  fs.writeFileSync(csvPath, `${toCsv(reportRows)}\n`, "utf-8");
   fs.writeFileSync(summaryPath, JSON.stringify({
     month: monthName,
     monthNumber: targetMonth,
@@ -147,6 +150,22 @@ async function main() {
     csvPath,
     fileBaseName: baseName,
   }, null, 2), "utf-8");
+
+  if (SALARY_SPREADSHEET_ID) {
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId: SALARY_SPREADSHEET_ID,
+      range: `${SALARY_SHEET_NAME}!A:Z`,
+    });
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SALARY_SPREADSHEET_ID,
+      range: `${SALARY_SHEET_NAME}!A1`,
+      valueInputOption: "RAW",
+      requestBody: { values: reportRows },
+    });
+    console.log(`SALARY_SHEET_UPDATED=${SALARY_SPREADSHEET_ID}:${SALARY_SHEET_NAME}!A1`);
+  } else {
+    console.log("SALARY_SPREADSHEET_ID not set; skipping Salary sheet update.");
+  }
 
   console.log(`PERDIEM_REPORT_CSV=${csvPath}`);
   console.log(`PERDIEM_REPORT_SUMMARY=${summaryPath}`);

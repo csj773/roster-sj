@@ -35,6 +35,7 @@ jobs:
         env:
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
           GOOGLE_SHEETS_SPREADSHEET_ID: 1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc
+          SALARY_SPREADSHEET_ID: ${{ secrets.SALARY_SPREADSHEET_ID }}
           PERDIEM_TARGET_MONTH: ${{ inputs.target_month }}
           PERDIEM_TARGET_YEAR: ${{ inputs.target_year }}
         run: node scripts/monthly_perdiem_report.mjs
