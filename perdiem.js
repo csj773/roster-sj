@@ -142,16 +142,22 @@ function monthYearFromKst(date, fallbackDateFormatted) {
   if (target) {
     return {
       Year: String(target.getUTCFullYear()),
-      Month: target.getUTCMonth() + 1,
+      Month: MONTH_NAMES[target.getUTCMonth()] || "Unknown",
     };
   }
 
   const dfParts = String(fallbackDateFormatted || "").split(".");
-  const monthNum = Number(dfParts[1] || "1");
+  const monthIndex = Number(dfParts[1] || "1") - 1;
   return {
     Year: dfParts[0] || String(new Date().getUTCFullYear()),
-    Month: monthNum,
+    Month: MONTH_NAMES[monthIndex] || "Unknown",
   };
+}
+
+function monthForSheet(month) {
+  if (typeof month === "number") return month;
+  const monthNum = MONTH_NAME_TO_NUMBER[String(month || "").toLowerCase()];
+  return monthNum || month || "";
 }
 
 // ------------------- PerDiem 계산 -------------------
@@ -214,11 +220,12 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       if (i === 0) {
         const curMonthNum = Number(monthNum);
         const prevMonthNum = curMonthNum - 1 >= 1 ? curMonthNum - 1 : 12;
+        const prevMonth = MONTH_NAMES[prevMonthNum - 1] || "Unknown";
         const prevYear = prevMonthNum === 12 ? String(Number(Year) - 1) : Year;
 
         const prevSnapshot = await db.collection("Perdiem")
           .where("owner", "==", owner)
-          .where("Month", "==", prevMonthNum)
+          .where("Month", "==", prevMonth)
           .where("Year", "==", prevYear)
           .where("Destination", "==", From)
           .orderBy("Date", "desc")
@@ -375,7 +382,7 @@ export async function appendPerDiemGoogleSheet(perdiemList, sheetsApi, spreadshe
       item.Rate,
       item.Total,
       item.TransportFee,
-      item.Month,
+      monthForSheet(item.Month),
       item.Year,
     ]);
 
