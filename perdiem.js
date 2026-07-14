@@ -7,9 +7,15 @@ import { hourToTimeStr } from "./flightTimeUtils.js";
 
 // ------------------- 공항별 PER DIEM -------------------
 export const PERDIEM_RATE = {
-  LAX: 3.42, EWR: 3.44,IAD: 3.44, HNL: 3.01, FRA: 3.18, BCN: 3.11,
-  BKK: 2.14,SIN: 2.14, DAD: 2.01, SFO: 3.42, OSL: 3.24,
-  DAC: 33, NRT: 33, HKG: 33
+  EWR: 3.44,
+  LAX: 3.42, SFO: 3.42, LAS: 3.42, IAD: 3.42, HNL: 3.42,
+  ADD: 3.44, JUB: 3.44,
+  NRT: 2.75, HKG: 2.75, SIN: 2.75,
+  BKK: 2.14, DAC: 2.14,
+  DAD: 2.01,
+  OSL: 3.24,
+  ESB: 3.00,
+  AUH: 2.41, BEY: 2.41,
 };
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -17,6 +23,8 @@ const MONTH_NAME_TO_NUMBER = Object.fromEntries(MONTH_NAMES.map((name, index) =>
 const WEEKDAY_INDEX = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const TRANSPORT_FEE_PER_FLIGHT = 7000;
+const QUICK_TURN_THRESHOLD_HOURS = 12;
+const QUICK_TURN_MINIMUM_TOTAL = 33;
 const FLIGHT_ACTIVITY_RE = /^YP\d+/i;
 const PERDIEM_SHEET_HEADER = ["ID", "Date", "Activity", "From", "Destination", "RI", "RO", "StayHours", "Rate", "Total", "TransportFee", "Month", "Year"];
 
@@ -168,7 +176,11 @@ function calculatePerDiem(riDate, roDate, rate) {
   if (!riDate || !roDate || riDate >= roDate) return { StayHours: "0:00", Total: 0 };
   const diffHours = (roDate - riDate) / 1000 / 3600;
   const total = Math.round(diffHours * rate * 100) / 100;
-  return { StayHours: hourToTimeStr(diffHours), Total: total };
+  return { StayHours: hourToTimeStr(diffHours), Total: total, Hours: diffHours };
+}
+
+function calculateQuickTurnTotal(rate) {
+  return Math.round(Math.max(rate * 24 * 0.5, QUICK_TURN_MINIMUM_TOTAL) * 100) / 100;
 }
 
 // ------------------- Roster.json → PerDiem 리스트 -------------------
@@ -185,8 +197,6 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
     admin.initializeApp({ credential: admin.credential.applicationDefault() });
   }
   const db = admin.firestore();
-
-  const QUICK_DESTS = ["NRT", "HKG", "DAC"];
 
   // ===== flightRows 필터링 =====
   const flightRows = rows.filter(r => {
@@ -255,13 +265,11 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
     }
 
     // ===== Quick Turn 귀국편 =====
-    let isQuickTurnReturn = false;
-    if (To === "ICN" && QUICK_DESTS.includes(From) && i > 0) {
+    if (To === "ICN" && From !== "ICN" && i > 0) {
       const prevRow = flightRows[i - 1];
       if (prevRow[6] === "ICN" && prevRow[9] === From) {
         const prevRI = parseHHMMOffset(prevRow[11], resolvedDateForRow(prevRow));
         if (prevRI instanceof Date && !isNaN(prevRI)) {
-          isQuickTurnReturn = true;
           riDate = prevRI;
           if (!DateStr || !DateStr.trim()) DateFormatted = resolvedDateForRow(prevRow);
         }
@@ -272,16 +280,15 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
     const riValid = riDate instanceof Date && !isNaN(riDate) ? riDate : null;
     const roValid = roDate instanceof Date && !isNaN(roDate) ? roDate : null;
 
-    let { StayHours, Total } = calculatePerDiem(riValid, roValid, Rate);
+    let { StayHours, Total, Hours } = calculatePerDiem(riValid, roValid, Rate);
 
     if (From === "ICN") {
       StayHours = "0:00";
       Rate = 0;
       Total = 0;
     }
-    if (isQuickTurnReturn) {
-      Total = 33;
-      Rate = 33;
+    if (To === "ICN" && From !== "ICN" && Hours > 0 && Hours < QUICK_TURN_THRESHOLD_HOURS) {
+      Total = calculateQuickTurnTotal(Rate);
     }
 
     const assignedDate = roValid || riValid;
