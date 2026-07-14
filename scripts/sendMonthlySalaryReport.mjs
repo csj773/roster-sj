@@ -11,6 +11,8 @@ const config = {
   paymentsCollection: process.env.PAYMENTS_COLLECTION || "Payments",
   runLogCollection: process.env.RUN_LOG_COLLECTION || "salaryReportRuns",
   paymentDateField: process.env.PAYMENT_DATE_FIELD || "paymentDate",
+  yearField: process.env.YEAR_FIELD || "Year",
+  monthField: process.env.MONTH_FIELD || "Month",
   totalPayField: process.env.TOTAL_PAY_FIELD || "TotalPay",
   updatedAtField: process.env.UPDATED_AT_FIELD || "updatedAt",
   salarySpreadsheetId: process.env.SALARY_SPREADSHEET_ID ||
@@ -112,9 +114,15 @@ async function fetchLatestPaymentRows(year, month) {
     .where(config.paymentDateField, "<", Timestamp.fromDate(end))
     .get();
 
+  let sourceDocs = snapshot.docs;
+  if (sourceDocs.length === 0) {
+    console.log(`No rows found by ${config.paymentDateField}; falling back to ${config.yearField}/${config.monthField} fields.`);
+    sourceDocs = await fetchRowsByYearMonthFields(year, month);
+  }
+
   const latestByKey = new Map();
 
-  snapshot.forEach((doc) => {
+  sourceDocs.forEach((doc) => {
     const data = doc.data();
     const row = normalizePaymentDoc(doc.id, data);
     const dedupeKey = buildDedupeKey(doc.id, data);
@@ -126,7 +134,38 @@ async function fetchLatestPaymentRows(year, month) {
   });
 
   return Array.from(latestByKey.values())
-    .sort((a, b) => a.employeeId.localeCompare(b.employeeId) || a.paymentDateMillis - b.paymentDateMillis);
+    .sort((a, b) => (
+      a.owner.localeCompare(b.owner) ||
+      a.employeeId.localeCompare(b.employeeId) ||
+      a.paymentDateMillis - b.paymentDateMillis ||
+      a.id.localeCompare(b.id)
+    ));
+}
+
+async function fetchRowsByYearMonthFields(year, month) {
+  const collection = db.collection(config.paymentsCollection);
+  const snapshots = await Promise.all([
+    collection.where(config.yearField, "==", String(year)).get(),
+    collection.where(config.yearField, "==", year).get(),
+  ]);
+  const byId = new Map();
+  for (const snapshot of snapshots) {
+    snapshot.forEach((doc) => {
+      const data = doc.data();
+      if (!matchesTargetMonth(data, month)) return;
+      byId.set(doc.id, doc);
+    });
+  }
+  return Array.from(byId.values());
+}
+
+function matchesTargetMonth(data, month) {
+  if (!(config.monthField in data)) return true;
+  const value = data[config.monthField];
+  if (value == null || value === "") return true;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return numeric === month;
+  return monthName(month).toLowerCase() === String(value).trim().toLowerCase();
 }
 
 function normalizePaymentDoc(id, data) {
@@ -136,11 +175,31 @@ function normalizePaymentDoc(id, data) {
 
   return {
     id,
+    owner: stringValue(data.owner),
+    year: stringValue(data[config.yearField]),
+    month: stringValue(data[config.monthField]),
     employeeId: stringValue(data.employeeId),
     employeeName: stringValue(data.employeeName || data.name),
     payPeriod: stringValue(data.payPeriod),
     paymentDate,
     paymentDateMillis: paymentDate ? paymentDate.getTime() : 0,
+    blk: stringValue(data.BLK),
+    et: stringValue(data.ET),
+    nt: stringValue(data.NT),
+    ot: stringValue(data.OT),
+    p3: stringValue(data.P3),
+    rate: numberValue(data.Rate),
+    hourlyRate: numberValue(data.HourlyRate),
+    basicSalary: numberValue(data.BasicSalary),
+    basicAllowance: numberValue(data.BasicAllowance),
+    salary: numberValue(data.Salary),
+    etPay: numberValue(data.ETpay),
+    ntPay: numberValue(data.NTpay),
+    otPay: numberValue(data.OTpay),
+    p3Pay: numberValue(data.P3pay),
+    deduction: numberValue(data.Deduction),
+    taxRate: numberValue(data.TaxRate),
+    tax: numberValue(data.Tax),
     totalPay,
     updatedAt,
     updatedAtMillis: updatedAt.getTime(),
@@ -159,17 +218,65 @@ async function updateSalarySheet({auth, year, month, rows, totalPay}) {
   await ensureSheetExists(sheets, spreadsheetId, sheetTitle);
   const monthLabel = `${monthName(month)} ${year}`;
   const values = [
-    ["Payment Doc ID", "Employee ID", "Employee Name", "Pay Period", "Payment Date", "TotalPay", "Updated At"],
+    [
+      "Payment Doc ID",
+      "Owner",
+      "Year",
+      "Month",
+      "Employee ID",
+      "Employee Name",
+      "Pay Period",
+      "Payment Date",
+      "BLK",
+      "ET",
+      "NT",
+      "OT",
+      "P3",
+      "Rate",
+      "HourlyRate",
+      "BasicSalary",
+      "BasicAllowance",
+      "Salary",
+      "ETpay",
+      "NTpay",
+      "OTpay",
+      "P3pay",
+      "Deduction",
+      "TaxRate",
+      "Tax",
+      "TotalPay",
+      "Updated At",
+    ],
     ...rows.map((row) => [
       row.id,
+      row.owner,
+      row.year,
+      row.month,
       row.employeeId,
       row.employeeName,
       row.payPeriod,
       formatDate(row.paymentDate),
+      row.blk,
+      row.et,
+      row.nt,
+      row.ot,
+      row.p3,
+      row.rate,
+      row.hourlyRate,
+      row.basicSalary,
+      row.basicAllowance,
+      row.salary,
+      row.etPay,
+      row.ntPay,
+      row.otPay,
+      row.p3Pay,
+      row.deduction,
+      row.taxRate,
+      row.tax,
       row.totalPay,
       formatDateTime(row.updatedAt),
     ]),
-    ["", "", "", "Total", "", totalPay, ""],
+    ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "Total", totalPay, ""],
   ];
 
   if (config.salaryClearRange) {
@@ -474,6 +581,11 @@ function toDate(value) {
 
 function stringValue(value) {
   return value == null ? "" : String(value);
+}
+
+function numberValue(value) {
+  const number = Number(value ?? 0);
+  return Number.isFinite(number) ? number : 0;
 }
 
 function requireEnv(name) {

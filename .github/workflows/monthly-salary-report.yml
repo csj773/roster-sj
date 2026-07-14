@@ -25,6 +25,8 @@ jobs:
       PAYMENTS_COLLECTION: Payments
       RUN_LOG_COLLECTION: salaryReportRuns
       PAYMENT_DATE_FIELD: paymentDate
+      YEAR_FIELD: Year
+      MONTH_FIELD: Month
       TOTAL_PAY_FIELD: TotalPay
       UPDATED_AT_FIELD: updatedAt
       DEDUPE_KEY_FIELDS: employeeId,payPeriod
