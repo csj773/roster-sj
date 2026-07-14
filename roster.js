@@ -183,14 +183,62 @@ console.log("✅ UID 및 Config 로드 완료");
     })
     .filter(isRosterDataRow);
 
+  const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const monthTokenToNumber = Object.fromEntries(monthNames.map((name, index) => [name.toLowerCase(), index + 1]));
+  const weekdays = new Set(["mon","tue","wed","thu","fri","sat","sun"]);
+
+  function incrementMonth(year, month) {
+    return month === 12 ? { year: year + 1, month: 1 } : { year, month: month + 1 };
+  }
+
+  function resolveRosterDateSequence(rows) {
+    const resolved = new WeakMap();
+    const now = new Date();
+    let currentYear = now.getFullYear();
+    let currentMonth = now.getMonth() + 1;
+    let lastDay = null;
+    let currentDate = "";
+
+    for (const row of rows) {
+      const raw = String(row[dateIdx] || "").trim();
+      const parts = raw.split(/\s+/);
+
+      if (parts.length === 2) {
+        const token = parts[0].toLowerCase();
+        const day = Number.parseInt(parts[1].replace(/^0+/, "") || "0", 10);
+        if (Number.isInteger(day) && day >= 1 && day <= 31) {
+          if (monthTokenToNumber[token]) {
+            currentMonth = monthTokenToNumber[token];
+          } else if (weekdays.has(token) && lastDay != null && day < lastDay) {
+            ({ year: currentYear, month: currentMonth } = incrementMonth(currentYear, currentMonth));
+          }
+          currentDate = `${currentYear}.${String(currentMonth).padStart(2, "0")}.${String(day).padStart(2, "0")}`;
+          lastDay = day;
+        }
+      }
+
+      if (currentDate) resolved.set(row, currentDate);
+    }
+
+    return resolved;
+  }
+
+  const resolvedDateByRow = resolveRosterDateSequence(values);
+  const resolvedDateForRow = (row) => resolvedDateByRow.get(row) || convertDate(row[dateIdx]);
+  const resolvedYearMonth = (dateValue) => {
+    const match = String(dateValue || "").match(/^(\d{4})\.(\d{1,2})\.(\d{1,2})$/);
+    if (!match) return parseYearMonthFromEeeDd(dateValue);
+    return { Year: match[1], Month: monthNames[Number(match[2]) - 1] || "" };
+  };
+
   // ------------------- CSV/JSON 저장 전 중복 제거 (기존 Map 로직 유지) -------------------
   console.log("🚀 CSV/JSON 저장 전 중복 제거");
-  const normalizeDate = (raw) => convertDate(raw) || (raw || "").replace(/[.\s]/g, "");
+  const normalizeDate = (row) => resolvedDateForRow(row) || (row[dateIdx] || "").replace(/[.\s]/g, "");
 
   const mapByKey = new Map();
   for (let i = 0; i < values.length; i++) {
     const row = values[i];
-    const key = `${normalizeDate(row[dateIdx])}||${row[dcIdx]}||${row[flightIdx]}||${row[fromIdx]}||${row[toIdx]}`;
+    const key = `${normalizeDate(row)}||${row[dcIdx]}||${row[flightIdx]}||${row[fromIdx]}||${row[toIdx]}`;
     mapByKey.set(key, row); // 나중 항목 덮어쓰기 -> 최신 유지
   }
   const dedupedRows = Array.from(mapByKey.values());
@@ -242,7 +290,7 @@ console.log("✅ UID 및 Config 로드 완료");
       docData[headerMapFirestore[h] || h] = row[idx] || "";
     });
     docData.DateRaw = resolveDateRaw(i, values, docData);
-    docData.Date = convertDate(docData.DateRaw);
+    docData.Date = resolvedDateForRow(row) || convertDate(docData.DateRaw);
     docData.owner = firestoreAdminUid || "";
     docData.pdc_user_name = username || "";
     docData.email = process.env.USER_ID || "";
@@ -252,7 +300,7 @@ console.log("✅ UID 및 Config 로드 완료");
       ? calculateNTFromSTDSTA(docData.STDZ, docData.STAZ, new Date(docData.Date))
       : "00:00";
     docData.CrewArray = parseCrewString(docData.Crew);
-    const { Year, Month } = parseYearMonthFromEeeDd(docData.DateRaw);
+    const { Year, Month } = resolvedYearMonth(docData.Date);
     docData.Year = Year;
     docData.Month = Month;
     Object.keys(docData).forEach(k => {
@@ -300,7 +348,7 @@ console.log("✅ UID 및 Config 로드 완료");
   const sheetValues = values.map((row,idx)=>{
     if(idx===0) return row.slice(0,15); 
     const newRow=[...row.slice(0,15)];
-    newRow[0] = convertDate(row[0]);
+    newRow[0] = resolvedDateForRow(row) || convertDate(row[0]);
     return newRow;
   });
 
