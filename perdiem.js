@@ -348,7 +348,29 @@ function uniqueSheetId(usedIds) {
   return id;
 }
 
-// ------------------- Google Sheets append -------------------
+function buildPerDiemSheetRow(item, id) {
+  return [
+    id,
+    item.Date,
+    item.Activity,
+    item.From,
+    item.Destination,
+    item.RI,
+    item.RO,
+    item.StayHours,
+    item.Rate,
+    item.Total,
+    item.TransportFee,
+    monthForSheet(item.Month),
+    item.Year,
+  ];
+}
+
+function sameSheetRow(a, b) {
+  return JSON.stringify(a.map(value => String(value ?? ""))) === JSON.stringify(b.map(value => String(value ?? "")));
+}
+
+// ------------------- Google Sheets upsert -------------------
 export async function appendPerDiemGoogleSheet(perdiemList, sheetsApi, spreadsheetId, sheetName = "Perdiem") {
   if (!Array.isArray(perdiemList) || perdiemList.length === 0 || !sheetsApi || !spreadsheetId) return;
 
@@ -362,48 +384,53 @@ export async function appendPerDiemGoogleSheet(perdiemList, sheetsApi, spreadshe
   });
 
   const existingRows = existing.data.values || [];
-  const dataRows = existingRows[0]?.[0] === "ID" ? existingRows.slice(1) : existingRows;
+  const hasHeader = existingRows[0]?.[0] === "ID";
+  const dataRows = hasHeader ? existingRows.slice(1) : existingRows;
+  const firstDataRowNumber = hasHeader ? 2 : 1;
   const usedIds = new Set(dataRows.map(row => row[0]).filter(Boolean));
-  const existingKeys = new Set(dataRows.map(row => buildPerDiemSheetKey({
+  const existingByKey = new Map(dataRows.map((row, index) => [buildPerDiemSheetKey({
     Date: row[1] || "",
     Activity: row[2] || "",
     From: row[3] || "",
     Destination: row[4] || "",
     RI: row[5] || "",
     RO: row[6] || "",
-  })));
+  }), { row, rowNumber: firstDataRowNumber + index }]));
 
-  const rows = perdiemList
-    .filter(item => !existingKeys.has(buildPerDiemSheetKey(item)))
-    .map(item => [
-      uniqueSheetId(usedIds),
-      item.Date,
-      item.Activity,
-      item.From,
-      item.Destination,
-      item.RI,
-      item.RO,
-      item.StayHours,
-      item.Rate,
-      item.Total,
-      item.TransportFee,
-      monthForSheet(item.Month),
-      item.Year,
-    ]);
+  const rowsToAppend = [];
+  const rowsToUpdate = [];
 
-  if (rows.length === 0) {
-    console.log(`✅ Google Sheets ${sheetName} 추가할 PerDiem 없음`);
-    return;
+  for (const item of perdiemList) {
+    const key = buildPerDiemSheetKey(item);
+    const existingRow = existingByKey.get(key);
+    const row = buildPerDiemSheetRow(item, existingRow?.row?.[0] || uniqueSheetId(usedIds));
+
+    if (!existingRow) {
+      rowsToAppend.push(row);
+    } else if (!sameSheetRow(existingRow.row, row)) {
+      rowsToUpdate.push({ rowNumber: existingRow.rowNumber, row });
+    }
   }
 
-  await sheetsApi.spreadsheets.values.append({
-    spreadsheetId,
-    range: `${sheetName}!A:M`,
-    valueInputOption: "RAW",
-    insertDataOption: "INSERT_ROWS",
-    requestBody: { values: rows },
-  });
-  console.log(`✅ Google Sheets ${sheetName} PerDiem append 완료 (${rows.length}건)`);
+  for (const update of rowsToUpdate) {
+    await sheetsApi.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${sheetName}!A${update.rowNumber}:M${update.rowNumber}`,
+      valueInputOption: "RAW",
+      requestBody: { values: [update.row] },
+    });
+  }
+
+  if (rowsToAppend.length > 0) {
+    await sheetsApi.spreadsheets.values.append({
+      spreadsheetId,
+      range: `${sheetName}!A:M`,
+      valueInputOption: "RAW",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: { values: rowsToAppend },
+    });
+  }
+  console.log(`✅ Google Sheets ${sheetName} PerDiem upsert 완료 (update ${rowsToUpdate.length}건, append ${rowsToAppend.length}건)`);
 }
 
 // ------------------- Firestore 업로드 -------------------
