@@ -27,6 +27,10 @@ const QUICK_TURN_MINIMUM_TOTAL = 33;
 const FLIGHT_ACTIVITY_RE = /^YP\d+/i;
 const PERDIEM_SHEET_HEADER = ["ID", "Date", "Activity", "From", "Destination", "RI", "RO", "StayHours", "Rate", "Total", "TransportFee", "Month", "Year"];
 
+function normalizeAirportCode(value) {
+  return String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
 // ------------------- Date 변환 -------------------
 export function convertDate(input) {
   if (!input || typeof input !== "string") return input;
@@ -184,6 +188,41 @@ function calculateQuickTurnTotal(rate) {
   return Math.round(Math.max(rate * 24 * 0.5, QUICK_TURN_MINIMUM_TOTAL) * 100) / 100;
 }
 
+function rateForAirport(airportCode) {
+  const normalized = normalizeAirportCode(airportCode);
+  if (normalized === "ICN") return 0;
+  return PERDIEM_RATE[normalized] || 3;
+}
+
+function hoursFromTimeString(value) {
+  const match = String(value || "").trim().match(/^(\d+):(\d{1,2})$/);
+  if (!match) return null;
+  return Number(match[1]) + Number(match[2]) / 60;
+}
+
+function calculateTotalFromHours(hours, rate, destination) {
+  if (!Number.isFinite(hours) || hours <= 0 || rate <= 0) return 0;
+  if (normalizeAirportCode(destination) === "ICN" && hours < QUICK_TURN_THRESHOLD_HOURS) {
+    return calculateQuickTurnTotal(rate);
+  }
+  return Math.round(hours * rate * 100) / 100;
+}
+
+function normalizePerDiemItem(item) {
+  const From = normalizeAirportCode(item.From) || "UNKNOWN";
+  const Destination = normalizeAirportCode(item.Destination) || "UNKNOWN";
+  const Rate = rateForAirport(From);
+  const hours = hoursFromTimeString(item.StayHours);
+  const Total = From === "ICN" ? 0 : calculateTotalFromHours(hours, Rate, Destination);
+  return {
+    ...item,
+    From,
+    Destination,
+    Rate,
+    Total,
+  };
+}
+
 // ------------------- Roster.json → PerDiem 리스트 -------------------
 export async function generatePerDiemList(rosterJsonPath, owner) {
   const raw = JSON.parse(fs.readFileSync(rosterJsonPath, "utf-8"));
@@ -211,8 +250,8 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
     const row = flightRows[i];
     const [DateStr,, , , Activity,, FromRaw, STDL, STDZ, ToRaw,, STAZ] = row;
 
-    const From = FromRaw?.trim().toUpperCase() || "UNKNOWN";
-    const To = ToRaw?.trim().toUpperCase() || "UNKNOWN";
+    const From = normalizeAirportCode(FromRaw) || "UNKNOWN";
+    const To = normalizeAirportCode(ToRaw) || "UNKNOWN";
 
     let LocalDateFormatted = resolvedDateForRow(row);
     let DateFormatted = LocalDateFormatted;
@@ -226,7 +265,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
     const Year = dfParts[0] || String(now.getUTCFullYear());
     const monthNum = (dfParts[1] || "01").padStart(2, "0");
 
-    let Rate = From === "ICN" ? 0 : PERDIEM_RATE[From] || 3;
+    let Rate = rateForAirport(From);
     let riDate = null, roDate = null;
 
     // ===== 귀국편 =====
@@ -281,7 +320,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
     // ===== Quick Turn 귀국편 =====
     if (To === "ICN" && From !== "ICN" && i > 0) {
       const prevRow = flightRows[i - 1];
-      if (prevRow[6] === "ICN" && prevRow[9] === From) {
+      if (normalizeAirportCode(prevRow[6]) === "ICN" && normalizeAirportCode(prevRow[9]) === From) {
         const prevRI = parseHHMMOffset(prevRow[11], resolvedDateForRow(prevRow));
         if (prevRI instanceof Date && !isNaN(prevRI)) {
           riDate = prevRI;
@@ -310,7 +349,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
     // ===== 교통비 =====
     const TransportFee = TRANSPORT_FEE_PER_FLIGHT;
 
-    perdiemList.push({
+    perdiemList.push(normalizePerDiemItem({
       Date: DateFormatted,
       Activity,
       From,
@@ -323,7 +362,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       TransportFee,
       Month: assigned.Month,
       Year: assigned.Year
-    });
+    }));
   }
 
   return perdiemList;
@@ -334,7 +373,7 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
   if (!Array.isArray(perdiemList)) return;
 
   const header = "Date,Activity,From,Destination,RI,RO,StayHours,Rate,Total,TransportFee,Month,Year\n";
-  const rows = perdiemList.map(e =>
+  const rows = perdiemList.map(item => normalizePerDiemItem(item)).map(e =>
     `${e.Date},${e.Activity},${e.From},${e.Destination},${e.RI},${e.RO},${e.StayHours},${e.Rate},${e.Total},${e.TransportFee},${e.Month},${e.Year}`
   );
 
@@ -438,7 +477,8 @@ export async function appendPerDiemGoogleSheet(perdiemList, sheetsApi, spreadshe
 
   const syncedRows = [];
   const seenKeys = new Set();
-  for (const item of perdiemList) {
+  for (const rawItem of perdiemList) {
+    const item = normalizePerDiemItem(rawItem);
     const key = buildPerDiemSheetKey(item);
     if (seenKeys.has(key)) continue;
     seenKeys.add(key);
@@ -470,7 +510,8 @@ export async function uploadPerDiemFirestore(perdiemList) {
   const db = admin.firestore();
   const collectionRef = db.collection("Perdiem");
 
-  for (let item of perdiemList) {
+  for (const rawItem of perdiemList) {
+    const item = normalizePerDiemItem(rawItem);
     const docId = buildPerDiemDocId(item);
     const legacyDocId = `${item.Year}${item.Month}${item.Date.replace(/\./g, "")}_${item.Destination}`;
     const duplicateSnapshot = await collectionRef
