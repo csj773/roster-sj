@@ -81,9 +81,9 @@ async function runMonthlySalaryReport({year, month, force = false}) {
     const googleAuth = createGoogleAuth();
 
     await mkdir(outputDir, {recursive: true});
-    const sheetValues = await updateSalarySheet({auth: googleAuth, year, month, rows, totalPay});
-    await exportSalarySpreadsheet({auth: googleAuth, outputPath, values: sheetValues});
-    await sendEmail({year, month, fileName, outputPath, rowCount: rows.length, totalPay});
+    const sheetResult = await updateSalarySheet({auth: googleAuth, year, month, rows, totalPay});
+    await exportSalarySpreadsheet({auth: googleAuth, outputPath, values: sheetResult.values});
+    await sendEmail({year, month, fileName, outputPath, rowCount: rows.length, totalPay, sheetResult});
 
     await runRef.set({
       status: "sent",
@@ -299,6 +299,7 @@ async function updateSalarySheet({auth, year, month, rows, totalPay}) {
     valueInputOption: "USER_ENTERED",
     requestBody: {values},
   });
+  console.log(`Salary sheet update requested: https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit range=${config.salaryWriteRange} rows=${values.length}`);
 
   const extraRanges = [];
   const extraValues = [];
@@ -326,12 +327,34 @@ async function updateSalarySheet({auth, year, month, rows, totalPay}) {
     });
   }
 
-  return values;
+  const verifyRange = `${quoteSheetTitle(sheetTitle)}!A1:AB${values.length}`;
+  const verify = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: verifyRange,
+  });
+  const readValues = verify.data.values || [];
+  if (readValues[0]?.[0] !== values[0][0]) {
+    throw new Error(`Salary sheet write verification failed for ${verifyRange}`);
+  }
+  console.log(`Salary sheet write verified: ${verifyRange} rows=${readValues.length}`);
+
+  return {
+    values,
+    spreadsheetId,
+    sheetTitle,
+    writeRange: config.salaryWriteRange,
+    verifyRange,
+    spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`,
+  };
 }
 
 function sheetTitleFromRange(range) {
   const sheetPart = String(range || "Salary!A1").split("!")[0] || "Salary";
   return sheetPart.replace(/^'|'$/g, "").replace(/''/g, "'");
+}
+
+function quoteSheetTitle(title) {
+  return `'${String(title).replace(/'/g, "''")}'`;
 }
 
 async function ensureSheetExists(sheets, spreadsheetId, title) {
@@ -376,7 +399,7 @@ async function exportSalarySpreadsheet({auth, outputPath, values}) {
   }
 }
 
-async function sendEmail({year, month, fileName, outputPath, rowCount, totalPay}) {
+async function sendEmail({year, month, fileName, outputPath, rowCount, totalPay, sheetResult}) {
   console.log(`Sending salary report email to ${process.env.MAIL_TO || "sjchoi787@gmail.com"} with attachment ${fileName}`);
   const transporter = nodemailer.createTransport({
     host: requireEnv("MAIL_HOST"),
@@ -399,6 +422,8 @@ async function sendEmail({year, month, fileName, outputPath, rowCount, totalPay}
       "",
       `Unique payment rows: ${rowCount}`,
       `Salary: ${formatCurrency(totalPay)}`,
+      `Google Sheet: ${sheetResult.spreadsheetUrl}`,
+      `Written range: ${sheetResult.verifyRange}`,
     ].join("\n"),
     attachments: [{filename: fileName, path: outputPath}],
   });
