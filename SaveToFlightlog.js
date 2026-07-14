@@ -172,24 +172,66 @@ function buildDocData(rosterRow) {
   return docData;
 }
 
-async function uploadRosterDoc(docData, index) {
-  const querySnapshot = await db.collection(firestoreCollection)
-    .where("Date", "==", docData.Date)
-    .where("DC", "==", docData.DC)
-    .where("Activity", "==", docData.Activity)
-    .where("From", "==", docData.From)
-    .where("To", "==", docData.To)
-    .get();
+function safeDocIdPart(value) {
+  return String(value ?? "")
+    .trim()
+    .replace(/[^A-Za-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "blank";
+}
 
-  if (!querySnapshot.empty) {
-    for (const duplicate of querySnapshot.docs) {
-      await duplicate.ref.delete();
+function buildRosterDocId(docData) {
+  return [
+    "csv",
+    docData.Date,
+    docData.DC,
+    docData.Activity,
+    docData.From,
+    docData.To,
+  ].map(safeDocIdPart).join("_");
+}
+
+async function collectDuplicateRosterDocs(docData) {
+  const duplicateRefs = new Map();
+  const queries = [
+    db.collection(firestoreCollection)
+      .where("Date", "==", docData.Date)
+      .where("Activity", "==", docData.Activity)
+      .where("From", "==", docData.From)
+      .where("To", "==", docData.To),
+    db.collection(firestoreCollection)
+      .where("Date", "==", docData.Date)
+      .where("DC", "==", docData.DC)
+      .where("Activity", "==", docData.Activity)
+      .where("From", "==", docData.From)
+      .where("To", "==", docData.To),
+    db.collection(firestoreCollection)
+      .where("Date", "==", docData.Date)
+      .where("F", "==", docData.F)
+      .where("From", "==", docData.From)
+      .where("To", "==", docData.To),
+  ];
+
+  for (const query of queries) {
+    const snapshot = await query.get();
+    for (const duplicate of snapshot.docs) {
+      duplicateRefs.set(duplicate.id, duplicate.ref);
     }
   }
 
-  const ref = await db.collection(firestoreCollection).add(docData);
+  return [...duplicateRefs.values()];
+}
+
+async function uploadRosterDoc(docData, index) {
+  const docId = buildRosterDocId(docData);
+  const duplicateRefs = await collectDuplicateRosterDocs(docData);
+
+  for (const duplicateRef of duplicateRefs) {
+    if (duplicateRef.id !== docId) await duplicateRef.delete();
+  }
+
+  await db.collection(firestoreCollection).doc(docId).set(docData);
   console.log(
-    `✅ ${index}행 roster 저장 완료: ${ref.id}, Date=${docData.Date}, Activity=${docData.Activity}, NT=${docData.NT}, ET=${docData.ET}`
+    `✅ ${index}행 roster 저장 완료: ${docId}, Date=${docData.Date}, Activity=${docData.Activity}, 중복삭제=${duplicateRefs.length}, NT=${docData.NT}, ET=${docData.ET}`
   );
 }
 
