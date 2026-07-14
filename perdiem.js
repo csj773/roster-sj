@@ -1,6 +1,7 @@
 // ========================= perdiem.js (패치 통합본: Month = "Oct" 형식) =========================
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import admin from "firebase-admin";
 import { hourToTimeStr } from "./flightTimeUtils.js";
 
@@ -312,6 +313,86 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
   } catch (err) {
     console.error("❌ CSV 저장 실패:", err);
   }
+}
+
+function buildPerDiemSheetKey(item) {
+  return [
+    item.Date,
+    item.Activity,
+    item.From,
+    item.Destination,
+    item.RI,
+    item.RO,
+  ].join("||");
+}
+
+function randomSheetId() {
+  return crypto.randomBytes(4).toString("hex");
+}
+
+function uniqueSheetId(usedIds) {
+  let id = randomSheetId();
+  while (usedIds.has(id)) id = randomSheetId();
+  usedIds.add(id);
+  return id;
+}
+
+// ------------------- Google Sheets append -------------------
+export async function appendPerDiemGoogleSheet(perdiemList, sheetsApi, spreadsheetId, sheetName = "Perdiem") {
+  if (!Array.isArray(perdiemList) || perdiemList.length === 0 || !sheetsApi || !spreadsheetId) return;
+
+  const existing = await sheetsApi.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${sheetName}!A:M`,
+  }).catch(err => {
+    if (err.code === 400) console.warn(`⚠️ Google Sheets ${sheetName} 읽기 실패, append만 시도:`, err.message);
+    else throw err;
+    return { data: { values: [] } };
+  });
+
+  const existingRows = existing.data.values || [];
+  const dataRows = existingRows[0]?.[0] === "ID" ? existingRows.slice(1) : existingRows;
+  const usedIds = new Set(dataRows.map(row => row[0]).filter(Boolean));
+  const existingKeys = new Set(dataRows.map(row => buildPerDiemSheetKey({
+    Date: row[1] || "",
+    Activity: row[2] || "",
+    From: row[3] || "",
+    Destination: row[4] || "",
+    RI: row[5] || "",
+    RO: row[6] || "",
+  })));
+
+  const rows = perdiemList
+    .filter(item => !existingKeys.has(buildPerDiemSheetKey(item)))
+    .map(item => [
+      uniqueSheetId(usedIds),
+      item.Date,
+      item.Activity,
+      item.From,
+      item.Destination,
+      item.RI,
+      item.RO,
+      item.StayHours,
+      item.Rate,
+      item.Total,
+      item.TransportFee,
+      item.Month,
+      item.Year,
+    ]);
+
+  if (rows.length === 0) {
+    console.log(`✅ Google Sheets ${sheetName} 추가할 PerDiem 없음`);
+    return;
+  }
+
+  await sheetsApi.spreadsheets.values.append({
+    spreadsheetId,
+    range: `${sheetName}!A:M`,
+    valueInputOption: "RAW",
+    insertDataOption: "INSERT_ROWS",
+    requestBody: { values: rows },
+  });
+  console.log(`✅ Google Sheets ${sheetName} PerDiem append 완료 (${rows.length}건)`);
 }
 
 // ------------------- Firestore 업로드 -------------------

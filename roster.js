@@ -18,7 +18,7 @@ import {
   parseYearMonthFromEeeDd
 } from "./flightTimeUtils.js";
 
-import { generatePerDiemList, savePerDiemCSV, uploadPerDiemFirestore } from "./perdiem.js";
+import { appendPerDiemGoogleSheet, generatePerDiemList, savePerDiemCSV, uploadPerDiemFirestore } from "./perdiem.js";
 
 // ------------------- Firebase 초기화 -------------------
 console.log("🚀 Firebase 초기화 시작");
@@ -56,6 +56,8 @@ if (!flutterflowUid || !firestoreAdminUid) {
   process.exit(1);
 }
 console.log("✅ UID 및 Config 로드 완료");
+
+const spreadsheetId="1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
 
 // ------------------- Puppeteer 브라우저 시작 -------------------
 (async () => {
@@ -265,6 +267,7 @@ console.log("✅ UID 및 Config 로드 완료");
   const flightPerDiemList = perdiemList.filter(p => p.Destination && p.RI && p.RO);
   savePerDiemCSV(flightPerDiemList, path.join(publicDir,"perdiem.csv"));
   await uploadPerDiemFirestore(flightPerDiemList, flutterflowUid);
+  await appendPerDiemGoogleSheet(flightPerDiemList, sheetsApi, spreadsheetId, "Perdiem");
   console.log("✅ PerDiem 처리 완료");
 
   // ------------------- Roster Firestore 업로드 -------------------
@@ -343,7 +346,6 @@ console.log("✅ UID 및 Config 로드 완료");
 
   // ------------------- Google Sheets 업로드 -------------------
   console.log("🚀 Google Sheets 업로드 시작");
-  const spreadsheetId="1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
   const sheetName="Roster1";
   const sheetValues = values.map((row,idx)=>{
     if(idx===0) return row.slice(0,15); 
