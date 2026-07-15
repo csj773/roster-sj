@@ -86,6 +86,14 @@ function hasAspNetRequestValidationRisk(value) {
   return /<|>|&#|&lt;|&gt;|%3c|%3e/i.test(String(value || ""));
 }
 
+const DEFAULT_FIREBASE_UID = "khbM4wQw52YpY9SrUpoAcG3umqT2";
+
+function validFirebaseUid(value) {
+  const uid = String(value || "").trim();
+  if (!uid || uid === "your_admin_uid") return "";
+  return uid;
+}
+
 // ------------------- POST /runRoster -------------------
 app.post("/runRoster", limiter, async (req, res) => {
   try {
@@ -110,13 +118,24 @@ app.post("/runRoster", limiter, async (req, res) => {
 
     console.log(`📤 Run roster.js from ${req.ip}`);
 
+    const runFirebaseUid =
+      validFirebaseUid(firebaseUid) ||
+      validFirebaseUid(process.env.FIREBASE_UID) ||
+      DEFAULT_FIREBASE_UID;
+    const runAdminUid =
+      validFirebaseUid(firebaseUid) ||
+      validFirebaseUid(process.env.INPUT_ADMIN_FIREBASE_UID) ||
+      validFirebaseUid(process.env.ADMIN_FIREBASE_UID) ||
+      validFirebaseUid(process.env.FIREBASE_UID) ||
+      DEFAULT_FIREBASE_UID;
+
     const env = {
       ...process.env,
       INPUT_PDC_USERNAME: username,
       INPUT_PDC_PASSWORD: password,
-      INPUT_FIREBASE_UID: firebaseUid || process.env.FIREBASE_UID,
-      INPUT_ADMIN_FIREBASE_UID: firebaseUid || process.env.INPUT_ADMIN_FIREBASE_UID || process.env.ADMIN_FIREBASE_UID,
-      FIREBASE_UID: firebaseUid || process.env.FIREBASE_UID,
+      INPUT_FIREBASE_UID: runFirebaseUid,
+      INPUT_ADMIN_FIREBASE_UID: runAdminUid,
+      FIREBASE_UID: runFirebaseUid,
       CHROME_PATH: process.env.CHROME_PATH || "",
     };
 
