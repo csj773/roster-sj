@@ -246,6 +246,21 @@ async function extractRosterRaw(page) {
     page.click("#ctl00_Main_login_btn"),
     page.waitForNavigation({ waitUntil: "networkidle0" })
   ]);
+
+  const loginFailure = await page.evaluate(() => {
+    const text = String(document.body?.innerText || "").replace(/\s+/g, " ");
+    const title = String(document.title || "");
+    return {
+      failed: /not recognized|invalid|login failed|incorrect/i.test(text) || /Login/i.test(title),
+      title,
+      message: text.slice(0, 300),
+    };
+  });
+  if (loginFailure.failed) {
+    console.error(`❌ PDC 로그인 실패: ${loginFailure.message}`);
+    await browser.close();
+    process.exit(1);
+  }
   console.log("✅ 로그인 성공");
 
   // ------------------- Roster 메뉴 이동 -------------------
