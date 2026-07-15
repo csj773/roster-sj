@@ -1,5 +1,4 @@
 // roster.js
-import puppeteer from "puppeteer";
 import fs from "fs";
 import path from "path";
 import "dotenv/config";
@@ -95,6 +94,7 @@ process.env.PUPPETEER_CACHE_DIR = process.env.PUPPETEER_CACHE_DIR || path.join(p
 // ------------------- Puppeteer 브라우저 시작 -------------------
 (async () => {
   console.log("🚀 Puppeteer 브라우저 시작");
+  const { default: puppeteer } = await import("puppeteer");
   const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox","--disable-setuid-sandbox"] });
   const page = await browser.newPage();
 
