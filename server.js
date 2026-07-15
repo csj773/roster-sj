@@ -87,7 +87,7 @@ app.post("/runRoster", limiter, async (req, res) => {
       INPUT_PDC_USERNAME: username,
       INPUT_PDC_PASSWORD: password,
       FIREBASE_UID: firebaseUid || process.env.FIREBASE_UID,
-      CHROME_PATH: process.env.CHROME_PATH || "/usr/bin/chromium",
+      CHROME_PATH: process.env.CHROME_PATH || "",
     };
 
     const child = spawn("node", ["./roster.js"], { env });
