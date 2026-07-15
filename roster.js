@@ -89,13 +89,39 @@ if (!flutterflowUid || !firestoreAdminUid) {
 console.log("✅ UID 및 Config 로드 완료");
 
 const spreadsheetId="1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
-process.env.PUPPETEER_CACHE_DIR = process.env.PUPPETEER_CACHE_DIR || path.join(process.cwd(), ".cache", "puppeteer");
+
+function isRenderRuntime() {
+  return (
+    process.env.RENDER === "true" ||
+    Boolean(process.env.RENDER_SERVICE_ID) ||
+    Boolean(process.env.RENDER_EXTERNAL_URL) ||
+    String(process.env.HOME || "").startsWith("/opt/render")
+  );
+}
+
+async function buildBrowserLaunchOptions() {
+  const args = ["--no-sandbox", "--disable-setuid-sandbox"];
+  if (process.env.CHROME_PATH) {
+    return { headless: "new", executablePath: process.env.CHROME_PATH, args };
+  }
+
+  if (isRenderRuntime()) {
+    const { default: chromium } = await import("@sparticuz/chromium");
+    return {
+      headless: true,
+      executablePath: await chromium.executablePath(),
+      args: [...chromium.args, ...args],
+    };
+  }
+
+  return { headless: "new", args };
+}
 
 // ------------------- Puppeteer 브라우저 시작 -------------------
 (async () => {
   console.log("🚀 Puppeteer 브라우저 시작");
   const { default: puppeteer } = await import("puppeteer");
-  const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox","--disable-setuid-sandbox"] });
+  const browser = await puppeteer.launch(await buildBrowserLaunchOptions());
   const page = await browser.newPage();
 
   // ------------------- PDC 로그인 -------------------

@@ -11,10 +11,10 @@
     "start": "node server.js",
     "update-roster": "node -r dotenv/config roster.js",
     "build": "npm ci",
-    "upload-flightlog": "node SaveToFlightlog.js ./my_flightlog.csv",
-    "postinstall": "node scripts/install-render-chrome.mjs"
+    "upload-flightlog": "node SaveToFlightlog.js ./my_flightlog.csv"
   },
   "dependencies": {
+    "@sparticuz/chromium": "^149.0.0",
     "body-parser": "^2.2.0",
     "cors": "^2.8.5",
     "csv-parse": "^5.4.0",
