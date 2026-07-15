@@ -65,7 +65,7 @@ console.log("✅ Firebase 초기화 완료");
 
 // ------------------- Google Sheets 초기화 -------------------
 console.log("🚀 Google Sheets 초기화 시작");
-const googleSheetsCredentialsJson = readConfigValue("GOOGLE_SHEETS_CREDENTIALS");
+const googleSheetsCredentialsJson = readConfigValue("GOOGLE_SHEETS_CREDENTIALS") || firebaseServiceAccountJson;
 if (!googleSheetsCredentialsJson) {
   console.error("❌ GOOGLE_SHEETS_CREDENTIALS 없음");
   process.exit(1);
