@@ -31,6 +31,25 @@ function readConfigValue(name) {
   return "";
 }
 
+function parseJsonConfig(name, value) {
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    const normalized = value
+      .replace(/^\uFEFF/, "")
+      .replace(/[“”]/g, "\"")
+      .replace(/[‘’]/g, "'")
+      .replace(/-----BEGIN PRIVATE KEY[—–-]+/g, "-----BEGIN PRIVATE KEY-----")
+      .replace(/[—–-]+END PRIVATE KEY[—–-]+/g, "-----END PRIVATE KEY-----");
+
+    try {
+      return JSON.parse(normalized);
+    } catch {
+      throw new Error(`${name} JSON 파싱 실패: Render Secret File 값을 원본 JSON으로 다시 저장해야 합니다.`);
+    }
+  }
+}
+
 // ------------------- Firebase 초기화 -------------------
 console.log("🚀 Firebase 초기화 시작");
 const firebaseServiceAccountJson = readConfigValue("FIREBASE_SERVICE_ACCOUNT");
@@ -38,7 +57,7 @@ if (!firebaseServiceAccountJson) {
   console.error("❌ FIREBASE_SERVICE_ACCOUNT 없음");
   process.exit(1);
 }
-const serviceAccount = JSON.parse(firebaseServiceAccountJson);
+const serviceAccount = parseJsonConfig("FIREBASE_SERVICE_ACCOUNT", firebaseServiceAccountJson);
 if (serviceAccount.private_key) serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
 if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
@@ -51,7 +70,7 @@ if (!googleSheetsCredentialsJson) {
   console.error("❌ GOOGLE_SHEETS_CREDENTIALS 없음");
   process.exit(1);
 }
-const sheetsCredentials = JSON.parse(googleSheetsCredentialsJson);
+const sheetsCredentials = parseJsonConfig("GOOGLE_SHEETS_CREDENTIALS", googleSheetsCredentialsJson);
 if (sheetsCredentials.private_key) sheetsCredentials.private_key = sheetsCredentials.private_key.replace(/\\n/g, "\n");
 const sheetsAuth = new google.auth.GoogleAuth({
   credentials: sheetsCredentials,
