@@ -115,6 +115,7 @@ app.post("/runRoster", limiter, async (req, res) => {
       INPUT_PDC_USERNAME: username,
       INPUT_PDC_PASSWORD: password,
       INPUT_FIREBASE_UID: firebaseUid || process.env.FIREBASE_UID,
+      INPUT_ADMIN_FIREBASE_UID: firebaseUid || process.env.INPUT_ADMIN_FIREBASE_UID || process.env.ADMIN_FIREBASE_UID,
       FIREBASE_UID: firebaseUid || process.env.FIREBASE_UID,
       CHROME_PATH: process.env.CHROME_PATH || "",
     };

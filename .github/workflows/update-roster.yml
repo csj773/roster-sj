@@ -54,8 +54,13 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add public/roster.json public/roster.csv public/perdiem.csv
-          git commit -m "Update roster & PerDiem data" || echo "No changes to commit"
-          git push
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Update roster & PerDiem data"
+            git pull --rebase origin main
+            git push
+          fi
 
       # 7. gcal.js 실행 (Google Calendar 업데이트)
       - name: Run gcal.js

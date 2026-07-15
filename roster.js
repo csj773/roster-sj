@@ -81,9 +81,8 @@ console.log("✅ Google Sheets 초기화 완료");
 // ------------------- UID / Config -------------------
 const flutterflowUid = process.env.INPUT_FIREBASE_UID || process.env.FIREBASE_UID;
 const firestoreAdminUid = process.env.INPUT_ADMIN_FIREBASE_UID || process.env.ADMIN_FIREBASE_UID;
-const rosterOwnerUid = flutterflowUid || firestoreAdminUid;
 const firestoreCollection = process.env.INPUT_FIRESTORE_COLLECTION || "roster";
-if (!rosterOwnerUid || !firestoreAdminUid) {
+if (!flutterflowUid || !firestoreAdminUid) {
   console.error("❌ Firebase UID 또는 Admin UID 없음");
   process.exit(1);
 }
@@ -488,7 +487,7 @@ function sleep(ms) {
     });
     docData.DateRaw = resolveDateRaw(i, values, docData);
     docData.Date = resolvedDateForRow(row) || convertDate(docData.DateRaw);
-    docData.owner = rosterOwnerUid || "";
+    docData.owner = firestoreAdminUid || "";
     docData.pdc_user_name = username || "";
     docData.email = process.env.USER_ID || "";
     if (!docData.Activity || docData.Activity.trim() === "") return null;
@@ -519,7 +518,6 @@ function sleep(ms) {
 
     if (!querySnapshot.empty) {
       for (const d of querySnapshot.docs) {
-        if ((d.data()?.owner || "") !== docData.owner) continue;
         await db.collection(collectionName).doc(d.id).delete();
       }
     }
