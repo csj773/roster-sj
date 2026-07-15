@@ -145,10 +145,11 @@ async function buildBrowserLaunchOptions() {
 
   // ------------------- Roster 메뉴 이동 -------------------
   console.log("🚀 Roster 메뉴 이동");
-  const rosterLink = await page.evaluateHandle(() => {
+  const rosterLinkHandle = await page.evaluateHandle(() => {
     const links = Array.from(document.querySelectorAll("a"));
     return links.find(a => a.textContent.includes("Roster")) || null;
   });
+  const rosterLink = rosterLinkHandle.asElement();
   if (!rosterLink) { console.error("❌ Roster 링크 없음"); await browser.close(); return; }
   await Promise.all([rosterLink.click(), page.waitForNavigation({ waitUntil: "networkidle0" })]);
   console.log("✅ Roster 메뉴 진입 성공");
