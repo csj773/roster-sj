@@ -242,8 +242,19 @@ async function extractRosterRaw(page) {
   };
   const username = normalizeCredential(process.env.INPUT_PDC_USERNAME || process.env.PDC_USERNAME);
   const password = normalizeCredential(process.env.INPUT_PDC_PASSWORD || process.env.PDC_PASSWORD);
+  const hasAspNetRequestValidationRisk = (value) => /<|>|&#|&lt;|&gt;|%3c|%3e/i.test(String(value || ""));
   if (!username || !password) {
     console.error("❌ PDC_USERNAME/PASSWORD 없음");
+    await browser.close();
+    process.exit(1);
+  }
+  if (hasAspNetRequestValidationRisk(username)) {
+    console.error("❌ PDC_USERNAME에 CrewConnex가 거부하는 문자가 있습니다. <, >, HTML/XML 형태 문자를 제거하세요.");
+    await browser.close();
+    process.exit(1);
+  }
+  if (hasAspNetRequestValidationRisk(password)) {
+    console.error("❌ PDC_PASSWORD에 CrewConnex가 거부하는 문자가 있습니다. 비밀번호에서 <, >, HTML/XML 형태 문자를 제거하거나 CrewConnex 비밀번호를 변경하세요.");
     await browser.close();
     process.exit(1);
   }

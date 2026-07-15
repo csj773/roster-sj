@@ -82,6 +82,10 @@ function normalizeCredential(value) {
   return normalized;
 }
 
+function hasAspNetRequestValidationRisk(value) {
+  return /<|>|&#|&lt;|&gt;|%3c|%3e/i.test(String(value || ""));
+}
+
 // ------------------- POST /runRoster -------------------
 app.post("/runRoster", limiter, async (req, res) => {
   try {
@@ -92,6 +96,16 @@ app.post("/runRoster", limiter, async (req, res) => {
     const password = normalizeCredential(req.body?.password);
     if (!username || !password)
       return res.status(400).json({ error: "username and password required" });
+    if (hasAspNetRequestValidationRisk(username)) {
+      return res.status(400).json({
+        error: "username contains characters CrewConnex rejects. Remove <, >, HTML/XML-like text, or encoded angle brackets.",
+      });
+    }
+    if (hasAspNetRequestValidationRisk(password)) {
+      return res.status(400).json({
+        error: "password contains characters CrewConnex rejects. Change the CrewConnex password to avoid <, >, HTML/XML-like text, or encoded angle brackets.",
+      });
+    }
 
     console.log(`📤 Run roster.js from ${req.ip}`);
 
