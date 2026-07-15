@@ -11,7 +11,8 @@
     "start": "node server.js",
     "update-roster": "node -r dotenv/config roster.js",
     "build": "npm ci",
-    "upload-flightlog": "node SaveToFlightlog.js ./my_flightlog.csv"
+    "upload-flightlog": "node SaveToFlightlog.js ./my_flightlog.csv",
+    "postinstall": "node scripts/install-render-chrome.mjs"
   },
   "dependencies": {
     "body-parser": "^2.2.0",
@@ -37,5 +38,3 @@
   "author": "SJ",
   "license": "MIT"
 }
-
-
