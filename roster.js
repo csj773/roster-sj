@@ -20,13 +20,25 @@ import {
 
 import { appendPerDiemGoogleSheet, generatePerDiemList, savePerDiemCSV, uploadPerDiemFirestore } from "./perdiem.js";
 
+function readConfigValue(name) {
+  if (process.env[name]) return process.env[name];
+
+  const secretPath = `/etc/secrets/${name}`;
+  if (fs.existsSync(secretPath)) {
+    return fs.readFileSync(secretPath, "utf8").trim();
+  }
+
+  return "";
+}
+
 // ------------------- Firebase 초기화 -------------------
 console.log("🚀 Firebase 초기화 시작");
-if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
+const firebaseServiceAccountJson = readConfigValue("FIREBASE_SERVICE_ACCOUNT");
+if (!firebaseServiceAccountJson) {
   console.error("❌ FIREBASE_SERVICE_ACCOUNT 없음");
   process.exit(1);
 }
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+const serviceAccount = JSON.parse(firebaseServiceAccountJson);
 if (serviceAccount.private_key) serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
 if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
@@ -34,11 +46,12 @@ console.log("✅ Firebase 초기화 완료");
 
 // ------------------- Google Sheets 초기화 -------------------
 console.log("🚀 Google Sheets 초기화 시작");
-if (!process.env.GOOGLE_SHEETS_CREDENTIALS) {
+const googleSheetsCredentialsJson = readConfigValue("GOOGLE_SHEETS_CREDENTIALS");
+if (!googleSheetsCredentialsJson) {
   console.error("❌ GOOGLE_SHEETS_CREDENTIALS 없음");
   process.exit(1);
 }
-const sheetsCredentials = JSON.parse(process.env.GOOGLE_SHEETS_CREDENTIALS);
+const sheetsCredentials = JSON.parse(googleSheetsCredentialsJson);
 if (sheetsCredentials.private_key) sheetsCredentials.private_key = sheetsCredentials.private_key.replace(/\\n/g, "\n");
 const sheetsAuth = new google.auth.GoogleAuth({
   credentials: sheetsCredentials,
