@@ -4,21 +4,31 @@ import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { spawn } from "child_process";
+import crypto from "crypto";
 import fetch from "node-fetch";
 import "dotenv/config";
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "20kb" }));
 app.use(helmet());
 
 // ------------------- CORS 설정 -------------------
+const corsOrigins = (process.env.CORS_ORIGINS || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 app.use(
   cors({
-    origin: [
-      "https://your-flutterflow-app.web.app",
-      "https://your-flutterflow-app.firebaseapp.com",
-    ],
-    methods: ["POST"],
+    origin(origin, callback) {
+      if (!origin || corsOrigins.length === 0 || corsOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error("Not allowed by CORS"));
+    },
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "x-api-key"],
   })
 );
 
@@ -29,8 +39,29 @@ const limiter = rateLimit({
   message: { error: "Too many requests, please try again later." },
 });
 
-// ------------------- 고정 API 키 -------------------
-const API_KEY = "mysecret123";
+// ------------------- API 키 인증 -------------------
+const API_KEY = process.env.ROSTER_API_KEY || process.env.API_KEY || "";
+
+function timingSafeEqualText(a, b) {
+  const left = Buffer.from(String(a || ""));
+  const right = Buffer.from(String(b || ""));
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function requireApiKey(req, res) {
+  if (!API_KEY) {
+    res.status(500).json({ error: "ROSTER_API_KEY is not configured" });
+    return false;
+  }
+
+  const auth = req.headers["x-api-key"];
+  if (!auth || !timingSafeEqualText(auth, API_KEY)) {
+    res.status(401).json({ error: "Unauthorized" });
+    return false;
+  }
+
+  return true;
+}
 
 // ------------------- 민감정보 마스킹 -------------------
 function mask(str, username, password) {
@@ -43,9 +74,7 @@ function mask(str, username, password) {
 // ------------------- POST /runRoster -------------------
 app.post("/runRoster", limiter, async (req, res) => {
   try {
-    const auth = req.headers["x-api-key"];
-    if (!auth || auth !== API_KEY)
-      return res.status(401).json({ error: "Unauthorized" });
+    if (!requireApiKey(req, res)) return;
 
     const { username, password, firebaseUid } = req.body || {};
     if (!username || !password)
@@ -89,9 +118,7 @@ app.post("/runRoster", limiter, async (req, res) => {
 // ------------------- POST /triggerWorkflow -------------------
 app.post("/triggerWorkflow", limiter, async (req, res) => {
   try {
-    const auth = req.headers["x-api-key"];
-    if (!auth || auth !== API_KEY)
-      return res.status(401).json({ error: "Unauthorized" });
+    if (!requireApiKey(req, res)) return;
 
     const { username, password } = req.body || {};
     if (!username || !password)
