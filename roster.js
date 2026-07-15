@@ -117,6 +117,111 @@ async function buildBrowserLaunchOptions() {
   return { headless: "new", args };
 }
 
+async function clickRosterNavigation(page) {
+  for (const frame of page.frames()) {
+    const clicked = await frame.evaluate(() => {
+      const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
+      const candidates = Array.from(document.querySelectorAll("a,button,input,[role='button'],[onclick]"));
+      const rosterWords = ["roster", "crew roster", "my roster", "로스터", "스케줄", "schedule"];
+
+      const matches = candidates
+        .map((element) => {
+          const text = normalize(element.innerText || element.textContent || element.value || "");
+          const aria = normalize(element.getAttribute("aria-label") || "");
+          const title = normalize(element.getAttribute("title") || "");
+          const href = normalize(element.getAttribute("href") || "");
+          const onclick = normalize(element.getAttribute("onclick") || "");
+          const combined = `${text} ${aria} ${title} ${href} ${onclick}`.toLowerCase();
+          return { element, text, aria, title, href, onclick, combined };
+        })
+        .filter((item) => rosterWords.some((word) => item.combined.includes(word)))
+        .filter((item) => !item.combined.includes("preference"));
+
+      const target = matches[0];
+      if (!target) return null;
+
+      target.element.scrollIntoView({ block: "center", inline: "center" });
+      target.element.click();
+      return {
+        text: target.text,
+        aria: target.aria,
+        title: target.title,
+        href: target.href,
+        onclick: target.onclick,
+      };
+    });
+
+    if (clicked) {
+      return clicked;
+    }
+  }
+
+  return null;
+}
+
+async function collectRosterDiagnostics(page) {
+  const diagnostics = [];
+  for (const frame of page.frames()) {
+    const detail = await frame.evaluate(() => {
+      const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
+      const candidates = Array.from(document.querySelectorAll("a,button,input,[role='button'],[onclick]"))
+        .slice(0, 80)
+        .map((element) => ({
+          text: normalize(element.innerText || element.textContent || element.value || "").slice(0, 80),
+          aria: normalize(element.getAttribute("aria-label") || "").slice(0, 80),
+          title: normalize(element.getAttribute("title") || "").slice(0, 80),
+          href: normalize(element.getAttribute("href") || "").slice(0, 120),
+          onclick: normalize(element.getAttribute("onclick") || "").slice(0, 120),
+        }))
+        .filter((item) => item.text || item.aria || item.title || item.href || item.onclick);
+
+      return {
+        url: location.href,
+        title: document.title,
+        body: normalize(document.body?.innerText || "").slice(0, 500),
+        candidates,
+      };
+    });
+    diagnostics.push(detail);
+  }
+  return diagnostics;
+}
+
+async function extractRosterRaw(page) {
+  const frames = page.frames();
+  let fallback = [];
+
+  for (const frame of frames) {
+    const result = await frame.evaluate(() => {
+      const normalize = (value) => value.replace(/\s+/g, " ").trim();
+      const tables = Array.from(document.querySelectorAll("table"));
+      const tableRows = tables
+        .map(table =>
+          Array.from(table.querySelectorAll("tr"))
+            .map(tr => Array.from(tr.querySelectorAll("th,td")).map(td => normalize(td.innerText)))
+        )
+        .filter(rows => rows.length > 1);
+
+      const rosterTable = tableRows.find(rows => {
+        const firstRows = rows.slice(0, 5).flat();
+        return ["Date", "Activity", "From", "To"].every(header =>
+          firstRows.some(cell => cell === header || cell.includes(header))
+        );
+      });
+
+      return {
+        rosterTable: rosterTable || null,
+        fallbackTable: tableRows.sort((a, b) => b.length - a.length)[0] || [],
+      };
+    });
+
+    if (result.rosterTable) return result.rosterTable;
+    if (result.fallbackTable.length > fallback.length) fallback = result.fallbackTable;
+  }
+
+  return fallback;
+}
+
 // ------------------- Puppeteer 브라우저 시작 -------------------
 (async () => {
   console.log("🚀 Puppeteer 브라우저 시작");
@@ -145,37 +250,24 @@ async function buildBrowserLaunchOptions() {
 
   // ------------------- Roster 메뉴 이동 -------------------
   console.log("🚀 Roster 메뉴 이동");
-  const rosterLinkHandle = await page.evaluateHandle(() => {
-    const links = Array.from(document.querySelectorAll("a"));
-    return links.find(a => a.textContent.includes("Roster")) || null;
-  });
-  const rosterLink = rosterLinkHandle.asElement();
-  if (!rosterLink) { console.error("❌ Roster 링크 없음"); await browser.close(); return; }
-  await Promise.all([rosterLink.click(), page.waitForNavigation({ waitUntil: "networkidle0" })]);
+  const navigationPromise = page.waitForNavigation({ waitUntil: "networkidle0", timeout: 15000 }).catch(() => null);
+  const rosterClick = await clickRosterNavigation(page);
+  if (!rosterClick) {
+    const diagnostics = await collectRosterDiagnostics(page);
+    console.error("❌ Roster 링크 없음");
+    console.error(`현재 URL: ${page.url()}`);
+    console.error(`화면 후보: ${JSON.stringify(diagnostics).slice(0, 3000)}`);
+    await browser.close();
+    return;
+  }
+  console.log(`✅ Roster 메뉴 클릭: ${JSON.stringify(rosterClick)}`);
+  await navigationPromise;
   console.log("✅ Roster 메뉴 진입 성공");
 
   // ------------------- Roster 데이터 추출 -------------------
   console.log("🚀 Roster 데이터 추출");
-  await page.waitForSelector("table tr");
-  const rosterRaw = await page.evaluate(() => {
-    const normalize = (value) => value.replace(/\s+/g, " ").trim();
-    const tables = Array.from(document.querySelectorAll("table"));
-    const tableRows = tables
-      .map(table =>
-        Array.from(table.querySelectorAll("tr"))
-          .map(tr => Array.from(tr.querySelectorAll("th,td")).map(td => normalize(td.innerText)))
-      )
-      .filter(rows => rows.length > 1);
-
-    const rosterTable = tableRows.find(rows => {
-      const firstRow = rows[0] || [];
-      return ["Date", "Activity", "From", "To"].every(header =>
-        firstRow.some(cell => cell === header || cell.includes(header))
-      );
-    });
-
-    return rosterTable || tableRows.flat();
-  });
+  await page.waitForTimeout(3000);
+  const rosterRaw = await extractRosterRaw(page);
   const looksLikeRosterHeader = (row) =>
     ["Date", "Activity", "From", "To"].every(header =>
       row.some(cell => cell === header || cell.includes(header))
