@@ -222,6 +222,10 @@ async function extractRosterRaw(page) {
   return fallback;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // ------------------- Puppeteer 브라우저 시작 -------------------
 (async () => {
   console.log("🚀 Puppeteer 브라우저 시작");
@@ -303,7 +307,7 @@ async function extractRosterRaw(page) {
 
   // ------------------- Roster 데이터 추출 -------------------
   console.log("🚀 Roster 데이터 추출");
-  await page.waitForTimeout(3000);
+  await sleep(3000);
   const rosterRaw = await extractRosterRaw(page);
   const looksLikeRosterHeader = (row) =>
     ["Date", "Activity", "From", "To"].every(header =>
