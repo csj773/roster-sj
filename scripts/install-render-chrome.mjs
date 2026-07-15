@@ -12,13 +12,15 @@ if (!isRender) {
   process.exit(0);
 }
 
-console.log("Installing Puppeteer Chrome for Render...");
 const npx = process.platform === "win32" ? "npx.cmd" : "npx";
 const cacheDir = process.env.PUPPETEER_CACHE_DIR || path.join(process.cwd(), ".cache", "puppeteer");
+console.log(`Installing Puppeteer Chrome for Render into ${cacheDir}...`);
 execFileSync(npx, ["puppeteer", "browsers", "install", "chrome"], {
   stdio: "inherit",
   env: {
     ...process.env,
     PUPPETEER_CACHE_DIR: cacheDir,
+    PUPPETEER_SKIP_DOWNLOAD: "false",
+    PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: "false",
   },
 });
