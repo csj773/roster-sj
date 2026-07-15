@@ -90,6 +90,7 @@ if (!flutterflowUid || !firestoreAdminUid) {
 console.log("✅ UID 및 Config 로드 완료");
 
 const spreadsheetId="1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
+process.env.PUPPETEER_CACHE_DIR = process.env.PUPPETEER_CACHE_DIR || path.join(process.cwd(), ".cache", "puppeteer");
 
 // ------------------- Puppeteer 브라우저 시작 -------------------
 (async () => {
