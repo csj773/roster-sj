@@ -230,8 +230,18 @@ async function extractRosterRaw(page) {
   const page = await browser.newPage();
 
   // ------------------- PDC 로그인 -------------------
-  const username = process.env.INPUT_PDC_USERNAME || process.env.PDC_USERNAME;
-  const password = process.env.INPUT_PDC_PASSWORD || process.env.PDC_PASSWORD;
+  const normalizeCredential = (value) => {
+    let normalized = String(value || "").trim();
+    for (let i = 0; i < 3; i++) {
+      const quoted = (normalized.startsWith("\"") && normalized.endsWith("\"")) ||
+        (normalized.startsWith("'") && normalized.endsWith("'"));
+      if (!quoted) break;
+      normalized = normalized.slice(1, -1).trim();
+    }
+    return normalized;
+  };
+  const username = normalizeCredential(process.env.INPUT_PDC_USERNAME || process.env.PDC_USERNAME);
+  const password = normalizeCredential(process.env.INPUT_PDC_PASSWORD || process.env.PDC_PASSWORD);
   if (!username || !password) {
     console.error("❌ PDC_USERNAME/PASSWORD 없음");
     await browser.close();
@@ -251,7 +261,8 @@ async function extractRosterRaw(page) {
     const text = String(document.body?.innerText || "").replace(/\s+/g, " ");
     const title = String(document.title || "");
     return {
-      failed: /not recognized|invalid|login failed|incorrect/i.test(text) || /Login/i.test(title),
+      failed: /not recognized|invalid|login failed|incorrect|server error|potentially dangerous request\.form|request validation/i.test(text) ||
+        /Login|Server Error|potentially dangerous/i.test(title),
       title,
       message: text.slice(0, 300),
     };

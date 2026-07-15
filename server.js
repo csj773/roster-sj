@@ -71,12 +71,25 @@ function mask(str, username, password) {
     .split(password || "").join("[REDACTED]");
 }
 
+function normalizeCredential(value) {
+  let normalized = String(value || "").trim();
+  for (let i = 0; i < 3; i++) {
+    const startsAndEndsWithDouble = normalized.startsWith("\"") && normalized.endsWith("\"");
+    const startsAndEndsWithSingle = normalized.startsWith("'") && normalized.endsWith("'");
+    if (!startsAndEndsWithDouble && !startsAndEndsWithSingle) break;
+    normalized = normalized.slice(1, -1).trim();
+  }
+  return normalized;
+}
+
 // ------------------- POST /runRoster -------------------
 app.post("/runRoster", limiter, async (req, res) => {
   try {
     if (!requireApiKey(req, res)) return;
 
-    const { username, password, firebaseUid } = req.body || {};
+    const { firebaseUid } = req.body || {};
+    const username = normalizeCredential(req.body?.username);
+    const password = normalizeCredential(req.body?.password);
     if (!username || !password)
       return res.status(400).json({ error: "username and password required" });
 
