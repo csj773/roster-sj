@@ -92,6 +92,7 @@ app.post("/runRoster", limiter, async (req, res) => {
     if (!requireApiKey(req, res)) return;
 
     const { firebaseUid } = req.body || {};
+    const asyncMode = req.body?.async === true || req.body?.waitForResult === false;
     const username = normalizeCredential(req.body?.username);
     const password = normalizeCredential(req.body?.password);
     if (!username || !password)
@@ -123,18 +124,31 @@ app.post("/runRoster", limiter, async (req, res) => {
     child.stdout.on("data", (d) => (out += d.toString()));
     child.stderr.on("data", (d) => (err += d.toString()));
 
+    if (asyncMode) {
+      res.status(202).json({
+        ok: true,
+        status: "started",
+        message: "Roster sync started. Check Render logs, Firestore, or Google Sheets for completion.",
+      });
+    }
+
     child.on("close", (code) => {
       console.log(`✅ roster.js finished (exit ${code})`);
-      res.json({
+      const result = {
         exitCode: code,
         stdout: mask(out, username, password),
         stderr: mask(err, username, password),
-      });
+      };
+      if (asyncMode) {
+        console.log("📦 Async roster result:", result);
+        return;
+      }
+      res.json(result);
     });
 
     child.on("error", (error) => {
       console.error("❌ Spawn error:", error);
-      res.status(500).json({ error: error.message });
+      if (!res.headersSent) res.status(500).json({ error: error.message });
     });
   } catch (e) {
     console.error("❌ Server error:", e);
