@@ -15,7 +15,7 @@ if (!isRender) {
 console.log("Installing Puppeteer Chrome for Render...");
 const npx = process.platform === "win32" ? "npx.cmd" : "npx";
 const cacheDir = process.env.PUPPETEER_CACHE_DIR || path.join(process.cwd(), ".cache", "puppeteer");
-execFileSync(npx, ["puppeteer", "install", "chrome"], {
+execFileSync(npx, ["puppeteer", "browsers", "install", "chrome"], {
   stdio: "inherit",
   env: {
     ...process.env,
