@@ -87,6 +87,7 @@ jobs:
             { header: "착륙", field: "LDG", type: "integer" },
             { header: "RO", field: "RO", type: "datetime" },
             { header: "RI", field: "RI", type: "datetime" },
+            { header: "remark", fallbackHeaders: ["Remarks", "remark channel"], field: "Crew", type: "string" },
           ];
 
           function requiredJsonEnv(name) {
