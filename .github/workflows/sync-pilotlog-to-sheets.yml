@@ -252,6 +252,7 @@ jobs:
 
           function valueForHeader(header, index, data) {
             const name = String(header || "").trim();
+            const lowerName = name.toLowerCase();
 
             if (name === "NAME") return valueByKeys(data, ["NAME", "Name", "name"]);
             if (name === "EMPNO" || name === "EMP NO") return valueByKeys(data, ["EMPNO", "EMP NO", "EmpNo"]);
@@ -282,6 +283,7 @@ jobs:
             if (name === "연장시간") return valueByKeys(data, ["연장시간", "ET"]);
             if (name.includes("야간")) return valueByKeys(data, [name, "NGT", "NT"]);
             if (name === "remark" || name === "Remarks") return valueByKeys(data, ["remark", "Remarks"]);
+            if (lowerName === "remark channel") return valueByKeys(data, ["Crew", "CREW", "crew"]);
             if (name === "Destination") return valueByKeys(data, ["Destination", "TO", "To"]);
             if (name === "Destination ") return valueByKeys(data, ["Destination ", "Destination", "TO", "To"]);
             if (name === "YEAR") return valueByKeys(data, ["YEAR", "Year"]);
