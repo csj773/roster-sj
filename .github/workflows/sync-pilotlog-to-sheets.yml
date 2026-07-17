@@ -288,6 +288,7 @@ jobs:
             if (name === "YEAR") return valueByKeys(data, ["YEAR", "Year"]);
             if (name === "MONTH") return formatMonthNumber(valueByKeys(data, ["MONTH", "Month"]));
             if (name === "MONTH ") return formatMonthNumber(valueByKeys(data, ["MONTH ", "MONTH", "Month"]));
+            if (name === "P3") return valueByKeys(data, ["P3"]);
             if (name === "CAP") return valueByKeys(data, ["CAP"]);
             if (name === "ID") return data.generatedId;
 
