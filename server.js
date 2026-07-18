@@ -6,6 +6,8 @@ import rateLimit from "express-rate-limit";
 import { spawn } from "child_process";
 import crypto from "crypto";
 import fetch from "node-fetch";
+import fs from "fs";
+import admin from "firebase-admin";
 import "dotenv/config";
 
 const app = express();
@@ -28,7 +30,7 @@ app.use(
       callback(new Error("Not allowed by CORS"));
     },
     methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "x-api-key"],
+    allowedHeaders: ["Content-Type", "x-api-key", "Authorization"],
   })
 );
 
@@ -41,6 +43,7 @@ const limiter = rateLimit({
 
 // ------------------- API 키 인증 -------------------
 const API_KEY = process.env.ROSTER_API_KEY || process.env.API_KEY || "";
+const REQUIRE_FIREBASE_AUTH = String(process.env.ROSTER_REQUIRE_FIREBASE_AUTH || "").toLowerCase() === "true";
 
 function timingSafeEqualText(a, b) {
   const left = Buffer.from(String(a || ""));
@@ -61,6 +64,48 @@ function requireApiKey(req, res) {
   }
 
   return true;
+}
+
+function readConfigValue(name) {
+  if (process.env[name]) return process.env[name];
+
+  const secretPath = `/etc/secrets/${name}`;
+  if (fs.existsSync(secretPath)) return fs.readFileSync(secretPath, "utf8").trim();
+
+  return "";
+}
+
+function parseJsonConfig(name, value) {
+  const parsed = JSON.parse(value);
+  if (parsed.private_key) parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
+  return parsed;
+}
+
+function initializeFirebaseAdmin() {
+  if (admin.apps.length) return;
+
+  const raw = readConfigValue("FIREBASE_SERVICE_ACCOUNT");
+  if (!raw) throw new Error("FIREBASE_SERVICE_ACCOUNT is required when ROSTER_REQUIRE_FIREBASE_AUTH=true");
+
+  admin.initializeApp({
+    credential: admin.credential.cert(parseJsonConfig("FIREBASE_SERVICE_ACCOUNT", raw)),
+  });
+}
+
+async function verifiedFirebaseUid(req) {
+  if (!REQUIRE_FIREBASE_AUTH) return "";
+
+  const authorization = String(req.headers.authorization || "");
+  const match = authorization.match(/^Bearer\s+(.+)$/i);
+  if (!match) {
+    const error = new Error("Firebase ID token required");
+    error.statusCode = 401;
+    throw error;
+  }
+
+  initializeFirebaseAdmin();
+  const decoded = await admin.auth().verifyIdToken(match[1]);
+  return decoded.uid || "";
 }
 
 // ------------------- 민감정보 마스킹 -------------------
@@ -100,6 +145,7 @@ app.post("/runRoster", limiter, async (req, res) => {
     if (!requireApiKey(req, res)) return;
 
     const { firebaseUid } = req.body || {};
+    const authUid = await verifiedFirebaseUid(req);
     const asyncMode = req.body?.async === true || req.body?.waitForResult === false;
     const username = normalizeCredential(req.body?.username);
     const password = normalizeCredential(req.body?.password);
@@ -119,10 +165,12 @@ app.post("/runRoster", limiter, async (req, res) => {
     console.log(`📤 Run roster.js from ${req.ip}`);
 
     const runFirebaseUid =
+      validFirebaseUid(authUid) ||
       validFirebaseUid(firebaseUid) ||
       validFirebaseUid(process.env.FIREBASE_UID) ||
       DEFAULT_FIREBASE_UID;
     const runAdminUid =
+      validFirebaseUid(authUid) ||
       validFirebaseUid(firebaseUid) ||
       validFirebaseUid(process.env.INPUT_ADMIN_FIREBASE_UID) ||
       validFirebaseUid(process.env.ADMIN_FIREBASE_UID) ||
@@ -173,7 +221,7 @@ app.post("/runRoster", limiter, async (req, res) => {
     });
   } catch (e) {
     console.error("❌ Server error:", e);
-    res.status(500).json({ error: e.message });
+    res.status(e.statusCode || 500).json({ error: e.message });
   }
 });
 

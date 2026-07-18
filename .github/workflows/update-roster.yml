@@ -48,19 +48,12 @@ jobs:
         env:
           firestoreAdminUid: ${{ secrets.FIRESTORE_ADMIN_UID }}
 
-      # 6. roster.json, roster.csv, perdiem.csv 커밋/푸시
-      - name: Commit & Push JSON/CSV
+      # 6. Do not commit generated roster data. These files contain personal schedule data.
+      - name: Keep generated roster files local to this run
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add public/roster.json public/roster.csv public/perdiem.csv
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "Update roster & PerDiem data"
-            git pull --rebase origin main
-            git push
-          fi
+          test -s public/roster.json
+          test -s public/roster.csv
+          echo "Generated roster files are available only inside this workflow run."
 
       # 7. gcal.js 실행 (Google Calendar 업데이트)
       - name: Run gcal.js

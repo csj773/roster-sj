@@ -1,2 +1,18 @@
 node_modules/
 
+# Local secrets
+.env
+.env.*
+!.env.example
+serviceAccountKey.json
+
+# Generated personal data
+public/roster.json
+public/roster.csv
+public/perdiem.csv
+public/my_flightlog.csv
+outputs/
+artifacts/
+
+# OS files
+.DS_Store

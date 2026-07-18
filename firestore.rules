@@ -1,0 +1,70 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner() {
+      return signedIn() && resource.data.owner == request.auth.uid;
+    }
+
+    function createsOwnDoc() {
+      return signedIn() && request.resource.data.owner == request.auth.uid;
+    }
+
+    function keepsOwner() {
+      return signedIn()
+        && resource.data.owner == request.auth.uid
+        && request.resource.data.owner == resource.data.owner;
+    }
+
+    function userEmailMatchesExisting() {
+      return signedIn()
+        && request.auth.token.email != null
+        && resource.data.email == request.auth.token.email;
+    }
+
+    function userEmailMatchesNew() {
+      return signedIn()
+        && request.auth.token.email != null
+        && request.resource.data.email == request.auth.token.email;
+    }
+
+    match /roster/{docId} {
+      allow read, delete: if isOwner();
+      allow create: if createsOwnDoc();
+      allow update: if keepsOwner();
+    }
+
+    match /Perdiem/{docId} {
+      allow read, delete: if isOwner();
+      allow create: if createsOwnDoc();
+      allow update: if keepsOwner();
+    }
+
+    match /Payments/{docId} {
+      allow read, delete: if isOwner();
+      allow create: if createsOwnDoc();
+      allow update: if keepsOwner();
+    }
+
+    match /Pilotlog/{docId} {
+      allow read, delete: if isOwner() || userEmailMatchesExisting();
+      allow create: if createsOwnDoc() || userEmailMatchesNew();
+      allow update: if keepsOwner()
+        || (userEmailMatchesExisting()
+          && userEmailMatchesNew()
+          && request.resource.data.email == resource.data.email);
+    }
+
+    match /salaryReportRuns/{docId} {
+      allow read, write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
