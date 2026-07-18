@@ -37,6 +37,8 @@ jobs:
           INPUT_PDC_USERNAME: ${{ secrets.PDC_USERNAME }}
           INPUT_PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_UID: ${{ secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
+          INPUT_FIREBASE_UID: ${{ secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
           INPUT_ADMIN_FIREBASE_UID: ${{ secrets.FIRESTORE_ADMIN_UID }}
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
           USER_ID: ${{ secrets.USER_ID }}
