@@ -77,9 +77,22 @@ function readConfigValue(name) {
 }
 
 function parseJsonConfig(name, value) {
-  const parsed = JSON.parse(value);
-  if (parsed.private_key) parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
-  return parsed;
+  try {
+    const parsed = JSON.parse(value);
+    if (parsed.private_key) parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
+    return parsed;
+  } catch (error) {
+    const normalized = value
+      .replace(/^\uFEFF/, "")
+      .replace(/[“”]/g, "\"")
+      .replace(/[‘’]/g, "'")
+      .replace(/-----BEGIN PRIVATE KEY[—–-]+/g, "-----BEGIN PRIVATE KEY-----")
+      .replace(/[—–-]+END PRIVATE KEY[—–-]+/g, "-----END PRIVATE KEY-----");
+
+    const parsed = JSON.parse(normalized);
+    if (parsed.private_key) parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
+    return parsed;
+  }
 }
 
 function initializeFirebaseAdmin() {
