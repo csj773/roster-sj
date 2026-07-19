@@ -16,3 +16,4 @@ artifacts/
 
 # OS files
 .DS_Store
+.vercel
