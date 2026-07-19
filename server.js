@@ -92,8 +92,8 @@ function initializeFirebaseAdmin() {
   });
 }
 
-async function verifiedFirebaseUid(req) {
-  if (!REQUIRE_FIREBASE_AUTH) return "";
+async function verifiedFirebaseUser(req) {
+  if (!REQUIRE_FIREBASE_AUTH) return { uid: "", email: "" };
 
   const authorization = String(req.headers.authorization || "");
   const match = authorization.match(/^Bearer\s+(.+)$/i);
@@ -105,7 +105,10 @@ async function verifiedFirebaseUid(req) {
 
   initializeFirebaseAdmin();
   const decoded = await admin.auth().verifyIdToken(match[1]);
-  return decoded.uid || "";
+  return {
+    uid: decoded.uid || "",
+    email: decoded.email || "",
+  };
 }
 
 // ------------------- 민감정보 마스킹 -------------------
@@ -170,7 +173,8 @@ app.post("/runRoster", limiter, async (req, res) => {
     if (!requireApiKey(req, res)) return;
 
     const { firebaseUid } = req.body || {};
-    const authUid = await verifiedFirebaseUid(req);
+    const authUser = await verifiedFirebaseUser(req);
+    const authUid = authUser.uid || "";
     const asyncMode = req.body?.async === true || req.body?.waitForResult === false;
     const username = normalizeCredential(req.body?.username);
     const password = normalizeCredential(req.body?.password);
@@ -198,6 +202,7 @@ app.post("/runRoster", limiter, async (req, res) => {
       INPUT_FIREBASE_UID: runFirebaseUid,
       INPUT_ADMIN_FIREBASE_UID: runAdminUid,
       FIREBASE_UID: runFirebaseUid,
+      USER_ID: REQUIRE_FIREBASE_AUTH ? authUser.email || "" : process.env.USER_ID || "",
       CHROME_PATH: process.env.CHROME_PATH || "",
     };
 
