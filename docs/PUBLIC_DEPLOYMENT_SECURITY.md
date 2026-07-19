@@ -74,6 +74,7 @@ Content-Type: application/json
 ```
 
 When this is enabled, the backend uses the verified Firebase UID from the token instead of trusting `firebaseUid` from the request body.
+For public users, do not send or store per-user UIDs in GitHub Secrets. The verified token UID is used for both `owner` and `uid`.
 
 ## App Check
 

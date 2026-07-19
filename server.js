@@ -139,6 +139,31 @@ function validFirebaseUid(value) {
   return uid;
 }
 
+function resolveRunUids({ authUid, firebaseUid }) {
+  if (REQUIRE_FIREBASE_AUTH) {
+    const verifiedUid = validFirebaseUid(authUid);
+    if (!verifiedUid) {
+      const error = new Error("Verified Firebase UID is required");
+      error.statusCode = 401;
+      throw error;
+    }
+    return { runFirebaseUid: verifiedUid, runAdminUid: verifiedUid };
+  }
+
+  const runFirebaseUid =
+    validFirebaseUid(firebaseUid) ||
+    validFirebaseUid(process.env.FIREBASE_UID) ||
+    DEFAULT_FIREBASE_UID;
+  const runAdminUid =
+    validFirebaseUid(firebaseUid) ||
+    validFirebaseUid(process.env.INPUT_ADMIN_FIREBASE_UID) ||
+    validFirebaseUid(process.env.ADMIN_FIREBASE_UID) ||
+    validFirebaseUid(process.env.FIREBASE_UID) ||
+    DEFAULT_FIREBASE_UID;
+
+  return { runFirebaseUid, runAdminUid };
+}
+
 // ------------------- POST /runRoster -------------------
 app.post("/runRoster", limiter, async (req, res) => {
   try {
@@ -164,18 +189,7 @@ app.post("/runRoster", limiter, async (req, res) => {
 
     console.log(`📤 Run roster.js from ${req.ip}`);
 
-    const runFirebaseUid =
-      validFirebaseUid(authUid) ||
-      validFirebaseUid(firebaseUid) ||
-      validFirebaseUid(process.env.FIREBASE_UID) ||
-      DEFAULT_FIREBASE_UID;
-    const runAdminUid =
-      validFirebaseUid(authUid) ||
-      validFirebaseUid(firebaseUid) ||
-      validFirebaseUid(process.env.INPUT_ADMIN_FIREBASE_UID) ||
-      validFirebaseUid(process.env.ADMIN_FIREBASE_UID) ||
-      validFirebaseUid(process.env.FIREBASE_UID) ||
-      DEFAULT_FIREBASE_UID;
+    const { runFirebaseUid, runAdminUid } = resolveRunUids({ authUid, firebaseUid });
 
     const env = {
       ...process.env,
