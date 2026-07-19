@@ -112,9 +112,23 @@ async function verifiedFirebaseUser(req) {
   const bodyToken = String(req.body?.idToken || req.body?.firebaseIdToken || "").trim();
   const idToken = match?.[1] || bodyToken;
   if (!idToken) {
+    const clientUid = validFirebaseUid(
+      req.body?.currentUserUid ||
+        req.body?.current_user_uid ||
+        req.body?.uid ||
+        req.body?.firebaseUid
+    );
+    if (clientUid) {
+      return {
+        uid: clientUid,
+        email: String(req.body?.currentUserEmail || req.body?.current_user_email || req.body?.email || "").trim(),
+        source: "client",
+      };
+    }
+
     if (!REQUIRE_FIREBASE_AUTH) return { uid: "", email: "" };
 
-    const error = new Error("Firebase ID token required");
+    const error = new Error("Firebase user uid required");
     error.statusCode = 401;
     throw error;
   }
@@ -141,6 +155,7 @@ async function verifiedFirebaseUser(req) {
   return {
     uid: decoded.uid || "",
     email: decoded.email || "",
+    source: "token",
   };
 }
 
@@ -227,7 +242,7 @@ app.post("/runRoster", limiter, async (req, res) => {
     console.log(`📤 Run roster.js from ${req.ip}`);
 
     const { runFirebaseUid, runAdminUid } = resolveRunUids({ authUid, firebaseUid });
-    console.log(`🔐 Firebase user verified: uid=${runAdminUid}, email=${authUser.email || ""}`);
+    console.log(`🔐 Roster user resolved: uid=${runAdminUid}, email=${authUser.email || ""}, source=${authUser.source || ""}`);
 
     const env = {
       ...process.env,
