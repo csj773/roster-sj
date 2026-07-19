@@ -507,9 +507,10 @@ function sleep(ms) {
   }
 
   async function uploadDoc(db, collectionName, docData, i) {
-    // Firestore 업로드 시 중복 제거 기준: Date/DC/Activity/From/To
+    // Firestore 업로드 시 중복 제거 기준: owner/Date/DC/Activity/From/To
     // F 컬럼 매핑이 바뀌어도 같은 roster 항목을 찾아 지울 수 있게 Activity를 기준으로 쓴다.
     const querySnapshot = await db.collection(collectionName)
+      .where("owner", "==", docData.owner)
       .where("Date", "==", docData.Date)
       .where("DC", "==", docData.DC)
       .where("Activity", "==", docData.Activity)
@@ -525,7 +526,7 @@ function sleep(ms) {
 
     const newDocRef = await db.collection(collectionName).add(docData);
     console.log(
-      `✅ ${i}행 업로드 완료 (중복 기준: Date/DC/Activity/From/To): ${newDocRef.id}, NT=${docData.NT}, ET=${docData.ET}, CrewCount=${docData.CrewArray.length}, Year=${docData.Year}, Month=${docData.Month}`
+      `✅ ${i}행 업로드 완료 (중복 기준: owner/Date/DC/Activity/From/To): ${newDocRef.id}, NT=${docData.NT}, ET=${docData.ET}, CrewCount=${docData.CrewArray.length}, Year=${docData.Year}, Month=${docData.Month}`
     );
   }
 
