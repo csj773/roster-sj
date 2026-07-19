@@ -488,6 +488,7 @@ function sleep(ms) {
     docData.DateRaw = resolveDateRaw(i, values, docData);
     docData.Date = resolvedDateForRow(row) || convertDate(docData.DateRaw);
     docData.owner = firestoreAdminUid || "";
+    docData.uid = firestoreAdminUid || "";
     docData.pdc_user_name = username || "";
     docData.email = process.env.USER_ID || "";
     if (!docData.Activity || docData.Activity.trim() === "") return null;
