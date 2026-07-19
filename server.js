@@ -109,7 +109,9 @@ function initializeFirebaseAdmin() {
 async function verifiedFirebaseUser(req) {
   const authorization = String(req.headers.authorization || "");
   const match = authorization.match(/^Bearer\s+(.+)$/i);
-  if (!match) {
+  const bodyToken = String(req.body?.idToken || req.body?.firebaseIdToken || "").trim();
+  const idToken = match?.[1] || bodyToken;
+  if (!idToken) {
     if (!REQUIRE_FIREBASE_AUTH) return { uid: "", email: "" };
 
     const error = new Error("Firebase ID token required");
@@ -120,7 +122,7 @@ async function verifiedFirebaseUser(req) {
   initializeFirebaseAdmin();
   let decoded;
   try {
-    decoded = await admin.auth().verifyIdToken(match[1]);
+    decoded = await admin.auth().verifyIdToken(idToken);
   } catch (error) {
     const authError = new Error(error.message || "Invalid Firebase ID token");
     authError.statusCode = 401;
