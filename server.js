@@ -118,7 +118,14 @@ async function verifiedFirebaseUser(req) {
   }
 
   initializeFirebaseAdmin();
-  const decoded = await admin.auth().verifyIdToken(match[1]);
+  let decoded;
+  try {
+    decoded = await admin.auth().verifyIdToken(match[1]);
+  } catch (error) {
+    const authError = new Error(error.message || "Invalid Firebase ID token");
+    authError.statusCode = 401;
+    throw authError;
+  }
   return {
     uid: decoded.uid || "",
     email: decoded.email || "",
@@ -208,6 +215,7 @@ app.post("/runRoster", limiter, async (req, res) => {
     console.log(`📤 Run roster.js from ${req.ip}`);
 
     const { runFirebaseUid, runAdminUid } = resolveRunUids({ authUid, firebaseUid });
+    console.log(`🔐 Firebase user verified: uid=${runAdminUid}, email=${authUser.email || ""}`);
 
     const env = {
       ...process.env,
