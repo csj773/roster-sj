@@ -118,6 +118,14 @@ async function verifiedFirebaseUser(req) {
     error.statusCode = 401;
     throw error;
   }
+  const tokenParts = idToken.split(".");
+  if (!idToken.startsWith("eyJ") || tokenParts.length !== 3) {
+    const error = new Error(
+      `Firebase ID token must be a full JWT string. Received length=${idToken.length}, parts=${tokenParts.length}.`
+    );
+    error.statusCode = 401;
+    throw error;
+  }
 
   initializeFirebaseAdmin();
   let decoded;
