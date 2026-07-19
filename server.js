@@ -93,11 +93,11 @@ function initializeFirebaseAdmin() {
 }
 
 async function verifiedFirebaseUser(req) {
-  if (!REQUIRE_FIREBASE_AUTH) return { uid: "", email: "" };
-
   const authorization = String(req.headers.authorization || "");
   const match = authorization.match(/^Bearer\s+(.+)$/i);
   if (!match) {
+    if (!REQUIRE_FIREBASE_AUTH) return { uid: "", email: "" };
+
     const error = new Error("Firebase ID token required");
     error.statusCode = 401;
     throw error;
@@ -143,7 +143,7 @@ function validFirebaseUid(value) {
 }
 
 function resolveRunUids({ authUid, firebaseUid }) {
-  if (REQUIRE_FIREBASE_AUTH) {
+  if (REQUIRE_FIREBASE_AUTH || authUid) {
     const verifiedUid = validFirebaseUid(authUid);
     if (!verifiedUid) {
       const error = new Error("Verified Firebase UID is required");
@@ -202,7 +202,7 @@ app.post("/runRoster", limiter, async (req, res) => {
       INPUT_FIREBASE_UID: runFirebaseUid,
       INPUT_ADMIN_FIREBASE_UID: runAdminUid,
       FIREBASE_UID: runFirebaseUid,
-      USER_ID: REQUIRE_FIREBASE_AUTH ? authUser.email || "" : process.env.USER_ID || "",
+      USER_ID: authUser.email || process.env.USER_ID || "",
       CHROME_PATH: process.env.CHROME_PATH || "",
     };
 
