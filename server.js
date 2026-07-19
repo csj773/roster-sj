@@ -132,7 +132,9 @@ async function verifiedFirebaseUser(req) {
   try {
     decoded = await admin.auth().verifyIdToken(idToken);
   } catch (error) {
-    const authError = new Error(error.message || "Invalid Firebase ID token");
+    const authError = new Error(
+      `${error.message || "Invalid Firebase ID token"} Received length=${idToken.length}, parts=${tokenParts.length}, prefix=${idToken.slice(0, 3)}.`
+    );
     authError.statusCode = 401;
     throw authError;
   }
