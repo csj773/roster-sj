@@ -6,6 +6,23 @@ on:
     #- cron: "0 * * * *"       # 매 시간 정각 실행
     - cron: "0 0,6,12,18 * * *" # 00:00, 06:00, 12:00, 18:00 UTC 실행
   workflow_dispatch:           # 수동 실행 허용
+    inputs:
+      username:
+        description: "CrewConnex username"
+        required: false
+        type: string
+      password:
+        description: "CrewConnex password"
+        required: false
+        type: string
+      current_user_uid:
+        description: "Firebase Authentication UID for roster owner"
+        required: false
+        type: string
+      current_user_email:
+        description: "Firebase Authentication email for roster email"
+        required: false
+        type: string
 
 permissions:
   contents: write              # 커밋/푸시 권한
@@ -20,28 +37,32 @@ jobs:
 
     steps:
       # 1. 코드 체크아웃
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # 2. Node.js 설치
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "24"
 
       # 3. 의존성 설치
       - run: npm install
+
+      - name: Mask workflow input password
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.password != '' }}
+        run: echo "::add-mask::${{ github.event.inputs.password }}"
 
       # 4. roster.js 실행 (로스터 JSON 생성)
       - name: Run roster.js
         env:
           CHROME_PATH: "/usr/bin/chromium-browser"
-          INPUT_PDC_USERNAME: ${{ secrets.PDC_USERNAME }}
-          INPUT_PDC_PASSWORD: ${{ secrets.PDC_PASSWORD }}
+          INPUT_PDC_USERNAME: ${{ github.event.inputs.username || secrets.PDC_USERNAME }}
+          INPUT_PDC_PASSWORD: ${{ github.event.inputs.password || secrets.PDC_PASSWORD }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          FIREBASE_UID: ${{ secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
-          INPUT_FIREBASE_UID: ${{ secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
-          INPUT_ADMIN_FIREBASE_UID: ${{ secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
+          FIREBASE_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
+          INPUT_FIREBASE_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
+          INPUT_ADMIN_FIREBASE_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
-          USER_ID: ${{ secrets.USER_ID }}
+          USER_ID: ${{ github.event.inputs.current_user_email || secrets.USER_ID }}
         run: node -r dotenv/config roster.js
 
       # 5. PerDiem 계산 및 CSV 저장 + Firestore 업로드

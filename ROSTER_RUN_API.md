@@ -3,6 +3,58 @@
 Use this endpoint when FlutterFlow collects a personal CrewConnex ID/password
 and runs the existing `roster.js` mapping flow.
 
+## Vercel API -> GitHub Actions
+
+Use this endpoint when FlutterFlow should trigger GitHub Actions instead of
+running Puppeteer on Render.
+
+### Vercel Environment Variables
+
+Set these in Vercel:
+
+```text
+ROSTER_API_KEY=<long random value>
+GITHUB_TOKEN=<GitHub token with Actions workflow dispatch permission>
+GITHUB_REPO=csj773/roster-sj
+GITHUB_WORKFLOW_FILE=update-roster.yml
+CORS_ORIGINS=https://your-flutterflow-app.web.app,https://your-flutterflow-app.firebaseapp.com
+```
+
+### FlutterFlow API Call
+
+Method:
+
+```text
+POST
+```
+
+URL:
+
+```text
+https://<your-vercel-project>.vercel.app/api/runRoster
+```
+
+Headers:
+
+```text
+Content-Type: application/json
+x-api-key: <ROSTER_API_KEY value>
+```
+
+Body:
+
+```json
+{
+  "username": "<CrewConnex ID>",
+  "password": "<CrewConnex password>",
+  "currentUserUid": "<Firebase Authentication UID>",
+  "currentUserEmail": "<Firebase Authentication email>"
+}
+```
+
+The Vercel function only queues `.github/workflows/update-roster.yml`.
+`roster.js` still runs inside GitHub Actions.
+
 ## Render Environment Variables
 
 Set these in Render for the `roster-sj` service:
