@@ -43,7 +43,8 @@ const limiter = rateLimit({
 
 // ------------------- API 키 인증 -------------------
 const API_KEY = process.env.ROSTER_API_KEY || process.env.API_KEY || "";
-const REQUIRE_FIREBASE_AUTH = String(process.env.ROSTER_REQUIRE_FIREBASE_AUTH || "").toLowerCase() === "true";
+const firebaseAuthMode = String(process.env.ROSTER_REQUIRE_FIREBASE_AUTH || "true").trim().toLowerCase();
+const REQUIRE_FIREBASE_AUTH = !["false", "0", "no"].includes(firebaseAuthMode);
 
 function timingSafeEqualText(a, b) {
   const left = Buffer.from(String(a || ""));
@@ -85,7 +86,7 @@ function initializeFirebaseAdmin() {
   if (admin.apps.length) return;
 
   const raw = readConfigValue("FIREBASE_SERVICE_ACCOUNT");
-  if (!raw) throw new Error("FIREBASE_SERVICE_ACCOUNT is required when ROSTER_REQUIRE_FIREBASE_AUTH=true");
+  if (!raw) throw new Error("FIREBASE_SERVICE_ACCOUNT is required when Firebase auth is enabled");
 
   admin.initializeApp({
     credential: admin.credential.cert(parseJsonConfig("FIREBASE_SERVICE_ACCOUNT", raw)),
