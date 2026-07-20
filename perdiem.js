@@ -416,8 +416,9 @@ function safeDocIdPart(value) {
     .replace(/^-+|-+$/g, "") || "blank";
 }
 
-function buildPerDiemDocId(item) {
+function buildPerDiemDocId(item, owner = "") {
   return [
+    owner,
     item.Year,
     item.Month,
     item.Date,
@@ -520,7 +521,7 @@ export async function uploadPerDiemFirestore(perdiemList, ownerOverride = "") {
 
   for (const rawItem of perdiemList) {
     const item = normalizePerDiemItem(rawItem);
-    const docId = buildPerDiemDocId(item);
+    const docId = buildPerDiemDocId(item, owner);
     const legacyDocId = `${item.Year}${item.Month}${item.Date.replace(/\./g, "")}_${item.Destination}`;
     const duplicateSnapshot = await collectionRef
       .where("owner", "==", owner)
@@ -534,7 +535,12 @@ export async function uploadPerDiemFirestore(perdiemList, ownerOverride = "") {
       if (duplicateDoc.id !== docId) await duplicateDoc.ref.delete();
     }
 
-    if (legacyDocId !== docId) await collectionRef.doc(legacyDocId).delete().catch(() => {});
+    if (legacyDocId !== docId) {
+      const legacyDoc = await collectionRef.doc(legacyDocId).get().catch(() => null);
+      if (legacyDoc?.exists && legacyDoc.data()?.owner === owner) {
+        await legacyDoc.ref.delete();
+      }
+    }
     await collectionRef.doc(docId).set({ ...item, owner, uid: owner });
   }
 
