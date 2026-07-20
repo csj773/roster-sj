@@ -154,6 +154,7 @@ function buildDocData(rosterRow) {
 
   docData.DateRaw = docData.Date;
   docData.owner = owner;
+  docData.uid = owner;
   docData.pdc_user_name = "csv_upload";
   docData.email = userEmail;
   docData.ET = calculateET(docData.BLH);
@@ -182,6 +183,7 @@ function safeDocIdPart(value) {
 function buildRosterDocId(docData) {
   return [
     "csv",
+    docData.owner,
     docData.Date,
     docData.DC,
     docData.Activity,
@@ -194,17 +196,20 @@ async function collectDuplicateRosterDocs(docData) {
   const duplicateRefs = new Map();
   const queries = [
     db.collection(firestoreCollection)
+      .where("owner", "==", docData.owner)
       .where("Date", "==", docData.Date)
       .where("Activity", "==", docData.Activity)
       .where("From", "==", docData.From)
       .where("To", "==", docData.To),
     db.collection(firestoreCollection)
+      .where("owner", "==", docData.owner)
       .where("Date", "==", docData.Date)
       .where("DC", "==", docData.DC)
       .where("Activity", "==", docData.Activity)
       .where("From", "==", docData.From)
       .where("To", "==", docData.To),
     db.collection(firestoreCollection)
+      .where("owner", "==", docData.owner)
       .where("Date", "==", docData.Date)
       .where("F", "==", docData.F)
       .where("From", "==", docData.From)
