@@ -69,7 +69,11 @@ jobs:
       - name: Generate PerDiem & Upload to Firestore
         run: node -r dotenv/config perdiem.js
         env:
-          firestoreAdminUid: ${{ secrets.FIRESTORE_ADMIN_UID }}
+          FIREBASE_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
+          INPUT_FIREBASE_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
+          INPUT_ADMIN_FIREBASE_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
+          FIRESTORE_ADMIN_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
+          firestoreAdminUid: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
 
       # 6. Do not commit generated roster data. These files contain personal schedule data.
       - name: Keep generated roster files local to this run

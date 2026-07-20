@@ -500,8 +500,16 @@ export async function appendPerDiemGoogleSheet(perdiemList, sheetsApi, spreadshe
 }
 
 // ------------------- Firestore 업로드 -------------------
-export async function uploadPerDiemFirestore(perdiemList) {
-  const owner = process.env.FIRESTORE_ADMIN_UID || process.env.firestoreAdminUid || "";
+export async function uploadPerDiemFirestore(perdiemList, ownerOverride = "") {
+  const owner = String(
+    ownerOverride ||
+    process.env.INPUT_FIREBASE_UID ||
+    process.env.FIREBASE_UID ||
+    process.env.INPUT_ADMIN_FIREBASE_UID ||
+    process.env.FIRESTORE_ADMIN_UID ||
+    process.env.firestoreAdminUid ||
+    ""
+  ).trim();
   if (!Array.isArray(perdiemList) || !owner) return;
 
   if (!admin.apps.length)
@@ -527,7 +535,7 @@ export async function uploadPerDiemFirestore(perdiemList) {
     }
 
     if (legacyDocId !== docId) await collectionRef.doc(legacyDocId).delete().catch(() => {});
-    await collectionRef.doc(docId).set({ owner, ...item });
+    await collectionRef.doc(docId).set({ ...item, owner, uid: owner });
   }
 
   console.log(`✅ Firestore 업로드 완료 (${perdiemList.length}건)`);
