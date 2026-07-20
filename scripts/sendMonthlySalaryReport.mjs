@@ -20,7 +20,7 @@ const config = {
   salaryClearRange: process.env.SALARY_CLEAR_RANGE || "",
   salaryMonthCell: process.env.SALARY_MONTH_CELL || "",
   salaryTotalCell: process.env.SALARY_TOTAL_CELL || "",
-  dedupeKeyFields: (process.env.DEDUPE_KEY_FIELDS || "employeeId,payPeriod")
+  dedupeKeyFields: (process.env.DEDUPE_KEY_FIELDS || "owner,employeeId,payPeriod")
     .split(",")
     .map((field) => field.trim())
     .filter(Boolean),
@@ -210,7 +210,10 @@ function normalizePaymentDoc(id, data, target = {}) {
 }
 
 function buildDedupeKey(id, data) {
-  const parts = config.dedupeKeyFields.map((field) => stringValue(data[field]));
+  const fields = config.dedupeKeyFields.includes("owner")
+    ? config.dedupeKeyFields
+    : ["owner", ...config.dedupeKeyFields];
+  const parts = fields.map((field) => stringValue(data[field]));
   return parts.every(Boolean) ? parts.join("|") : id;
 }
 
