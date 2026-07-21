@@ -106,6 +106,21 @@ After Kakao Login consent, the callback page displays `KAKAO_REFRESH_TOKEN`.
 The Kakao Developers app must have the `talk_calendar` consent item enabled
 or approved.
 
+## Kakao C/I Reminder
+
+`Kakao CI Reminder` is a separate scheduled GitHub Actions workflow. It checks
+Firestore roster records every 10 minutes and sends a KakaoTalk "memo to me"
+message 3 hours before each flight `C/I(L)` time. Sent reminders are recorded
+in the `kakao_ci_reminders` Firestore collection to prevent duplicate messages.
+
+This workflow also uses the Kakao secrets above. The Kakao refresh token must
+include the `talk_calendar` and `talk_message` scopes. To issue or renew a
+token with both scopes, open this URL after deploying the API:
+
+```text
+https://<your-vercel-project>.vercel.app/api/kakaoStart?calendarToken=1&messageToken=1
+```
+
 ## FlutterFlow API Call
 
 Method:

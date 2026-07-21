@@ -1,0 +1,34 @@
+name: Kakao CI Reminder
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kakao-ci-reminder:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - run: npm install
+
+      - name: Send Kakao C/I reminder
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_UID: ${{ secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
+          FIRESTORE_ADMIN_UID: ${{ secrets.FIRESTORE_ADMIN_UID }}
+          KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
+          KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+          KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
+          KAKAO_CI_REMINDER_MINUTES_BEFORE: "180"
+          KAKAO_CI_REMINDER_WINDOW_MINUTES: "15"
+        run: node -r dotenv/config kakaoCiReminder.js
