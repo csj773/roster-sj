@@ -76,7 +76,11 @@ GOOGLE_CALENDAR_CREDENTIALS
 USER_ID
 ```
 
-Optional Kakao Talk Calendar sync also needs these GitHub Actions secrets:
+Kakao Talk Calendar sync is intentionally separated from `Update Roster &
+Google Calendar`. Run the separate `Update Kakao Calendar` workflow only when
+you want to write roster events to Kakao Talk Calendar.
+
+Optional Kakao Talk Calendar sync needs these GitHub Actions secrets:
 
 ```text
 KAKAO_REFRESH_TOKEN

@@ -454,6 +454,11 @@ function sleep(ms) {
   );
   console.log("✅ JSON/CSV 저장 완료");
 
+  if (process.env.ROSTER_JSON_ONLY === "1") {
+    console.log("✅ ROSTER_JSON_ONLY=1: 외부 업로드 없이 roster JSON/CSV 생성 후 종료");
+    return;
+  }
+
   // ------------------- PerDiem 처리 -------------------
   console.log("🚀 PerDiem 처리 시작");
   const perdiemList = await generatePerDiemList(path.join(publicDir,"roster.json"), flutterflowUid);
@@ -572,19 +577,6 @@ function sleep(ms) {
     if(stderr) console.error("stderr:", stderr);
     console.log(stdout);
     console.log("✅ Google Calendar 처리 완료");
-  });
-
-  // ------------------- Kakao Talk Calendar 업로드 -------------------
-  console.log("🚀 Kakao Talk Calendar 업로드 시작 (kakaoCalendar.js)");
-  const kakaoCalendarPath = path.join(process.cwd(),"kakaoCalendar.js");
-  exec(`node "${kakaoCalendarPath}"`, (error, stdout, stderr) => {
-    if(error){
-      console.error("❌ kakaoCalendar.js 실행 실패:", error.message);
-      return;
-    }
-    if(stderr) console.error("stderr:", stderr);
-    console.log(stdout);
-    console.log("✅ Kakao Talk Calendar 처리 완료");
   });
 
 })();

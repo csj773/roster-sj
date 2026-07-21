@@ -1,0 +1,64 @@
+name: Update Kakao Calendar
+
+on:
+  workflow_dispatch:
+    inputs:
+      username:
+        description: "CrewConnex username"
+        required: false
+        type: string
+      password:
+        description: "CrewConnex password"
+        required: false
+        type: string
+      current_user_uid:
+        description: "Firebase Authentication UID for roster owner"
+        required: false
+        type: string
+      current_user_email:
+        description: "Firebase Authentication email for roster email"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  kakao-calendar:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - run: npm install
+
+      - name: Mask workflow input password
+        if: ${{ github.event.inputs.password != '' }}
+        run: echo "::add-mask::${{ github.event.inputs.password }}"
+
+      - name: Generate roster JSON only
+        env:
+          ROSTER_JSON_ONLY: "1"
+          CHROME_PATH: "/usr/bin/chromium-browser"
+          INPUT_PDC_USERNAME: ${{ github.event.inputs.username || secrets.PDC_USERNAME }}
+          INPUT_PDC_PASSWORD: ${{ github.event.inputs.password || secrets.PDC_PASSWORD }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
+          INPUT_FIREBASE_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
+          INPUT_ADMIN_FIREBASE_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
+          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+          USER_ID: ${{ github.event.inputs.current_user_email || secrets.USER_ID }}
+        run: node -r dotenv/config roster.js
+
+      - name: Run kakaoCalendar.js
+        env:
+          KAKAO_CALENDAR_ACCESS_TOKEN: ${{ secrets.KAKAO_CALENDAR_ACCESS_TOKEN }}
+          KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
+          KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+          KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
+          KAKAO_CALENDAR_ID: ${{ secrets.KAKAO_CALENDAR_ID || 'primary' }}
+        run: node -r dotenv/config kakaoCalendar.js

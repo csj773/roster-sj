@@ -88,13 +88,3 @@ jobs:
           GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
           GOOGLE_CALENDAR_CREDENTIALS: ${{ secrets.GOOGLE_CALENDAR_CREDENTIALS }}
         run: node -r dotenv/config gcal.js
-
-      # 8. kakaoCalendar.js 실행 (Kakao Talk Calendar 업데이트)
-      - name: Run kakaoCalendar.js
-        env:
-          KAKAO_CALENDAR_ACCESS_TOKEN: ${{ secrets.KAKAO_CALENDAR_ACCESS_TOKEN }}
-          KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
-          KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
-          KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
-          KAKAO_CALENDAR_ID: ${{ secrets.KAKAO_CALENDAR_ID || 'primary' }}
-        run: node -r dotenv/config kakaoCalendar.js
