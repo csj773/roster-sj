@@ -93,6 +93,20 @@ async function upsertFirebaseUser({ uid, email, displayName }) {
   }
 }
 
+async function upsertFirestoreUser({ uid, email, displayName }) {
+  const userRef = admin.firestore().collection("users").doc(uid);
+  const existing = await userRef.get();
+  await userRef.set({
+    uid,
+    email: email || "",
+    display_name: displayName || "",
+    provider: "kakao",
+    providers: ["kakao"],
+    updated_time: admin.firestore.FieldValue.serverTimestamp(),
+    ...(existing.exists ? {} : { created_time: admin.firestore.FieldValue.serverTimestamp() }),
+  }, { merge: true });
+}
+
 export async function createFirebaseTokenFromKakaoAccessToken(accessToken) {
   const kakao = await fetchKakaoProfile(accessToken);
   if (!kakao.ok) {
@@ -120,6 +134,8 @@ export async function createFirebaseTokenFromKakaoAccessToken(accessToken) {
   } catch (error) {
     if (error.code !== "auth/email-already-exists") throw error;
   }
+
+  await upsertFirestoreUser({ uid, email, displayName });
 
   const firebaseCustomToken = await admin.auth().createCustomToken(uid, {
     provider: "kakao",

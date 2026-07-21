@@ -50,6 +50,11 @@ service cloud.firestore {
       allow update: if keepsOwner();
     }
 
+    match /users/{userId} {
+      allow read, create, update: if signedIn() && request.auth.uid == userId;
+      allow delete: if false;
+    }
+
     match /Pilotlog/{docId} {
       allow read, delete: if isOwner() || userEmailMatchesExisting();
       allow create: if createsOwnDoc() || userEmailMatchesNew();
