@@ -85,7 +85,7 @@ Pilotlog는 개인 비행 기록을 관리하는 기능입니다.
 
 ## 5. Google Calendar 연동
 
-Roster 동기화 후 앱은 Google Calendar에 일정 등록을 시도할 수 있습니다.
+Roster 동기화 후 앱은 Google Calendar와 Kakao Talk Calendar에 일정 등록을 시도할 수 있습니다.
 
 등록되는 정보:
 
@@ -97,6 +97,7 @@ Roster 동기화 후 앱은 Google Calendar에 일정 등록을 시도할 수 �
 주의:
 
 - Calendar 권한이 없으면 등록이 실패할 수 있습니다.
+- Kakao Talk Calendar는 Kakao Developers 앱의 `talk_calendar` 동의 항목과 사용자 access token이 필요합니다.
 - 이미 생성된 앱 일정은 중복 제거 로직에 따라 정리될 수 있습니다.
 - 개인 일정은 앱이 만든 일정과 구분되어야 합니다.
 
@@ -181,4 +182,3 @@ Salary 리포트는 월별 급여 관련 데이터를 정리하는 기능입니�
 | 운영자 | [운영자명 입력] |
 | 이메일 | [이메일 입력] |
 | 문의 채널 | [앱 내 문의 또는 이메일 입력] |
-

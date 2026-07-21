@@ -85,7 +85,7 @@ How to use:
 
 ## 5. Google Calendar Integration
 
-After roster sync, the app may register events in Google Calendar.
+After roster sync, the app may register events in Google Calendar and Kakao Talk Calendar.
 
 Information registered:
 
@@ -97,6 +97,7 @@ Information registered:
 Important:
 
 - Calendar registration may fail if permissions are missing.
+- Kakao Talk Calendar requires the Kakao Developers `talk_calendar` consent item and a user access token.
 - Events created by the app may be cleaned up by deduplication logic.
 - Personal calendar events should remain separate from app-created events.
 
@@ -181,4 +182,3 @@ Deletion scope:
 | Operator | [Enter operator name] |
 | Email | [Enter email address] |
 | Inquiry Channel | [Enter in-app contact or email address] |
-

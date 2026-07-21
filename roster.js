@@ -574,4 +574,17 @@ function sleep(ms) {
     console.log("✅ Google Calendar 처리 완료");
   });
 
+  // ------------------- Kakao Talk Calendar 업로드 -------------------
+  console.log("🚀 Kakao Talk Calendar 업로드 시작 (kakaoCalendar.js)");
+  const kakaoCalendarPath = path.join(process.cwd(),"kakaoCalendar.js");
+  exec(`node "${kakaoCalendarPath}"`, (error, stdout, stderr) => {
+    if(error){
+      console.error("❌ kakaoCalendar.js 실행 실패:", error.message);
+      return;
+    }
+    if(stderr) console.error("stderr:", stderr);
+    console.log(stdout);
+    console.log("✅ Kakao Talk Calendar 처리 완료");
+  });
+
 })();

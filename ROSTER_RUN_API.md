@@ -76,6 +76,22 @@ GOOGLE_CALENDAR_CREDENTIALS
 USER_ID
 ```
 
+Optional Kakao Talk Calendar sync also needs these GitHub Actions secrets:
+
+```text
+KAKAO_REFRESH_TOKEN
+KAKAO_REST_API_KEY
+KAKAO_CLIENT_SECRET
+KAKAO_CALENDAR_ID=primary
+```
+
+`KAKAO_CALENDAR_ID` may be omitted to use the user's primary Talk Calendar.
+The Kakao access token must be issued with Talk Calendar event permission
+(`talk_calendar`) for the Kakao Developers app.
+`KAKAO_CLIENT_SECRET` is only required when the Kakao app's client secret
+setting is enabled. `KAKAO_CALENDAR_ACCESS_TOKEN` can be used instead of
+refresh-token renewal for short manual tests, but it expires quickly.
+
 ## FlutterFlow API Call
 
 Method:
