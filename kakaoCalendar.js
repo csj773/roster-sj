@@ -194,6 +194,16 @@ function addDays(ymd, days) {
   return date.toISOString().slice(0, 10);
 }
 
+function toKakaoFiveMinuteIso(date, mode) {
+  const rounded = new Date(date);
+  const ms = rounded.getTime();
+  const unitMs = 5 * 60 * 1000;
+  const roundedMs = mode === "ceil"
+    ? Math.ceil(ms / unitMs) * unitMs
+    : Math.floor(ms / unitMs) * unitMs;
+  return new Date(roundedMs).toISOString().replace(".000Z", "Z");
+}
+
 function formBody(params) {
   const body = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -399,8 +409,8 @@ ${CREATED_TAG}
     kakaoEvents.push({
       title: activity.slice(0, 50),
       time: {
-        start_at: startLocal.toISOString(),
-        end_at: endLocal.toISOString(),
+        start_at: toKakaoFiveMinuteIso(startLocal, "floor"),
+        end_at: toKakaoFiveMinuteIso(endLocal, "ceil"),
         time_zone: "Asia/Seoul",
         all_day: false,
         lunar: false,
