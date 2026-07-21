@@ -55,10 +55,12 @@ export default async function handler(req, res) {
     if (!restApiKey) throw new Error("KAKAO_REST_API_KEY is not configured");
     if (!secret) throw new Error("KAKAO_OAUTH_STATE_SECRET is not configured");
 
+    const calendarTokenMode = String(req.query?.calendarToken || "") === "1";
     const returnTo = allowedReturnTo(req.query?.returnTo);
     const payload = base64url(
       JSON.stringify({
         returnTo,
+        mode: calendarTokenMode ? "calendarToken" : "login",
         exp: Date.now() + 10 * 60 * 1000,
         nonce: crypto.randomBytes(12).toString("hex"),
       })
@@ -70,6 +72,9 @@ export default async function handler(req, res) {
     url.searchParams.set("client_id", restApiKey);
     url.searchParams.set("redirect_uri", callbackUrl(req));
     url.searchParams.set("state", state);
+    if (calendarTokenMode) {
+      url.searchParams.set("scope", "talk_calendar");
+    }
 
     res.statusCode = 302;
     res.setHeader("Location", url.toString());

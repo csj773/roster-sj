@@ -92,6 +92,16 @@ The Kakao access token must be issued with Talk Calendar event permission
 setting is enabled. `KAKAO_CALENDAR_ACCESS_TOKEN` can be used instead of
 refresh-token renewal for short manual tests, but it expires quickly.
 
+To issue the Kakao refresh token, open this URL after deploying the API:
+
+```text
+https://<your-vercel-project>.vercel.app/api/kakaoStart?calendarToken=1
+```
+
+After Kakao Login consent, the callback page displays `KAKAO_REFRESH_TOKEN`.
+The Kakao Developers app must have the `talk_calendar` consent item enabled
+or approved.
+
 ## FlutterFlow API Call
 
 Method:

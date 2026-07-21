@@ -73,7 +73,7 @@ async function exchangeCodeForToken(req, code) {
     throw error;
   }
   if (!data.access_token) throw new Error("Kakao token response did not include access_token");
-  return data.access_token;
+  return data;
 }
 
 function escapeHtml(value) {
@@ -115,6 +115,38 @@ if (window.opener && !window.opener.closed) {
 </html>`);
 }
 
+function calendarTokenResponse(res, status, body) {
+  const refreshToken = body.refreshToken || "";
+  const scope = body.scope || "";
+  res.statusCode = status;
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  res.end(`<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Kakao Calendar Token</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 40px; line-height: 1.5; }
+    label { display: block; font-weight: 600; margin-top: 18px; }
+    textarea, input { box-sizing: border-box; width: min(760px, 100%); font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 10px; }
+    textarea { height: 120px; }
+    .ok { color: #116329; font-weight: 600; }
+    .error { color: #cf222e; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>Kakao Calendar Token</h1>
+  ${body.ok ? `<p class="ok">Token issued. Add the values below to GitHub Actions secrets.</p>
+  <label>KAKAO_REFRESH_TOKEN</label>
+  <textarea readonly>${escapeHtml(refreshToken)}</textarea>
+  <label>Granted scope</label>
+  <input readonly value="${escapeHtml(scope)}">` : `<p class="error">Token issue failed.</p>
+  <pre>${escapeHtml(JSON.stringify(body, null, 2))}</pre>`}
+</body>
+</html>`);
+}
+
 export default async function handler(req, res) {
   try {
     const code = String(req.query?.code || "").trim();
@@ -131,8 +163,17 @@ export default async function handler(req, res) {
     }
     if (!code) throw new Error("Missing Kakao authorization code");
 
-    const accessToken = await exchangeCodeForToken(req, code);
-    const result = await createFirebaseTokenFromKakaoAccessToken(accessToken);
+    const token = await exchangeCodeForToken(req, code);
+    if (state.mode === "calendarToken") {
+      calendarTokenResponse(res, 200, {
+        ok: true,
+        refreshToken: token.refresh_token,
+        scope: token.scope || "",
+      });
+      return;
+    }
+
+    const result = await createFirebaseTokenFromKakaoAccessToken(token.access_token);
     htmlResponse(res, 200, state, {
       ok: true,
       ...result,
