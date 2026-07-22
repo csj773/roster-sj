@@ -14,6 +14,8 @@ import {
 const INVITE_COLLECTION = "roster_share_invites";
 const SHARE_COLLECTION = "roster_shares";
 const ROSTER_COLLECTION = "roster";
+const PDC_COLLECTION = "pdc";
+const SHARE_ROSTER_COLLECTIONS = [ROSTER_COLLECTION, PDC_COLLECTION];
 const SLACK_LINK_COLLECTION = "slack_user_links";
 const SLACK_ICAL_SOURCE = "slack_ical";
 
@@ -276,9 +278,19 @@ function parseIcsDate(value) {
   const match = text.match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2}))?/);
   if (!match) return { date: "", time: "" };
   return {
-    date: `${match[1]}-${match[2]}-${match[3]}`,
+    date: `${match[1]}.${match[2]}.${match[3]}`,
     time: match[4] ? `${match[4]}:${match[5]}` : "",
   };
+}
+
+function dateSortKey(value) {
+  const match = String(value || "").match(/^(\d{4})[-.](\d{1,2})[-.](\d{1,2})$/);
+  if (!match) return cleanText(value, 20);
+  return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
+}
+
+function monthName(month) {
+  return ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][month - 1] || "";
 }
 
 function firstRoute(text) {
@@ -296,7 +308,7 @@ function activityFromIcs(summary, description) {
   return cleanText((flight?.[0] || summary || "ROSTER").replace(/\s+/g, ""), 80);
 }
 
-function icsEventToRosterDoc(event, ownerUid) {
+function icsEventToRosterDoc(event, owner) {
   const summary = cleanText(event.SUMMARY?.value || "", 200);
   const description = cleanText(event.DESCRIPTION?.value || "", 1000);
   const location = cleanText(event.LOCATION?.value || "", 200);
@@ -307,13 +319,12 @@ function icsEventToRosterDoc(event, ownerUid) {
   if (!start.date || !activity) return null;
 
   const uid = cleanText(event.UID?.value || hashText(`${summary}_${description}_${start.date}_${start.time}`), 200);
-  const { Year, Month } = {
-    Year: Number.parseInt(start.date.slice(0, 4), 10),
-    Month: Number.parseInt(start.date.slice(5, 7), 10),
-  };
+  const year = start.date.slice(0, 4);
+  const month = Number.parseInt(start.date.slice(5, 7), 10);
 
   return {
-    owner: ownerUid,
+    owner: owner.uid,
+    uid: owner.uid,
     Date: start.date,
     DateRaw: start.date,
     Activity: activity,
@@ -329,8 +340,13 @@ function icsEventToRosterDoc(event, ownerUid) {
     F: activity,
     Crew: "",
     CrewArray: [],
-    Year,
-    Month,
+    ET: "00:00",
+    NT: "00:00",
+    BLH: "",
+    Year: year,
+    Month: monthName(month),
+    pdc_user_name: owner.displayName || "",
+    email: owner.email || "",
     source: SLACK_ICAL_SOURCE,
     sourceUidHash: hashText(uid),
     sourceSummary: summary,
@@ -354,34 +370,35 @@ async function fetchIcsCalendar(calendarUrl) {
   return text;
 }
 
-async function replaceImportedRoster(uid, docs) {
-  const existing = await db()
-    .collection(ROSTER_COLLECTION)
-    .where("owner", "==", uid)
-    .where("source", "==", SLACK_ICAL_SOURCE)
-    .get();
+async function uploadImportedRosterToPdc(docs) {
+  let deleted = 0;
+  let imported = 0;
 
-  const writes = [
-    ...existing.docs.map((doc) => ({ type: "delete", ref: doc.ref })),
-    ...docs.map((doc) => {
-      const id = `${uid}_${SLACK_ICAL_SOURCE}_${doc.Date}_${doc.sourceUidHash}`.replace(/[^A-Za-z0-9_-]/g, "_");
-      return {
-        type: "set",
-        ref: db().collection(ROSTER_COLLECTION).doc(id),
-        data: doc,
-      };
-    }),
-  ];
+  for (const docData of docs) {
+    const querySnapshot = await db()
+      .collection(PDC_COLLECTION)
+      .where("owner", "==", docData.owner)
+      .where("Date", "==", docData.Date)
+      .where("DC", "==", docData.DC)
+      .where("Activity", "==", docData.Activity)
+      .where("From", "==", docData.From)
+      .where("To", "==", docData.To)
+      .get();
 
-  for (let i = 0; i < writes.length; i += 450) {
-    const batch = db().batch();
-    for (const write of writes.slice(i, i + 450)) {
-      if (write.type === "delete") batch.delete(write.ref);
-      if (write.type === "set") batch.set(write.ref, write.data, { merge: true });
+    if (!querySnapshot.empty) {
+      const batch = db().batch();
+      for (const duplicate of querySnapshot.docs) {
+        batch.delete(duplicate.ref);
+        deleted += 1;
+      }
+      await batch.commit();
     }
-    await batch.commit();
+
+    await db().collection(PDC_COLLECTION).add(docData);
+    imported += 1;
   }
-  return { deleted: existing.size, imported: docs.length };
+
+  return { deleted, imported };
 }
 
 function isOffDuty(activity) {
@@ -430,18 +447,27 @@ function rosterItem(doc, owner) {
 
 async function layoverItemsFor(uid, { station, startDate, days }) {
   const endDate = addDays(startDate, days - 1);
+  const startKey = dateSortKey(startDate);
+  const endKey = dateSortKey(endDate);
   const owners = await sharedOwnersFor(uid);
-  const nested = await Promise.all(owners.map(async (owner) => {
-    const snap = await db().collection(ROSTER_COLLECTION).where("owner", "==", owner.uid).get();
-    return snap.docs
-      .map((doc) => rosterItem(doc, owner))
-      .filter((item) => item.type === "flight")
-      .filter((item) => item.date >= startDate && item.date <= endDate)
-      .filter((item) => !station || item.from === station || item.to === station);
-  }));
+  const nested = await Promise.all(
+    owners.flatMap((owner) =>
+      SHARE_ROSTER_COLLECTIONS.map(async (collectionName) => {
+        const snap = await db().collection(collectionName).where("owner", "==", owner.uid).get();
+        return snap.docs
+          .map((doc) => rosterItem(doc, owner))
+          .filter((item) => item.type === "flight")
+          .filter((item) => {
+            const key = dateSortKey(item.date);
+            return key >= startKey && key <= endKey;
+          })
+          .filter((item) => !station || item.from === station || item.to === station);
+      })
+    )
+  );
   return nested.flat().sort((a, b) => {
-    const left = `${a.date}_${a.stdl}_${a.crewName}_${a.activity}`;
-    const right = `${b.date}_${b.stdl}_${b.crewName}_${b.activity}`;
+    const left = `${dateSortKey(a.date)}_${a.stdl}_${a.crewName}_${a.activity}`;
+    const right = `${dateSortKey(b.date)}_${b.stdl}_${b.crewName}_${b.activity}`;
     return left.localeCompare(right);
   });
 }
@@ -523,8 +549,9 @@ async function handleRosterImport(command, firebaseUid) {
   }
 
   const ics = await fetchIcsCalendar(calendarUrl);
+  const owner = await publicUser(firebaseUid);
   const docs = parseIcsEvents(ics)
-    .map((event) => icsEventToRosterDoc(event, firebaseUid))
+    .map((event) => icsEventToRosterDoc(event, { uid: firebaseUid, ...owner }))
     .filter(Boolean);
 
   if (!docs.length) {
@@ -534,10 +561,10 @@ async function handleRosterImport(command, firebaseUid) {
     };
   }
 
-  const result = await replaceImportedRoster(firebaseUid, docs);
+  const result = await uploadImportedRosterToPdc(docs);
   return {
     response_type: "ephemeral",
-    text: `Roster iCal import complete. Imported ${result.imported} event(s), replaced ${result.deleted} old imported event(s).`,
+    text: `Roster iCal import complete. Saved ${result.imported} event(s) to pdc, removed ${result.deleted} duplicate event(s).`,
   };
 }
 

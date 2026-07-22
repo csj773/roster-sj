@@ -10,6 +10,8 @@ import {
 
 const SHARE_COLLECTION = "roster_shares";
 const ROSTER_COLLECTION = "roster";
+const PDC_COLLECTION = "pdc";
+const SHARE_ROSTER_COLLECTIONS = [ROSTER_COLLECTION, PDC_COLLECTION];
 const DEFAULT_DAYS = 14;
 const MAX_DAYS = 45;
 
@@ -31,7 +33,14 @@ function todaySeoul() {
 
 function dateInRange(value, startDate, endDate) {
   if (!value) return false;
-  return value >= startDate && value <= endDate;
+  const key = dateSortKey(value);
+  return key >= dateSortKey(startDate) && key <= dateSortKey(endDate);
+}
+
+function dateSortKey(value) {
+  const match = String(value || "").match(/^(\d{4})[-.](\d{1,2})[-.](\d{1,2})$/);
+  if (!match) return cleanText(value, 20);
+  return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
 }
 
 function upper(value) {
@@ -96,9 +105,9 @@ async function sharedOwnersFor(uid) {
   return [...owners.values()];
 }
 
-async function rosterForOwner(owner, { startDate, endDate, station }) {
+async function rosterForOwner(owner, collectionName, { startDate, endDate, station }) {
   const snapshot = await db()
-    .collection(ROSTER_COLLECTION)
+    .collection(collectionName)
     .where("owner", "==", owner.uid)
     .get();
 
@@ -108,6 +117,7 @@ async function rosterForOwner(owner, { startDate, endDate, station }) {
     .filter((item) => stationMatches(item, station))
     .map((item) => ({
       ...item,
+      sourceCollection: collectionName,
       relation: owner.relation,
       shareScope: owner.scope,
     }));
@@ -164,10 +174,14 @@ export default async function handler(req, res) {
     const mode = cleanText(query.mode || "calendar", 20);
 
     const owners = await sharedOwnersFor(user.uid);
-    const nested = await Promise.all(owners.map((owner) => rosterForOwner(owner, { startDate, endDate, station })));
+    const nested = await Promise.all(
+      owners.flatMap((owner) =>
+        SHARE_ROSTER_COLLECTIONS.map((collectionName) => rosterForOwner(owner, collectionName, { startDate, endDate, station }))
+      )
+    );
     const items = nested.flat().sort((a, b) => {
-      const left = `${a.date}_${a.cil || a.stdl || ""}_${a.crewName}_${a.activity}`;
-      const right = `${b.date}_${b.cil || b.stdl || ""}_${b.crewName}_${b.activity}`;
+      const left = `${dateSortKey(a.date)}_${a.cil || a.stdl || ""}_${a.crewName}_${a.activity}`;
+      const right = `${dateSortKey(b.date)}_${b.cil || b.stdl || ""}_${b.crewName}_${b.activity}`;
       return left.localeCompare(right);
     });
 

@@ -73,7 +73,9 @@ Import a personal iCal roster link without using FlutterFlow:
 ```
 
 The command fetches the calendar privately, imports the events into Firestore
-with `source: slack_ical`, and does not store the original calendar URL.
+`pdc` with the same duplicate key used by the existing roster upload logic
+(`owner`, `Date`, `DC`, `Activity`, `From`, `To`). The imported events include
+`source: slack_ical`, and the original calendar URL is not stored.
 
 Create an invite with a custom scope:
 
