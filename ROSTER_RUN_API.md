@@ -201,11 +201,13 @@ Slack commands:
 /layover HNL 2026-07-22 14
 ```
 
-The iCal import command writes parsed events to the `pdc` collection using the
-same duplicate key as the existing roster upload logic:
+The iCal import command queues the separate GitHub Actions workflow
+`import-ical-roster-to-pdc.yml` when `GITHUB_TOKEN` is configured on Vercel.
+The workflow writes parsed events to the `pdc` collection using the same
+duplicate key as the existing roster upload logic:
 `owner`, `Date`, `DC`, `Activity`, `From`, `To`. Imported events include
-`source: slack_ical`. The original calendar URL is used only for that request
-and is not stored.
+`source: slack_ical`. The original calendar URL is used only for that import
+request and is not stored in Firestore.
 
 Required Vercel environment variable:
 

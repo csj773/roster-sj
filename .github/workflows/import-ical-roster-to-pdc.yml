@@ -1,0 +1,53 @@
+name: Import iCal Roster to PDC
+
+on:
+  workflow_dispatch:
+    inputs:
+      ical_roster_url:
+        description: "Private webcal:// or https:// iCal roster URL"
+        required: false
+        type: string
+      current_user_uid:
+        description: "Firebase Authentication UID for roster owner"
+        required: false
+        type: string
+      current_user_email:
+        description: "Firebase Authentication email for roster email"
+        required: false
+        type: string
+      pdc_user_name:
+        description: "Display name stored in pdc_user_name"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  import-ical-roster:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "true"
+        run: npm install
+
+      - name: Mask private iCal URL
+        if: ${{ github.event.inputs.ical_roster_url != '' }}
+        run: echo "::add-mask::${{ github.event.inputs.ical_roster_url }}"
+
+      - name: Import iCal roster to pdc
+        env:
+          INPUT_ICAL_ROSTER_URL: ${{ github.event.inputs.ical_roster_url || secrets.ICAL_ROSTER_URL || secrets.WEB_ROSTER_URL }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
+          USER_ID: ${{ github.event.inputs.current_user_email || secrets.USER_ID }}
+          PDC_USER_NAME: ${{ github.event.inputs.pdc_user_name || secrets.PDC_USER_NAME }}
+        run: node scripts/importIcalRosterToPdc.mjs

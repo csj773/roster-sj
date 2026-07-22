@@ -72,10 +72,12 @@ Import a personal iCal roster link without using FlutterFlow:
 /roster-share import webcal://your-private-calendar-url
 ```
 
-The command fetches the calendar privately, imports the events into Firestore
-`pdc` with the same duplicate key used by the existing roster upload logic
+When `GITHUB_TOKEN` is configured on Vercel, the command queues the separate
+GitHub Actions workflow `import-ical-roster-to-pdc.yml`. The workflow imports
+the events into Firestore `pdc` with the same duplicate key used by the existing
+roster upload logic
 (`owner`, `Date`, `DC`, `Activity`, `From`, `To`). The imported events include
-`source: slack_ical`, and the original calendar URL is not stored.
+`source: slack_ical`, and the original calendar URL is not stored in Firestore.
 
 Create an invite with a custom scope:
 

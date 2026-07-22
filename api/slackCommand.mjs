@@ -18,6 +18,9 @@ const PDC_COLLECTION = "pdc";
 const SHARE_ROSTER_COLLECTIONS = [ROSTER_COLLECTION, PDC_COLLECTION];
 const SLACK_LINK_COLLECTION = "slack_user_links";
 const SLACK_ICAL_SOURCE = "slack_ical";
+const DEFAULT_GITHUB_REPO = "csj773/roster-sj";
+const DEFAULT_GITHUB_REF = "main";
+const ICAL_IMPORT_WORKFLOW_FILE = "import-ical-roster-to-pdc.yml";
 
 function slackJson(res, status, body) {
   res.statusCode = status;
@@ -143,6 +146,44 @@ function appBaseUrl() {
 function inviteUrl(code) {
   const path = process.env.ROSTER_SHARE_INVITE_PATH || "/roster-share";
   return `${appBaseUrl()}${path}?invite=${encodeURIComponent(code)}`;
+}
+
+async function dispatchIcalImportWorkflow({ calendarUrl, firebaseUid, owner }) {
+  const token = process.env.GITHUB_TOKEN || "";
+  if (!token) return { dispatched: false };
+
+  const repo = process.env.GITHUB_REPO || DEFAULT_GITHUB_REPO;
+  const ref = process.env.GITHUB_REF || DEFAULT_GITHUB_REF;
+  const workflowFile = process.env.GITHUB_ICAL_IMPORT_WORKFLOW_FILE || ICAL_IMPORT_WORKFLOW_FILE;
+  const url = `https://api.github.com/repos/${repo}/actions/workflows/${workflowFile}/dispatches`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "Content-Type": "application/json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    body: JSON.stringify({
+      ref,
+      inputs: {
+        ical_roster_url: calendarUrl,
+        current_user_uid: firebaseUid,
+        current_user_email: owner.email || "",
+        pdc_user_name: owner.displayName || "",
+      },
+    }),
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`GitHub iCal import workflow dispatch failed (${response.status}): ${text}`);
+  }
+
+  return {
+    dispatched: true,
+    actionsUrl: `https://github.com/${repo}/actions/workflows/${workflowFile}`,
+  };
 }
 
 async function createInviteForUid(uid, { scope = "layover_only", note = "" } = {}) {
@@ -548,8 +589,16 @@ async function handleRosterImport(command, firebaseUid) {
     };
   }
 
-  const ics = await fetchIcsCalendar(calendarUrl);
   const owner = await publicUser(firebaseUid);
+  const dispatch = await dispatchIcalImportWorkflow({ calendarUrl, firebaseUid, owner });
+  if (dispatch.dispatched) {
+    return {
+      response_type: "ephemeral",
+      text: `Roster iCal import workflow queued: ${dispatch.actionsUrl}`,
+    };
+  }
+
+  const ics = await fetchIcsCalendar(calendarUrl);
   const docs = parseIcsEvents(ics)
     .map((event) => icsEventToRosterDoc(event, { uid: firebaseUid, ...owner }))
     .filter(Boolean);
