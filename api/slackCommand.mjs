@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import admin from "firebase-admin";
+import { waitUntil } from "@vercel/functions";
 import {
   cleanDate,
   cleanText,
@@ -19,6 +20,35 @@ function slackJson(res, status, body) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json");
   res.end(JSON.stringify(body));
+}
+
+function queueSlackWork(work) {
+  waitUntil(work.catch((error) => {
+    console.error("Slack background work failed:", error);
+  }));
+}
+
+async function postSlackResponse(responseUrl, body) {
+  if (!responseUrl) return;
+  const response = await fetch(responseUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new Error(`Slack response_url failed (${response.status})`);
+  }
+}
+
+async function postCommandResult(command) {
+  try {
+    await postSlackResponse(command.responseUrl, await handleCommand(command));
+  } catch (error) {
+    await postSlackResponse(command.responseUrl, {
+      response_type: "ephemeral",
+      text: `Slack command failed for ${command.command || "command"}: ${error.message}`,
+    });
+  }
 }
 
 async function readRawBody(req) {
@@ -338,8 +368,16 @@ export default async function handler(req, res) {
     const rawBody = await readRawBody(req);
     verifySlackSignature(req, rawBody);
     command = parseSlashCommand(rawBody);
-    const body = await handleCommand(command);
-    slackJson(res, 200, body);
+    if (command.responseUrl) {
+      queueSlackWork(postCommandResult(command));
+      slackJson(res, 200, {
+        response_type: "ephemeral",
+        text: `${command.command || "Roster command"} 처리 중입니다. 결과를 곧 보내드릴게요.`,
+      });
+      return;
+    }
+
+    slackJson(res, 200, await handleCommand(command));
   } catch (error) {
     const status = error.statusCode || 500;
     const isSlackAuthError = status === 401;
