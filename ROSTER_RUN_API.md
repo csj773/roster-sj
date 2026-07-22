@@ -109,7 +109,7 @@ or approved.
 ## Kakao C/I Reminder
 
 `Kakao CI Reminder` is a separate scheduled GitHub Actions workflow. It checks
-Firestore roster records every 10 minutes and sends a KakaoTalk "memo to me"
+Firestore roster records every 15 minutes and sends a KakaoTalk "memo to me"
 message 3 hours before each flight `C/I(L)` time. Sent reminders are recorded
 in the `kakao_ci_reminders` Firestore collection to prevent duplicate messages.
 
@@ -120,6 +120,66 @@ token with both scopes, open this URL after deploying the API:
 ```text
 https://<your-vercel-project>.vercel.app/api/kakaoStart?calendarToken=1&messageToken=1
 ```
+
+## Roster Share MVP APIs
+
+These Vercel APIs support explicit roster sharing between signed-in users.
+They use Firebase ID tokens in the `Authorization` header and write sharing
+state to Firestore with the Firebase Admin SDK.
+
+### Create Share Invite
+
+```text
+POST /api/shareInvite
+Authorization: Bearer <Firebase ID token>
+Content-Type: application/json
+```
+
+```json
+{
+  "scope": "layover_only",
+  "expiresInDays": 14,
+  "note": "Share my roster with this crew friend."
+}
+```
+
+Response includes `inviteCode` and `inviteUrl`.
+
+### Accept Share Invite
+
+```text
+POST /api/acceptShareInvite
+Authorization: Bearer <Firebase ID token>
+Content-Type: application/json
+```
+
+```json
+{
+  "inviteCode": "<inviteCode>",
+  "mutual": true
+}
+```
+
+This creates `roster_shares` records. With `mutual: true`, both users share
+their roster with each other.
+
+### Read Shared Calendar and Layovers
+
+```text
+GET /api/sharedRoster?startDate=2026-07-22&days=14&station=HNL&mode=layover
+Authorization: Bearer <Firebase ID token>
+```
+
+The response includes:
+
+- `items`: the signed-in user's roster plus rosters shared with them
+- `layovers`: station/date grouped crew presence data for layover screens
+
+Firestore collections used:
+
+- `roster_share_invites`
+- `roster_shares`
+- `roster_friendships`
 
 ## FlutterFlow API Call
 

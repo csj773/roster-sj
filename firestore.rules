@@ -55,6 +55,26 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /roster_share_invites/{inviteId} {
+      allow read: if signedIn()
+        && (resource.data.ownerUid == request.auth.uid
+          || resource.data.acceptedByUid == request.auth.uid);
+      allow write: if false;
+    }
+
+    match /roster_shares/{shareId} {
+      allow read: if signedIn()
+        && (resource.data.ownerUid == request.auth.uid
+          || resource.data.sharedWithUid == request.auth.uid);
+      allow write: if false;
+    }
+
+    match /roster_friendships/{friendshipId} {
+      allow read: if signedIn()
+        && request.auth.uid in resource.data.users;
+      allow write: if false;
+    }
+
     match /Pilotlog/{docId} {
       allow read, delete: if isOwner() || userEmailMatchesExisting();
       allow create: if createsOwnDoc() || userEmailMatchesNew();
