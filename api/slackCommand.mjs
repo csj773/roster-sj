@@ -15,6 +15,7 @@ const INVITE_COLLECTION = "roster_share_invites";
 const SHARE_COLLECTION = "roster_shares";
 const ROSTER_COLLECTION = "roster";
 const SLACK_LINK_COLLECTION = "slack_user_links";
+const SLACK_ICAL_SOURCE = "slack_ical";
 
 function slackJson(res, status, body) {
   res.statusCode = status;
@@ -188,6 +189,201 @@ function upper(value) {
   return cleanText(value, 20).toUpperCase();
 }
 
+function hashText(value) {
+  return crypto.createHash("sha256").update(String(value || "")).digest("hex");
+}
+
+function parseSlackArgs(text) {
+  return cleanText(text, 500).split(/\s+/).filter(Boolean);
+}
+
+function extractRosterCalendarUrl(text) {
+  const raw = cleanText(text, 500);
+  const slackLink = raw.match(/<(webcal:\/\/[^>|]+|https:\/\/[^>|]+)(?:\|[^>]+)?>/i);
+  const plain = raw.match(/(?:webcal|https):\/\/\S+/i);
+  return cleanText(slackLink?.[1] || plain?.[0] || "", 500);
+}
+
+function fetchableCalendarUrl(value) {
+  const text = cleanText(value, 500);
+  if (/^webcal:\/\//i.test(text)) return `https://${text.slice("webcal://".length)}`;
+  if (/^https:\/\//i.test(text)) return text;
+  return "";
+}
+
+function unfoldIcsLines(text) {
+  const lines = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const unfolded = [];
+  for (const line of lines) {
+    if (/^[ \t]/.test(line) && unfolded.length) {
+      unfolded[unfolded.length - 1] += line.slice(1);
+    } else {
+      unfolded.push(line);
+    }
+  }
+  return unfolded;
+}
+
+function decodeIcsText(value) {
+  return String(value || "")
+    .replace(/\\n/gi, "\n")
+    .replace(/\\,/g, ",")
+    .replace(/\\;/g, ";")
+    .replace(/\\\\/g, "\\")
+    .trim();
+}
+
+function parseIcsValue(line) {
+  const colon = line.indexOf(":");
+  if (colon < 0) return null;
+  const keyPart = line.slice(0, colon);
+  const value = line.slice(colon + 1);
+  const [name, ...paramParts] = keyPart.split(";");
+  const params = {};
+  for (const part of paramParts) {
+    const eq = part.indexOf("=");
+    if (eq > 0) params[part.slice(0, eq).toUpperCase()] = part.slice(eq + 1);
+  }
+  return { name: name.toUpperCase(), params, value };
+}
+
+function parseIcsEvents(text) {
+  const events = [];
+  let current = null;
+  for (const line of unfoldIcsLines(text)) {
+    if (line === "BEGIN:VEVENT") {
+      current = {};
+      continue;
+    }
+    if (line === "END:VEVENT") {
+      if (current) events.push(current);
+      current = null;
+      continue;
+    }
+    if (!current) continue;
+    const parsed = parseIcsValue(line);
+    if (!parsed) continue;
+    current[parsed.name] = {
+      params: parsed.params,
+      value: decodeIcsText(parsed.value),
+    };
+  }
+  return events;
+}
+
+function parseIcsDate(value) {
+  const text = cleanText(value, 40);
+  const match = text.match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2}))?/);
+  if (!match) return { date: "", time: "" };
+  return {
+    date: `${match[1]}-${match[2]}-${match[3]}`,
+    time: match[4] ? `${match[4]}:${match[5]}` : "",
+  };
+}
+
+function firstRoute(text) {
+  const normalized = cleanText(text, 1000).toUpperCase();
+  const match = normalized.match(/\b([A-Z]{3})\s*(?:-|–|—|→|>|TO)\s*([A-Z]{3})\b/);
+  return {
+    from: match?.[1] || "",
+    to: match?.[2] || "",
+  };
+}
+
+function activityFromIcs(summary, description) {
+  const text = `${summary} ${description}`;
+  const flight = text.match(/\b[A-Z]{2}\s?\d{2,4}[A-Z]?\b/);
+  return cleanText((flight?.[0] || summary || "ROSTER").replace(/\s+/g, ""), 80);
+}
+
+function icsEventToRosterDoc(event, ownerUid) {
+  const summary = cleanText(event.SUMMARY?.value || "", 200);
+  const description = cleanText(event.DESCRIPTION?.value || "", 1000);
+  const location = cleanText(event.LOCATION?.value || "", 200);
+  const start = parseIcsDate(event.DTSTART?.value || "");
+  const end = parseIcsDate(event.DTEND?.value || "");
+  const route = firstRoute(`${summary}\n${description}\n${location}`);
+  const activity = activityFromIcs(summary, description);
+  if (!start.date || !activity) return null;
+
+  const uid = cleanText(event.UID?.value || hashText(`${summary}_${description}_${start.date}_${start.time}`), 200);
+  const { Year, Month } = {
+    Year: Number.parseInt(start.date.slice(0, 4), 10),
+    Month: Number.parseInt(start.date.slice(5, 7), 10),
+  };
+
+  return {
+    owner: ownerUid,
+    Date: start.date,
+    DateRaw: start.date,
+    Activity: activity,
+    From: route.from,
+    To: route.to,
+    STDL: start.time,
+    STAL: end.time,
+    STDZ: "",
+    STAZ: "",
+    CIL: "",
+    COL: "",
+    DC: "",
+    F: activity,
+    Crew: "",
+    CrewArray: [],
+    Year,
+    Month,
+    source: SLACK_ICAL_SOURCE,
+    sourceUidHash: hashText(uid),
+    sourceSummary: summary,
+    importedAt: nowTimestamp(),
+    updatedAt: nowTimestamp(),
+  };
+}
+
+async function fetchIcsCalendar(calendarUrl) {
+  const url = fetchableCalendarUrl(calendarUrl);
+  if (!url) throw new Error("webcal:// or https:// iCal URL is required");
+  const response = await fetch(url, {
+    headers: {
+      Accept: "text/calendar, text/plain, */*",
+      "User-Agent": "roster-sj-slack-bot/1.0",
+    },
+  });
+  if (!response.ok) throw new Error(`iCal fetch failed (${response.status})`);
+  const text = await response.text();
+  if (!/BEGIN:VCALENDAR/i.test(text)) throw new Error("Response is not an iCal calendar");
+  return text;
+}
+
+async function replaceImportedRoster(uid, docs) {
+  const existing = await db()
+    .collection(ROSTER_COLLECTION)
+    .where("owner", "==", uid)
+    .where("source", "==", SLACK_ICAL_SOURCE)
+    .get();
+
+  const writes = [
+    ...existing.docs.map((doc) => ({ type: "delete", ref: doc.ref })),
+    ...docs.map((doc) => {
+      const id = `${uid}_${SLACK_ICAL_SOURCE}_${doc.Date}_${doc.sourceUidHash}`.replace(/[^A-Za-z0-9_-]/g, "_");
+      return {
+        type: "set",
+        ref: db().collection(ROSTER_COLLECTION).doc(id),
+        data: doc,
+      };
+    }),
+  ];
+
+  for (let i = 0; i < writes.length; i += 450) {
+    const batch = db().batch();
+    for (const write of writes.slice(i, i + 450)) {
+      if (write.type === "delete") batch.delete(write.ref);
+      if (write.type === "set") batch.set(write.ref, write.data, { merge: true });
+    }
+    await batch.commit();
+  }
+  return { deleted: existing.size, imported: docs.length };
+}
+
 function isOffDuty(activity) {
   return /^(REST|OFF|OFFD|DAY OFF|DO|VAC|LEAVE|RSV)$/i.test(cleanText(activity, 40));
 }
@@ -254,6 +450,7 @@ function helpText() {
   return [
     "*Roster Slack commands*",
     "`/roster-share` - create a Roster Share invite link",
+    "`/roster-share import webcal://...` - import your personal iCal roster privately",
     "`/layover HNL` - show shared HNL crew for today + 7 days",
     "`/layover HNL 2026-07-22 14` - choose start date and days",
   ].join("\n");
@@ -279,7 +476,13 @@ async function handleRosterShare(command) {
     return { response_type: "ephemeral", text: notLinkedText(command) };
   }
 
-  const scope = cleanText(command.text.split(/\s+/)[0] || "layover_only", 40) || "layover_only";
+  const args = parseSlackArgs(command.text);
+  const action = cleanText(args[0] || "", 40).toLowerCase();
+  if (["import", "sync", "link", "ical", "webcal"].includes(action)) {
+    return handleRosterImport(command, firebaseUid);
+  }
+
+  const scope = cleanText(args[0] || "layover_only", 40) || "layover_only";
   const invite = await createInviteForUid(firebaseUid, {
     scope,
     note: `Created from Slack ${command.teamDomain || command.teamId} #${command.channelName || command.channelId}`,
@@ -307,6 +510,34 @@ async function handleRosterShare(command) {
         ],
       },
     ],
+  };
+}
+
+async function handleRosterImport(command, firebaseUid) {
+  const calendarUrl = extractRosterCalendarUrl(command.text);
+  if (!calendarUrl) {
+    return {
+      response_type: "ephemeral",
+      text: "Usage: `/roster-share import webcal://...`",
+    };
+  }
+
+  const ics = await fetchIcsCalendar(calendarUrl);
+  const docs = parseIcsEvents(ics)
+    .map((event) => icsEventToRosterDoc(event, firebaseUid))
+    .filter(Boolean);
+
+  if (!docs.length) {
+    return {
+      response_type: "ephemeral",
+      text: "iCal calendar was fetched, but no roster events were found.",
+    };
+  }
+
+  const result = await replaceImportedRoster(firebaseUid, docs);
+  return {
+    response_type: "ephemeral",
+    text: `Roster iCal import complete. Imported ${result.imported} event(s), replaced ${result.deleted} old imported event(s).`,
   };
 }
 

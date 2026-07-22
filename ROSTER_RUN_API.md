@@ -196,9 +196,14 @@ Slack commands:
 
 ```text
 /roster-share
+/roster-share import webcal://your-private-calendar-url
 /layover HNL
 /layover HNL 2026-07-22 14
 ```
+
+The iCal import command writes parsed events to the `roster` collection with
+`source: slack_ical`. The original calendar URL is used only for that request
+and is not stored.
 
 Required Vercel environment variable:
 

@@ -66,6 +66,15 @@ Create a Roster Share invite:
 /roster-share
 ```
 
+Import a personal iCal roster link without using FlutterFlow:
+
+```text
+/roster-share import webcal://your-private-calendar-url
+```
+
+The command fetches the calendar privately, imports the events into Firestore
+with `source: slack_ical`, and does not store the original calendar URL.
+
 Create an invite with a custom scope:
 
 ```text
