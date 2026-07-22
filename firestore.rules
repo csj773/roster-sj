@@ -75,6 +75,10 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    match /slack_user_links/{linkId} {
+      allow read, write: if false;
+    }
+
     match /Pilotlog/{docId} {
       allow read, delete: if isOwner() || userEmailMatchesExisting();
       allow create: if createsOwnDoc() || userEmailMatchesNew();

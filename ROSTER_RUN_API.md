@@ -181,6 +181,45 @@ Firestore collections used:
 - `roster_shares`
 - `roster_friendships`
 
+## Slack Roster Bot
+
+Slack slash commands can create roster share invite links and look up shared
+layover crew without building additional FlutterFlow pages.
+
+Endpoint:
+
+```text
+POST /api/slackCommand
+```
+
+Slack commands:
+
+```text
+/roster-share
+/layover HNL
+/layover HNL 2026-07-22 14
+```
+
+Required Vercel environment variable:
+
+```text
+SLACK_SIGNING_SECRET=<Slack app signing secret>
+```
+
+Optional environment variables:
+
+```text
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_DEFAULT_FIREBASE_UID=kakao_...
+```
+
+Slack users must be linked to Firebase roster owner UIDs through the
+`slack_user_links` Firestore collection. See:
+
+```text
+docs/SLACK_ROSTER_BOT_SETUP.md
+```
+
 ## FlutterFlow API Call
 
 Method:
