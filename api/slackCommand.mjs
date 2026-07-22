@@ -248,7 +248,7 @@ function extractRosterCalendarUrl(text) {
 }
 
 function fetchableCalendarUrl(value) {
-  const text = cleanText(value, 500);
+  const text = cleanText(value, 500).replace(/[*>.,;)\]]+$/g, "");
   if (/^webcal:\/\//i.test(text)) return `https://${text.slice("webcal://".length)}`;
   if (/^https:\/\//i.test(text)) return text;
   return "";
@@ -294,11 +294,11 @@ function parseIcsEvents(text) {
   const events = [];
   let current = null;
   for (const line of unfoldIcsLines(text)) {
-    if (line === "BEGIN:VEVENT") {
+    if (line.trim() === "BEGIN:VEVENT") {
       current = {};
       continue;
     }
-    if (line === "END:VEVENT") {
+    if (line.trim() === "END:VEVENT") {
       if (current) events.push(current);
       current = null;
       continue;

@@ -35,7 +35,7 @@ function hashText(value) {
 }
 
 function fetchableCalendarUrl(value) {
-  const text = cleanText(value, 1000);
+  const text = cleanText(value, 1000).replace(/[*>.,;)\]]+$/g, "");
   if (/^webcal:\/\//i.test(text)) return `https://${text.slice("webcal://".length)}`;
   if (/^https:\/\//i.test(text)) return text;
   return "";
@@ -81,11 +81,11 @@ function parseIcsEvents(text) {
   const events = [];
   let current = null;
   for (const line of unfoldIcsLines(text)) {
-    if (line === "BEGIN:VEVENT") {
+    if (line.trim() === "BEGIN:VEVENT") {
       current = {};
       continue;
     }
-    if (line === "END:VEVENT") {
+    if (line.trim() === "END:VEVENT") {
       if (current) events.push(current);
       current = null;
       continue;
@@ -239,7 +239,9 @@ async function main() {
   const db = admin.firestore();
 
   const ics = await fetchIcsCalendar(calendarUrl);
-  const docs = parseIcsEvents(ics)
+  const events = parseIcsEvents(ics);
+  console.log(`Fetched ${events.length} iCal event(s).`);
+  const docs = events
     .map((event) => icsEventToPdcDoc(event, owner))
     .filter(Boolean);
   if (!docs.length) throw new Error("iCal calendar was fetched, but no roster events were found");
