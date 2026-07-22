@@ -126,6 +126,23 @@ function activityFromIcs(summary, description) {
   return cleanText((flight?.[0] || summary || "ROSTER").replace(/\s+/g, ""), 80);
 }
 
+function crewFromIcsDescription(description) {
+  const lines = String(description || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const crewLines = lines
+    .filter((line) => /,/u.test(line))
+    .filter((line) => /\p{Script=Hangul}/u.test(line));
+  const crew = cleanText(crewLines.join("\n"), 1000);
+  const crewArray = [];
+  for (const line of crewLines) {
+    const match = line.match(/([\p{Script=Hangul}]{2,4})\s*,/u);
+    if (match && !crewArray.includes(match[1])) crewArray.push(match[1]);
+  }
+  return { crew, crewArray };
+}
+
 function monthName(month) {
   return ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][month - 1] || "";
 }
@@ -143,6 +160,7 @@ function icsEventToPdcDoc(event, owner) {
   const uid = cleanText(event.UID?.value || hashText(`${summary}_${description}_${start.date}_${start.time}`), 200);
   const year = start.date.slice(0, 4);
   const month = Number.parseInt(start.date.slice(5, 7), 10);
+  const { crew, crewArray } = crewFromIcsDescription(description);
 
   return {
     owner: owner.uid,
@@ -160,8 +178,8 @@ function icsEventToPdcDoc(event, owner) {
     COL: "",
     DC: "",
     F: activity,
-    Crew: "",
-    CrewArray: [],
+    Crew: crew,
+    CrewArray: crewArray,
     ET: "00:00",
     NT: "00:00",
     BLH: "",
