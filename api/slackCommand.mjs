@@ -333,17 +333,19 @@ export default async function handler(req, res) {
     return;
   }
 
+  let command = {};
   try {
     const rawBody = await readRawBody(req);
     verifySlackSignature(req, rawBody);
-    const command = parseSlashCommand(rawBody);
+    command = parseSlashCommand(rawBody);
     const body = await handleCommand(command);
     slackJson(res, 200, body);
   } catch (error) {
     const status = error.statusCode || 500;
-    slackJson(res, status, {
+    const isSlackAuthError = status === 401;
+    slackJson(res, isSlackAuthError ? status : 200, {
       response_type: "ephemeral",
-      text: `Slack command failed: ${error.message}`,
+      text: `Slack command failed${command.command ? ` for ${command.command}` : ""}: ${error.message}`,
     });
   }
 }
