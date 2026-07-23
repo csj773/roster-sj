@@ -123,9 +123,9 @@ Post a monthly PerDiem report back to Slack:
 
 ```text
 /perdiem-report
-/perdiem-report set-email sjchoi787@gmail.com
+/perdiem-report user@example.com jul
+/perdiem-report set-email user@example.com
 /perdiem-report jul
-/perdiem-report sjchoi787@gmail.com jul
 /perdiem-report 2026-07
 ```
 

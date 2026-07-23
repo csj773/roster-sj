@@ -635,7 +635,7 @@ async function setPerDiemReportEmail(command, email) {
       "PerDiem report owner email saved.",
       `Email: \`${normalizedEmail}\``,
       `Owner: \`${resolved.owner.displayName || resolved.owner.email || resolved.firebaseUid}\``,
-      "Next: `/perdiem-report jul`",
+      "Next: `/perdiem-report jul` or `/perdiem-report user@example.com jul`",
     ].join("\n"),
   };
 }
@@ -1103,8 +1103,8 @@ function helpText() {
     "`/my-roster` - show only your roster for today + 30 days",
     "`/my-roster HNL 2026-07-22 14` - show only your roster with optional station/date/days",
     "`/perdiem-report` - show your monthly PerDiem report in Slack",
-    "`/perdiem-report set-email sjchoi787@gmail.com` - save your PerDiem report owner email",
-    "`/perdiem-report sjchoi787@gmail.com jul` - choose report owner and month",
+    "`/perdiem-report user@example.com jul` - show that user's July PerDiem report",
+    "`/perdiem-report set-email user@example.com` - save your default PerDiem report owner email",
     "`/layover HNL` - show shared HNL crew for today + 30 days",
     "`/layover HNL 2026-07-22 14` - choose start date and days",
   ].join("\n");
@@ -1366,7 +1366,7 @@ async function handlePerDiemReport(command) {
     if (!parsed.reportEmail) {
       return {
         response_type: "ephemeral",
-        text: "Usage: `/perdiem-report set-email sjchoi787@gmail.com`",
+        text: "Usage: `/perdiem-report set-email user@example.com`",
       };
     }
     return setPerDiemReportEmail(command, parsed.reportEmail);
@@ -1387,7 +1387,7 @@ async function handlePerDiemReport(command) {
   if (!firebaseUid) {
     return {
       response_type: "ephemeral",
-      text: `${notLinkedText(command)}\n\nUse \`/roster-share link-me\` first, or run \`/perdiem-report set-email sjchoi787@gmail.com\`.`,
+      text: `${notLinkedText(command)}\n\nUse \`/roster-share link-me\` first, or run \`/perdiem-report user@example.com jul\`.`,
     };
   }
 
