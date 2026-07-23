@@ -251,7 +251,8 @@ The `/roster-share` response includes copy-ready text for Slack DM/channel
 sharing and an HTTPS email-compose button that redirects to `mailto:` so the
 user can send the invite link through their existing Gmail/Yahoo/Mail app
 without Resend domain verification. Because `mailto:` creates a plain email,
-the message includes plain accept/status URLs instead of embedded HTML buttons.
+the message includes plain accept/status/channel URLs instead of embedded HTML
+buttons.
 
 Endpoint:
 

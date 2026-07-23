@@ -152,7 +152,12 @@ function inviteUrl(code) {
   return `${appBaseUrl()}${path}?invite=${encodeURIComponent(code)}`;
 }
 
-function mailInviteUrl({ inviteUrl: url, ownerName = "", recipientEmail = "" }) {
+function slackChannelUrl(command) {
+  if (!command.teamId || !command.channelId) return "";
+  return `https://app.slack.com/client/${encodeURIComponent(command.teamId)}/${encodeURIComponent(command.channelId)}`;
+}
+
+function mailInviteUrl({ inviteUrl: url, ownerName = "", recipientEmail = "", channelUrl = "" }) {
   const owner = cleanText(ownerName || "Roster Share", 120);
   const subject = "Roster Share 참여 링크";
   const statusUrl = `${url}${url.includes("?") ? "&" : "?"}mode=status`;
@@ -160,11 +165,13 @@ function mailInviteUrl({ inviteUrl: url, ownerName = "", recipientEmail = "" }) 
     url,
     "",
     statusUrl,
+    ...(channelUrl ? ["", channelUrl] : []),
     "",
     `${owner} 님이 Roster Share에 초대했습니다.`,
     "",
     "첫 번째 URL: 수락하기",
     "두 번째 URL: 수락 여부 확인",
+    ...(channelUrl ? ["세 번째 URL: Slack 채널 참여"] : []),
     "",
     "메일 앱에서 URL이 클릭되지 않으면 첫 번째 URL을 복사해서 브라우저 주소창에 붙여넣어 주세요.",
   ].join("\n");
@@ -177,15 +184,17 @@ function mailInviteUrl({ inviteUrl: url, ownerName = "", recipientEmail = "" }) 
   return `${appBaseUrl()}/api/mailInvite?${params.toString()}`;
 }
 
-function inviteShareText(url) {
+function inviteShareText(url, channelUrl = "") {
   const statusUrl = `${url}${url.includes("?") ? "&" : "?"}mode=status`;
   return [
     url,
     "",
     statusUrl,
+    ...(channelUrl ? ["", channelUrl] : []),
     "",
     "첫 번째 URL: 수락하기",
     "두 번째 URL: 수락 여부 확인",
+    ...(channelUrl ? ["세 번째 URL: Slack 채널 참여"] : []),
   ].join("\n");
 }
 
@@ -626,11 +635,13 @@ async function handleRosterShare(command) {
     scope,
     note: `Created from Slack ${command.teamDomain || command.teamId} #${command.channelName || command.channelId}`,
   });
-  const shareText = inviteShareText(invite.inviteUrl);
+  const channelUrl = slackChannelUrl(command);
+  const shareText = inviteShareText(invite.inviteUrl, channelUrl);
   const mailUrl = mailInviteUrl({
     inviteUrl: invite.inviteUrl,
     ownerName: invite.owner.displayName || invite.owner.email || command.userName,
     recipientEmail,
+    channelUrl,
   });
   const emailHint = recipientEmail ? `\nEmail recipient: \`${recipientEmail}\`` : "";
 
@@ -658,6 +669,13 @@ async function handleRosterShare(command) {
             text: { type: "plain_text", text: "Send by email" },
             url: mailUrl,
           },
+          ...(channelUrl
+            ? [{
+                type: "button",
+                text: { type: "plain_text", text: "Open channel" },
+                url: channelUrl,
+              }]
+            : []),
         ],
       },
     ],
