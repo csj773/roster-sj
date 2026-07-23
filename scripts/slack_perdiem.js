@@ -216,6 +216,10 @@ function dateSortKey(value) {
   return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
 }
 
+function dateMonthKey(value) {
+  return dateSortKey(value).slice(0, 7);
+}
+
 function calculateTotalFromHours(hours, rate, destination) {
   if (!Number.isFinite(hours) || hours <= 0 || rate <= 0) return 0;
   if (normalizeAirportCode(destination) === "ICN" && hours < QUICK_TURN_THRESHOLD_HOURS) {
@@ -243,7 +247,7 @@ function dedupeInboundRows(rows) {
   const groups = new Map();
   for (const row of rows) {
     if (row.Destination !== "ICN" || row.From === "ICN") continue;
-    const key = [row.Activity, row.From, row.Destination].join("|");
+    const key = [row.Activity, row.From, row.Destination, dateMonthKey(row.Date)].join("|");
     const list = groups.get(key) || [];
     list.push(row);
     groups.set(key, list);
