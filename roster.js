@@ -259,17 +259,18 @@ async function clickNextRosterPeriod(page) {
           const id = normalize(element.getAttribute("id") || "");
           const name = normalize(element.getAttribute("name") || "");
           const className = normalize(element.getAttribute("class") || "");
+          const src = normalize(element.getAttribute("src") || "");
           const href = normalize(element.getAttribute("href") || "");
           const onclick = normalize(element.getAttribute("onclick") || "");
-          const combined = `${text} ${aria} ${title} ${alt} ${id} ${name} ${className} ${href} ${onclick}`.toLowerCase();
+          const combined = `${text} ${aria} ${title} ${alt} ${id} ${name} ${className} ${src} ${href} ${onclick}`.toLowerCase();
           const label = `${text} ${aria} ${title} ${alt}`.trim();
           let score = 0;
           if (/^(>|›|»|next|next month|다음|익월)$/i.test(label)) score += 50;
-          if (/\b(next|nextmonth|monthnext)\b/i.test(combined)) score += 35;
+          if (/(next|nxt|nextmonth|monthnext|forward|right|arrowright|arr_right|btnright|movenext)/i.test(combined)) score += 35;
           if (/다음|익월|이후월|다음달/.test(combined)) score += 35;
           if (/(^|\s)(>|›|»)(\s|$)/.test(label)) score += 20;
-          if (/prev|previous|back|before|이전|전월|logout|home|today/.test(combined)) score -= 100;
-          return { element, score, text, aria, title, alt, id, name, className, href, onclick };
+          if (/prev|previous|back|before|left|arrowleft|arr_left|btnleft|이전|전월|logout|home|today/.test(combined)) score -= 100;
+          return { element, score, text, aria, title, alt, id, name, className, src, href, onclick };
         })
         .filter(item => item.score > 0)
         .sort((a, b) => b.score - a.score);
@@ -287,6 +288,7 @@ async function clickNextRosterPeriod(page) {
         id: target.id,
         name: target.name,
         className: target.className,
+        src: target.src,
         href: target.href,
         onclick: target.onclick,
       };
@@ -296,6 +298,32 @@ async function clickNextRosterPeriod(page) {
   }
 
   return null;
+}
+
+async function collectNextRosterPeriodCandidates(page) {
+  const diagnostics = [];
+  for (const frame of page.frames()) {
+    const candidates = await frame.evaluate(() => {
+      const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
+      return Array.from(document.querySelectorAll("a,button,input,[role='button'],[onclick],img"))
+        .slice(0, 120)
+        .map((element) => ({
+          text: normalize(element.innerText || element.textContent || element.value || "").slice(0, 80),
+          aria: normalize(element.getAttribute("aria-label") || "").slice(0, 80),
+          title: normalize(element.getAttribute("title") || "").slice(0, 80),
+          alt: normalize(element.getAttribute("alt") || "").slice(0, 80),
+          id: normalize(element.getAttribute("id") || "").slice(0, 120),
+          name: normalize(element.getAttribute("name") || "").slice(0, 120),
+          className: normalize(element.getAttribute("class") || "").slice(0, 120),
+          src: normalize(element.getAttribute("src") || "").slice(0, 160),
+          href: normalize(element.getAttribute("href") || "").slice(0, 160),
+          onclick: normalize(element.getAttribute("onclick") || "").slice(0, 160),
+        }))
+        .filter((item) => Object.values(item).some(Boolean));
+    });
+    diagnostics.push({ url: frame.url(), candidates });
+  }
+  return diagnostics;
 }
 
 async function extractRosterAcrossPeriods(page, periodCount = 2) {
@@ -328,6 +356,8 @@ async function extractRosterAcrossPeriods(page, periodCount = 2) {
     const clicked = await clickNextRosterPeriod(page);
     if (!clicked) {
       console.log("ℹ️ 다음 Roster period 버튼을 찾지 못해 현재까지 추출한 데이터만 사용");
+      const diagnostics = await collectNextRosterPeriodCandidates(page);
+      console.log(`🔎 다음 period 후보: ${JSON.stringify(diagnostics).slice(0, 4000)}`);
       break;
     }
     console.log(`✅ 다음 Roster period 이동 클릭: ${JSON.stringify(clicked)}`);
