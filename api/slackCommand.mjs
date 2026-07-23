@@ -354,6 +354,11 @@ function mailInviteUrl({ inviteUrl: url, ownerName = "", recipientEmail = "", ch
     "두 번째 URL: 수락 여부 확인",
     ...(channelUrl ? ["세 번째 URL: Slack 채널 참여"] : []),
     "",
+    "[주의]",
+    "수락하면 같은 Roster Share 채널 참여자들과 layover roster 공유가 자동 연결됩니다.",
+    `본인 roster를 공유하려면 Slack 채널에서 /roster-share import ${recipientEmail || "본인이메일@example.com"} webcal://... 를 실행해 주세요.`,
+    "공유 조회는 채널에서 /layover IAD 처럼 실행합니다.",
+    "",
     "메일 앱에서 URL이 클릭되지 않으면 첫 번째 URL을 복사해서 브라우저 주소창에 붙여넣어 주세요.",
   ].join("\n");
   const params = new URLSearchParams({
@@ -376,6 +381,11 @@ function inviteShareText(url, channelUrl = "") {
     "첫 번째 URL: 수락하기",
     "두 번째 URL: 수락 여부 확인",
     ...(channelUrl ? ["세 번째 URL: Slack 채널 참여"] : []),
+    "",
+    "[주의]",
+    "수락하면 같은 Roster Share 채널 참여자들과 layover roster 공유가 자동 연결됩니다.",
+    "본인 roster 공유: /roster-share import 본인이메일@example.com webcal://...",
+    "공유 조회: /layover IAD",
   ].join("\n");
 }
 
