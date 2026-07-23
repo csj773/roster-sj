@@ -76,3 +76,91 @@ jobs:
             ].join(" | "));
           }
           NODE
+
+      - name: Inspect source iCal events
+        env:
+          INPUT_ICAL_ROSTER_URL: ${{ secrets.ICAL_ROSTER_URL || secrets.WEB_ROSTER_URL }}
+        run: |
+          node --input-type=module <<'NODE'
+          function fetchableCalendarUrl(value) {
+            const text = String(value || "").trim();
+            if (/^webcal:\/\//i.test(text)) return `https://${text.slice("webcal://".length)}`;
+            if (/^https:\/\//i.test(text)) return text;
+            return "";
+          }
+
+          function unfoldIcsLines(text) {
+            const lines = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+            const unfolded = [];
+            for (const line of lines) {
+              if (/^[ \t]/.test(line) && unfolded.length) unfolded[unfolded.length - 1] += line.slice(1);
+              else unfolded.push(line);
+            }
+            return unfolded;
+          }
+
+          function decodeIcsText(value) {
+            return String(value || "")
+              .replace(/\\n/gi, "\n")
+              .replace(/\\,/g, ",")
+              .replace(/\\;/g, ";")
+              .replace(/\\\\/g, "\\")
+              .trim();
+          }
+
+          function parseIcsValue(line) {
+            const colon = line.indexOf(":");
+            if (colon < 0) return null;
+            const keyPart = line.slice(0, colon);
+            const value = line.slice(colon + 1);
+            const [name] = keyPart.split(";");
+            return { name: name.toUpperCase(), value: decodeIcsText(value) };
+          }
+
+          function parseIcsEvents(text) {
+            const events = [];
+            let current = null;
+            for (const line of unfoldIcsLines(text)) {
+              if (line.trim() === "BEGIN:VEVENT") {
+                current = {};
+                continue;
+              }
+              if (line.trim() === "END:VEVENT") {
+                if (current) events.push(current);
+                current = null;
+                continue;
+              }
+              if (!current) continue;
+              const parsed = parseIcsValue(line);
+              if (parsed) current[parsed.name] = parsed.value;
+            }
+            return events;
+          }
+
+          const url = fetchableCalendarUrl(process.env.INPUT_ICAL_ROSTER_URL);
+          if (!url) throw new Error("missing INPUT_ICAL_ROSTER_URL");
+          const response = await fetch(url, { headers: { Accept: "text/calendar, text/plain, */*" } });
+          if (!response.ok) throw new Error(`fetch failed ${response.status}`);
+          const ics = await response.text();
+          const activities = new Set(["YP151", "YP152", "YP135", "YP136", "YP801", "YP802", "YP131"]);
+          const events = parseIcsEvents(ics).filter((event) => {
+            const text = `${event.SUMMARY || ""}\n${event.DESCRIPTION || ""}`;
+            return [...activities].some((activity) => text.includes(activity));
+          });
+          console.log(`source iCal matching=${events.length}`);
+          for (const event of events) {
+            const description = String(event.DESCRIPTION || "")
+              .split("\n")
+              .map((line) => line.trim())
+              .filter(Boolean)
+              .slice(0, 12)
+              .join(" / ");
+            console.log([
+              `SUMMARY=${event.SUMMARY || ""}`,
+              `DTSTART=${event.DTSTART || ""}`,
+              `DTEND=${event.DTEND || ""}`,
+              `LOCATION=${event.LOCATION || ""}`,
+              `DESC=${description.slice(0, 500)}`,
+            ].join(" | "));
+          }
+          NODE
