@@ -303,9 +303,10 @@ linked roster participants, and invite-code acceptances automatically share the
 accepted guest owner with existing Roster Share participants.
 
 The `/perdiem-report` command dispatches `monthly-perdiem-slack-report.yml`.
-That workflow reads only the linked Slack user's Firestore `Perdiem` documents
-and posts a table back to Slack through the command `response_url`; the existing
-monthly email workflow remains unchanged.
+That workflow reads only the linked Slack user's Firestore `pdc` roster rows,
+calculates PerDiem from those roster rows, and posts a table back to Slack
+through the command `response_url`; the existing monthly email workflow remains
+unchanged.
 
 Required Vercel environment variable:
 

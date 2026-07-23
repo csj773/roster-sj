@@ -1,7 +1,12 @@
+import fs from "fs";
+import os from "os";
+import path from "path";
 import admin from "firebase-admin";
+import { generatePerDiemList } from "../perdiem.js";
 
-const PERDIEM_COLLECTION = "Perdiem";
+const PDC_COLLECTION = "pdc";
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const ROSTER_HEADERS = ["Date", "D/C", "C/I(L)", "C/O(L)", "Activity", "F", "From", "STD(L)", "STD(Z)", "To", "STA(L)", "STA(Z)", "BLH", "Crew"];
 
 function requiredEnv(name) {
   const value = String(process.env[name] || "").trim();
@@ -59,6 +64,14 @@ function parseMoney(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function firstText(...values) {
+  for (const value of values) {
+    const text = cleanText(value, 200);
+    if (text) return text;
+  }
+  return "";
+}
+
 function cleanText(value, maxLength = 200) {
   return String(value ?? "").trim().slice(0, maxLength);
 }
@@ -76,6 +89,62 @@ function targetMonthYear() {
   if (!Number.isFinite(month) || month < 1 || month > 12) throw new Error(`Invalid target month: ${month}`);
   if (!Number.isFinite(year) || year < 2000) throw new Error(`Invalid target year: ${year}`);
   return { month, year };
+}
+
+function pdcRosterRow(doc) {
+  return [
+    firstText(doc.DateRaw, doc.Date),
+    firstText(doc.DC, doc["D/C"]),
+    firstText(doc.CIL, doc["C/I(L)"]),
+    firstText(doc.COL, doc["C/O(L)"]),
+    firstText(doc.Activity),
+    firstText(doc.F, doc.Activity),
+    firstText(doc.From),
+    firstText(doc.STDL, doc["STD(L)"]),
+    firstText(doc.STDZ, doc["STD(Z)"]),
+    firstText(doc.To, doc.Destination),
+    firstText(doc.STAL, doc["STA(L)"]),
+    firstText(doc.STAZ, doc["STA(Z)"]),
+    firstText(doc.BLH),
+    firstText(doc.Crew),
+  ];
+}
+
+function dedupeRosterRows(rows) {
+  const seen = new Set();
+  return rows.filter((row) => {
+    const key = [
+      dateSortKey(row[0]),
+      row[1],
+      row[4],
+      row[6],
+      row[9],
+      row[7],
+      row[11],
+    ].join("|");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function pdcRosterJsonPath(db, ownerUid) {
+  const snapshot = await db.collection(PDC_COLLECTION).where("owner", "==", ownerUid).get();
+  const rows = snapshot.docs
+    .map((doc) => doc.data())
+    .filter((doc) => cleanText(doc.Activity, 80))
+    .filter((doc) => firstText(doc.From) && firstText(doc.To, doc.Destination))
+    .sort((a, b) => {
+      const left = `${dateSortKey(firstText(a.Date, a.DateRaw))}_${firstText(a.STDL, a["STD(L)"])}_${firstText(a.Activity)}`;
+      const right = `${dateSortKey(firstText(b.Date, b.DateRaw))}_${firstText(b.STDL, b["STD(L)"])}_${firstText(b.Activity)}`;
+      return left.localeCompare(right);
+    })
+    .map(pdcRosterRow);
+
+  const values = [ROSTER_HEADERS, ...dedupeRosterRows(rows)];
+  const filePath = path.join(os.tmpdir(), `pdc-roster-${ownerUid.replace(/[^A-Za-z0-9_-]/g, "_")}.json`);
+  fs.writeFileSync(filePath, JSON.stringify({ values }, null, 2), "utf-8");
+  return { filePath, rowCount: values.length - 1 };
 }
 
 function tableCell(value, width) {
@@ -148,14 +217,19 @@ async function main() {
   });
 
   const snapshot = await admin.firestore()
-    .collection(PERDIEM_COLLECTION)
+    .collection(PDC_COLLECTION)
     .where("owner", "==", ownerUid)
+    .limit(1)
     .get();
+  if (snapshot.empty) {
+    throw new Error(`No pdc roster rows found for owner ${ownerUid}`);
+  }
 
-  const rows = snapshot.docs
-    .map((doc) => doc.data())
+  const { filePath, rowCount } = await pdcRosterJsonPath(admin.firestore(), ownerUid);
+  const rows = (await generatePerDiemList(filePath, ownerUid))
     .filter((row) => monthToNumber(row.Month) === target.month)
     .filter((row) => String(row.Year || "").trim() === String(target.year))
+    .filter((row) => !["RI", "RO"].includes(cleanText(row.Activity, 20).toUpperCase()))
     .map((row) => ({
       Date: cleanText(row.Date, 20),
       Activity: cleanText(row.Activity, 40),
@@ -183,7 +257,7 @@ async function main() {
     `${displayName}: ${formatKoreanMonth(target)} Prediem=${totalPerdiem.toFixed(2)}/Transport fee=${totalTransportFee.toFixed(0)}`,
     "",
     `created at: ${formatKstTimestamp()} KST`,
-    `source: Firestore ${PERDIEM_COLLECTION}, Month=${monthName}, Year=${target.year}`,
+    `source: Firestore ${PDC_COLLECTION} roster rows=${rowCount}, Month=${monthName}, Year=${target.year}`,
   ].join("\n");
 
   await postSlack(text);
