@@ -61,6 +61,38 @@ function pdcEventDocId(docData) {
   ].join("|"));
 }
 
+function crewKey(docData) {
+  const crewArray = Array.isArray(docData.CrewArray) ? docData.CrewArray : [];
+  return crewArray.map((name) => cleanText(name, 40)).filter(Boolean).sort().join(",");
+}
+
+function importDuplicateKey(docData) {
+  return [
+    docData.owner,
+    docData.Date,
+    docData.Activity,
+    docData.From,
+    docData.To,
+    crewKey(docData),
+  ].join("|");
+}
+
+function preferredDuplicateDoc(current, candidate) {
+  if (!current) return candidate;
+  const currentTime = cleanText(current.STDL || current["STD(L)"] || current.STDZ || current.STD, 40);
+  const candidateTime = cleanText(candidate.STDL || candidate["STD(L)"] || candidate.STDZ || candidate.STD, 40);
+  return candidateTime >= currentTime ? candidate : current;
+}
+
+function dedupeImportDocs(docs) {
+  const byKey = new Map();
+  for (const docData of docs) {
+    const key = importDuplicateKey(docData);
+    byKey.set(key, preferredDuplicateDoc(byKey.get(key), docData));
+  }
+  return [...byKey.values()];
+}
+
 async function deleteExistingImportMonthDocs(db, docs) {
   const owner = cleanText(docs[0]?.owner, 500);
   if (!owner) return 0;
@@ -348,10 +380,11 @@ async function fetchIcsCalendar(calendarUrl) {
 }
 
 async function uploadPdcDocs(db, docs) {
-  let deleted = await deleteExistingImportMonthDocs(db, docs);
+  const uniqueDocs = dedupeImportDocs(docs);
+  let deleted = await deleteExistingImportMonthDocs(db, uniqueDocs);
   let imported = 0;
 
-  for (const docData of docs) {
+  for (const docData of uniqueDocs) {
     const batch = db.batch();
     const ownerRef = db.collection(PDC_COLLECTION).doc(ownerPdcDocId(docData.owner));
     const eventRef = ownerRef.collection("events").doc(pdcEventDocId(docData));
@@ -369,7 +402,7 @@ async function uploadPdcDocs(db, docs) {
     imported += 1;
   }
 
-  return { deleted, imported };
+  return { deleted, imported, skippedDuplicates: docs.length - uniqueDocs.length };
 }
 
 async function main() {

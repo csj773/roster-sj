@@ -709,6 +709,42 @@ function pdcEventDocId(docData) {
   ].join("|"));
 }
 
+function crewKey(value) {
+  const crewArray = Array.isArray(value?.CrewArray)
+    ? value.CrewArray
+    : Array.isArray(value?.crewArray)
+      ? value.crewArray
+      : [];
+  return crewArray.map((name) => cleanText(name, 40)).filter(Boolean).sort().join(",");
+}
+
+function importedRosterDuplicateKey(docData) {
+  return [
+    docData.owner,
+    docData.Date,
+    docData.Activity,
+    docData.From,
+    docData.To,
+    crewKey(docData),
+  ].join("|");
+}
+
+function preferredRosterDoc(current, candidate) {
+  if (!current) return candidate;
+  const currentTime = cleanText(current.STDL || current["STD(L)"] || current.STDZ || current.STD, 40);
+  const candidateTime = cleanText(candidate.STDL || candidate["STD(L)"] || candidate.STDZ || candidate.STD, 40);
+  return candidateTime >= currentTime ? candidate : current;
+}
+
+function dedupeImportedRosterDocs(docs) {
+  const byKey = new Map();
+  for (const docData of docs) {
+    const key = importedRosterDuplicateKey(docData);
+    byKey.set(key, preferredRosterDoc(byKey.get(key), docData));
+  }
+  return [...byKey.values()];
+}
+
 async function deleteExistingImportMonthDocs(docs) {
   const owner = cleanText(docs[0]?.owner, 500);
   if (!owner) return 0;
@@ -1013,10 +1049,11 @@ async function fetchIcsCalendar(calendarUrl) {
 }
 
 async function uploadImportedRosterToPdc(docs) {
-  let deleted = await deleteExistingImportMonthDocs(docs);
+  const uniqueDocs = dedupeImportedRosterDocs(docs);
+  let deleted = await deleteExistingImportMonthDocs(uniqueDocs);
   let imported = 0;
 
-  for (const docData of docs) {
+  for (const docData of uniqueDocs) {
     const batch = db().batch();
     const ownerRef = db().collection(PDC_COLLECTION).doc(ownerPdcDocId(docData.owner));
     const eventRef = ownerRef.collection("events").doc(pdcEventDocId(docData));
@@ -1034,7 +1071,7 @@ async function uploadImportedRosterToPdc(docs) {
     imported += 1;
   }
 
-  return { deleted, imported };
+  return { deleted, imported, skippedDuplicates: docs.length - uniqueDocs.length };
 }
 
 function isOffDuty(activity) {
@@ -1140,29 +1177,36 @@ async function layoverItemsFor(uid, { station, startDate, days }, command = {}) 
       })
     )
   );
-  return nested.flat().sort((a, b) => {
+  return dedupeRosterItems(nested.flat(), { ignoreTimes: true }).sort((a, b) => {
     const left = `${dateSortKey(a.date)}_${a.stdl}_${a.crewName}_${a.activity}`;
     const right = `${dateSortKey(b.date)}_${b.stdl}_${b.crewName}_${b.activity}`;
     return left.localeCompare(right);
   });
 }
 
-function dedupeRosterItems(items) {
-  const seen = new Set();
-  return items.filter((item) => {
+function dedupeRosterItems(items, { ignoreTimes = false } = {}) {
+  const byKey = new Map();
+  for (const item of items) {
     const key = [
       item.ownerUid,
       dateSortKey(item.date),
-      item.stdl,
-      item.stal,
+      ignoreTimes ? "" : item.stdl,
+      ignoreTimes ? "" : item.stal,
       item.activity,
       item.from,
       item.to,
+      crewKey(item),
     ].join("|");
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+    byKey.set(key, preferredRosterItem(byKey.get(key), item));
+  }
+  return [...byKey.values()];
+}
+
+function preferredRosterItem(current, candidate) {
+  if (!current) return candidate;
+  const currentTime = cleanText(current.stdl || current.stal, 40);
+  const candidateTime = cleanText(candidate.stdl || candidate.stal, 40);
+  return candidateTime >= currentTime ? candidate : current;
 }
 
 async function myRosterItemsFor(uid, { station, startDate, days }) {
