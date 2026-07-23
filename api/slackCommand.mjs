@@ -122,17 +122,21 @@ function slackLinkId(teamId, userId) {
   return `${teamId}_${userId}`.replace(/[^A-Za-z0-9_-]/g, "_");
 }
 
-async function linkedFirebaseUid(command) {
-  const configuredUid = cleanText(process.env.SLACK_DEFAULT_FIREBASE_UID || "", 160);
-  if (configuredUid) return configuredUid;
-
+async function linkedFirebaseUid(command, { allowDefault = true } = {}) {
   const snap = await db()
     .collection(SLACK_LINK_COLLECTION)
     .doc(slackLinkId(command.teamId, command.userId))
     .get();
-  if (!snap.exists) return "";
-  const data = snap.data();
-  return cleanText(data.firebaseUid || data.uid || "", 160);
+  if (snap.exists) {
+    const data = snap.data();
+    const linkedUid = cleanText(data.firebaseUid || data.uid || "", 160);
+    if (linkedUid && data.status !== "disabled") return linkedUid;
+  }
+
+  if (!allowDefault) return "";
+
+  const configuredUid = cleanText(process.env.SLACK_DEFAULT_FIREBASE_UID || "", 160);
+  return configuredUid;
 }
 
 function appBaseUrl() {
@@ -556,14 +560,20 @@ function notLinkedText(command) {
 }
 
 async function handleRosterShare(command) {
-  const firebaseUid = await linkedFirebaseUid(command);
-  if (!firebaseUid) {
-    return { response_type: "ephemeral", text: notLinkedText(command) };
-  }
-
   const args = parseSlackArgs(command.text);
   const action = cleanText(args[0] || "", 40).toLowerCase();
-  if (["import", "sync", "link", "ical", "webcal"].includes(action)) {
+  const isImportAction = ["import", "sync", "link", "ical", "webcal"].includes(action);
+  const firebaseUid = await linkedFirebaseUid(command, { allowDefault: !isImportAction });
+  if (!firebaseUid) {
+    return {
+      response_type: "ephemeral",
+      text: isImportAction
+        ? `${notLinkedText(command)}\n\nRoster iCal import requires a personal Slack-to-Firebase link so each friend's roster is saved under the correct owner.`
+        : notLinkedText(command),
+    };
+  }
+
+  if (isImportAction) {
     return handleRosterImport(command, firebaseUid);
   }
 

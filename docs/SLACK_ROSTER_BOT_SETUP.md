@@ -72,6 +72,11 @@ Import a personal iCal roster link without using FlutterFlow:
 /roster-share import webcal://your-private-calendar-url
 ```
 
+This import command always requires a per-user Firestore link in
+`slack_user_links/{teamId}_{slackUserId}`. It does not use
+`SLACK_DEFAULT_FIREBASE_UID`, so each friend's imported roster is saved under
+that friend's own Firebase UID.
+
 When `GITHUB_TOKEN` is configured on Vercel, the command queues the separate
 GitHub Actions workflow `import-ical-roster-to-pdc.yml`. The workflow imports
 the events into Firestore `pdc` with the same duplicate key used by the existing
