@@ -788,6 +788,9 @@ async function sharedOwnersFor(uid, command = {}) {
 function rosterItem(doc, owner) {
   const data = doc.data();
   const activity = cleanText(data.Activity, 80);
+  const crewArray = Array.isArray(data.CrewArray)
+    ? data.CrewArray.map((name) => cleanText(name, 40)).filter(Boolean)
+    : [];
   return {
     ownerUid: data.owner || owner.uid,
     crewName: owner.displayName || data.ownerDisplayName || "",
@@ -797,6 +800,7 @@ function rosterItem(doc, owner) {
     to: upper(data.To),
     stdl: cleanText(data.STDL || data["STD(L)"], 20),
     stal: cleanText(data.STAL || data["STA(L)"], 20),
+    crewArray,
     type: isOffDuty(activity) ? "day_off" : "flight",
   };
 }
@@ -1017,7 +1021,8 @@ function layoverResponseText({ station, startDate, days, items }) {
     const route = [item.from, item.to].filter(Boolean).join("-");
     const time = item.stdl || item.stal || "";
     const name = item.crewName || item.ownerUid;
-    return `- ${item.date} ${time} ${name}: ${item.activity} ${route}`.trim();
+    const crew = item.crewArray?.length ? ` | Crew: ${item.crewArray.join(", ")}` : "";
+    return `- ${item.date} ${time} ${name}: ${item.activity} ${route}${crew}`.trim();
   });
   const suffix = items.length > 30 ? `\n…and ${items.length - 30} more` : "";
   return `*${station} shared layover crew* (${startDate}, ${days} day(s))\n${lines.join("\n")}${suffix}`;
