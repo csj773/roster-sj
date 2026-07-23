@@ -297,6 +297,44 @@ async function clickNextRosterPeriod(page) {
     if (clicked) return clicked;
   }
 
+  for (const frame of page.frames()) {
+    const submitted = await frame.evaluate(() => {
+      const hidden = document.querySelector("#ctl00_Main_dateRangeHidden, input[name='ctl00$Main$dateRangeHidden']");
+      if (!hidden) return null;
+
+      const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const parseRange = (value) => {
+        const match = String(value || "").match(/(\d{2})([A-Za-z]{3})(\d{2})\s*-\s*(\d{2})([A-Za-z]{3})(\d{2})/);
+        if (!match) return null;
+        const monthIndex = monthNames.findIndex((name) => name.toLowerCase() === match[2].toLowerCase());
+        if (monthIndex < 0) return null;
+        return { year: 2000 + Number(match[3]), monthIndex };
+      };
+      const pad2 = (value) => String(value).padStart(2, "0");
+      const lastDayOfMonth = (year, monthIndex) => new Date(year, monthIndex + 1, 0).getDate();
+      const current = parseRange(hidden.value);
+      if (!current) return null;
+
+      const nextMonthIndex = (current.monthIndex + 1) % 12;
+      const nextYear = current.monthIndex === 11 ? current.year + 1 : current.year;
+      const nextRange = `01${monthNames[nextMonthIndex]}${String(nextYear).slice(-2)} - ${pad2(lastDayOfMonth(nextYear, nextMonthIndex))}${monthNames[nextMonthIndex]}${String(nextYear).slice(-2)}`;
+      hidden.value = nextRange;
+
+      const form = hidden.form || document.forms[0];
+      if (!form) return null;
+      form.submit();
+      return {
+        method: "dateRangeHiddenSubmit",
+        previousRange: current,
+        nextRange,
+        id: hidden.id,
+        name: hidden.name,
+      };
+    });
+
+    if (submitted) return submitted;
+  }
+
   return null;
 }
 
