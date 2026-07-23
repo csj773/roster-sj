@@ -1,0 +1,73 @@
+name: Link Known Slack User
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/link-known-slack-user.yml"
+  workflow_dispatch:
+
+jobs:
+  link:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Link Slack user to Firebase user
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_UID: ${{ secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
+          SLACK_TEAM_ID: T0BJJ9E0KGX
+          SLACK_USER_ID: U0BJZKZSSR0
+          SLACK_USER_NAME: sang joon choi
+        run: |
+          node --input-type=module <<'NODE'
+          import admin from "firebase-admin";
+
+          const required = (name) => {
+            const value = String(process.env[name] || "").trim();
+            if (!value) throw new Error(`${name} is required`);
+            return value;
+          };
+
+          const serviceAccount = JSON.parse(required("FIREBASE_SERVICE_ACCOUNT"));
+          if (serviceAccount.private_key) {
+            serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
+          }
+
+          admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount),
+          });
+
+          const firebaseUid = required("FIREBASE_UID");
+          const teamId = required("SLACK_TEAM_ID");
+          const userId = required("SLACK_USER_ID");
+          const linkId = `${teamId}_${userId}`.replace(/[^A-Za-z0-9_-]/g, "_");
+          const db = admin.firestore();
+          const userSnap = await db.collection("users").doc(firebaseUid).get();
+          const user = userSnap.exists ? userSnap.data() : {};
+
+          await db.collection("slack_user_links").doc(linkId).set({
+            firebaseUid,
+            uid: firebaseUid,
+            slackTeamId: teamId,
+            slackUserId: userId,
+            slackUserName: process.env.SLACK_USER_NAME || "",
+            firebaseDisplayName: user.display_name || user.displayName || user.name || "",
+            firebaseEmail: user.email || "",
+            status: "active",
+            source: "github_actions_known_link",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          }, { merge: true });
+
+          console.log(`Linked ${linkId}`);
+          NODE
