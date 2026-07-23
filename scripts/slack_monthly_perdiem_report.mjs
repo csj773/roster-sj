@@ -87,6 +87,27 @@ function normalizePerDiemTime(value) {
   return `${hour}${minute}${match[3] || ""}`;
 }
 
+function dateUtcMs(value) {
+  const match = String(value || "").match(/^(\d{4})[-.](\d{1,2})[-.](\d{1,2})/);
+  if (!match) return null;
+  return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+}
+
+function normalizePdcTime(value, baseDate) {
+  const text = cleanText(value, 80);
+  if (!text) return "";
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (iso) {
+    const time = `${iso[4]}${iso[5]}`;
+    const baseMs = dateUtcMs(baseDate);
+    const isoMs = Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+    if (baseMs === null) return time;
+    const dayOffset = Math.round((isoMs - baseMs) / 86400000);
+    return dayOffset ? `${time}${dayOffset > 0 ? "+" : ""}${dayOffset}` : time;
+  }
+  return normalizePerDiemTime(text);
+}
+
 function compareHHMM(left, right) {
   const leftMatch = normalizePerDiemTime(left).match(/^(\d{2})(\d{2})/);
   const rightMatch = normalizePerDiemTime(right).match(/^(\d{2})(\d{2})/);
@@ -165,25 +186,26 @@ function targetMonthYear() {
 }
 
 function pdcRosterRow(doc) {
+  const date = firstText(doc.DateRaw, doc.Date);
   const from = firstText(doc.From);
   const to = firstText(doc.To, doc.Destination);
-  const stdl = firstText(doc.STDL, doc["STD(L)"]);
-  const stal = firstText(doc.STAL, doc["STA(L)"]);
-  const stdz = firstText(doc.STDZ, doc["STD(Z)"], stdl);
-  const staz = firstText(doc.STAZ, doc["STA(Z)"], endTimeWithOvernightOffset(stdz, stal));
+  const stdl = normalizePdcTime(firstText(doc.STDL, doc["STD(L)"]), date);
+  const stal = normalizePdcTime(firstText(doc.STAL, doc["STA(L)"]), date);
+  const stdz = normalizePdcTime(firstText(doc.STDZ, doc["STD(Z)"]), date) || stdl;
+  const staz = normalizePdcTime(firstText(doc.STAZ, doc["STA(Z)"]), date) || endTimeWithOvernightOffset(stdz, stal);
   return [
-    firstText(doc.DateRaw, doc.Date),
+    date,
     firstText(doc.DC, doc["D/C"]),
     firstText(doc.CIL, doc["C/I(L)"]),
     firstText(doc.COL, doc["C/O(L)"]),
     firstText(doc.Activity),
     firstText(doc.F, doc.Activity),
     from,
-    normalizePerDiemTime(stdl),
-    normalizePerDiemTime(stdz),
+    stdl,
+    stdz,
     to,
     endTimeWithOvernightOffset(stdl, stal),
-    normalizePerDiemTime(staz),
+    staz,
     firstText(doc.BLH),
     firstText(doc.Crew),
   ];
@@ -349,7 +371,7 @@ async function storedPerDiemRowsForMonth(db, ownerKey, target) {
 
 function tableCell(value, width) {
   const text = cleanText(value, 80);
-  return text.length >= width ? text.slice(0, width - 1) : text.padEnd(width, " ");
+  return text.length > width ? text.slice(0, width - 1) : text.padEnd(width, " ");
 }
 
 function reportTable(rows) {
