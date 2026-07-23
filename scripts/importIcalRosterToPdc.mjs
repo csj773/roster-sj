@@ -134,6 +134,26 @@ function parseIcsDate(value) {
   };
 }
 
+function minutesFromColonTime(value) {
+  const match = cleanText(value, 20).match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function timeWithDateOffset(start, end) {
+  if (!end.time) return "";
+  const startMinutes = minutesFromColonTime(start.time);
+  const endMinutes = minutesFromColonTime(end.time);
+  const dayOffset = start.date && end.date
+    ? Math.round((Date.parse(end.date.replace(/\./g, "-")) - Date.parse(start.date.replace(/\./g, "-"))) / 86400000)
+    : 0;
+  if (dayOffset > 0) return `${end.time}+${dayOffset}`;
+  if (dayOffset < 0) return `${end.time}${dayOffset}`;
+  return startMinutes !== null && endMinutes !== null && endMinutes <= startMinutes
+    ? `${end.time}+1`
+    : end.time;
+}
+
 function firstRoute(text) {
   const normalized = cleanText(text, 1000).toUpperCase();
   const match = normalized.match(/\b([A-Z]{3})\s*(?:-|–|—|→|>|TO)\s*([A-Z]{3})\b/);
@@ -176,6 +196,7 @@ function icsEventToPdcDoc(event, owner) {
   const location = cleanText(event.LOCATION?.value || "", 200);
   const start = parseIcsDate(event.DTSTART?.value || "");
   const end = parseIcsDate(event.DTEND?.value || "");
+  const endTime = timeWithDateOffset(start, end);
   const route = firstRoute(`${summary}\n${description}\n${location}`);
   const activity = activityFromIcs(summary, description);
   if (!start.date || !activity) return null;
@@ -194,9 +215,9 @@ function icsEventToPdcDoc(event, owner) {
     From: route.from,
     To: route.to,
     STDL: start.time,
-    STAL: end.time,
+    STAL: endTime,
     STDZ: "",
-    STAZ: "",
+    STAZ: endTime,
     CIL: "",
     COL: "",
     DC: "",
