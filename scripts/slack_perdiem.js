@@ -332,7 +332,7 @@ export async function generateSlackPerDiemList(rosterJsonPath) {
     let roDate = null;
 
     if (to === "ICN" && from !== "ICN") {
-      roDate = parseHHMMOffset(staz || stdz, dateFormatted);
+      roDate = parseHHMMOffset(stdz || staz, dateFormatted);
       const previousOutbound = findPreviousOutboundArrival(i, from, roDate);
       if (previousOutbound) riDate = previousOutbound.date;
     } else if (from === "ICN") {

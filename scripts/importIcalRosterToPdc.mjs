@@ -325,6 +325,8 @@ function icsEventToPdcDoc(event, owner) {
     source: SLACK_ICAL_SOURCE,
     sourceUidHash: hashText(uid),
     sourceSummary: summary,
+    sourceDescription: description,
+    sourceLocation: location,
     importedAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };

@@ -154,6 +154,103 @@ function dateSortKey(value) {
   return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
 }
 
+function parseTimeMs(date, time) {
+  const normalizedDate = dateSortKey(date);
+  const dateMatch = normalizedDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const timeMatch = normalizePerDiemTime(time).match(/^(\d{2})(\d{2})([+-]\d+)?$/);
+  if (!dateMatch || !timeMatch) return null;
+  const dayOffset = timeMatch[3] ? Number(timeMatch[3]) : 0;
+  return Date.UTC(
+    Number(dateMatch[1]),
+    Number(dateMatch[2]) - 1,
+    Number(dateMatch[3]) + dayOffset,
+    Number(timeMatch[1]),
+    Number(timeMatch[2])
+  );
+}
+
+function addTimeOffset(time, offsetDays) {
+  const normalized = normalizePerDiemTime(time);
+  if (!normalized || /[+-]\d+$/.test(normalized) || !offsetDays) return normalized;
+  return `${normalized}${offsetDays > 0 ? "+" : ""}${offsetDays}`;
+}
+
+function daysBetweenDates(left, right) {
+  const leftMs = dateUtcMs(left);
+  const rightMs = dateUtcMs(right);
+  if (leftMs === null || rightMs === null) return Number.POSITIVE_INFINITY;
+  return Math.abs(leftMs - rightMs) / 86400000;
+}
+
+function canonicalizeDuplicateFlightRows(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = [row[4], row[6], row[9]].join("|");
+    const list = groups.get(key) || [];
+    list.push(row);
+    groups.set(key, list);
+  }
+
+  const canonicalRows = [];
+  for (const list of groups.values()) {
+    const sorted = [...list].sort((a, b) => {
+      const aDate = dateSortKey(a[0]);
+      const bDate = dateSortKey(b[0]);
+      if (aDate !== bDate) return aDate.localeCompare(bDate);
+      return normalizePerDiemTime(a[8]).localeCompare(normalizePerDiemTime(b[8]));
+    });
+
+    let cluster = [];
+    const flushCluster = () => {
+      if (!cluster.length) return;
+      canonicalRows.push(chooseCanonicalFlightRow(cluster));
+      cluster = [];
+    };
+
+    for (const row of sorted) {
+      if (cluster.length && daysBetweenDates(cluster[cluster.length - 1][0], row[0]) > 1) {
+        flushCluster();
+      }
+      cluster.push(row);
+    }
+    flushCluster();
+  }
+
+  return canonicalRows.sort((a, b) => {
+    const left = `${dateSortKey(a[0])}_${normalizePerDiemTime(a[8])}_${a[4]}_${a[6]}_${a[9]}`;
+    const right = `${dateSortKey(b[0])}_${normalizePerDiemTime(b[8])}_${b[4]}_${b[6]}_${b[9]}`;
+    return left.localeCompare(right);
+  });
+}
+
+function chooseCanonicalFlightRow(rows) {
+  if (rows.length === 1) return rows[0];
+  const from = cleanText(rows[0][6], 10).toUpperCase();
+  const to = cleanText(rows[0][9], 10).toUpperCase();
+
+  if (from === "ICN" && to !== "ICN") {
+    return [...rows].sort((a, b) =>
+      (parseTimeMs(a[0], a[11]) ?? Number.POSITIVE_INFINITY) -
+      (parseTimeMs(b[0], b[11]) ?? Number.POSITIVE_INFINITY)
+    )[0];
+  }
+
+  if (to === "ICN" && from !== "ICN") {
+    const displayDate = [...rows].map((row) => row[0]).sort((a, b) => dateSortKey(a).localeCompare(dateSortKey(b)))[0];
+    const selected = [...rows].sort((a, b) =>
+      (parseTimeMs(b[0], b[8]) ?? Number.NEGATIVE_INFINITY) -
+      (parseTimeMs(a[0], a[8]) ?? Number.NEGATIVE_INFINITY)
+    )[0];
+    const adjusted = [...selected];
+    const offset = Math.round(((dateUtcMs(selected[0]) ?? 0) - (dateUtcMs(displayDate) ?? 0)) / 86400000);
+    adjusted[0] = displayDate;
+    adjusted[8] = addTimeOffset(selected[8], offset);
+    return adjusted;
+  }
+
+  return rows[0];
+}
+
 function safeDocIdPart(value) {
   const text = String(value ?? "")
     .trim()
@@ -264,7 +361,7 @@ async function pdcRosterJsonPath(db, ownerUid) {
     })
     .map(pdcRosterRow);
 
-  const values = [ROSTER_HEADERS, ...withReturnDepartureOffsets(dedupeRosterRows(rows))];
+  const values = [ROSTER_HEADERS, ...withReturnDepartureOffsets(canonicalizeDuplicateFlightRows(dedupeRosterRows(rows)))];
   const filePath = path.join(os.tmpdir(), `pdc-roster-${ownerUid.replace(/[^A-Za-z0-9_-]/g, "_")}.json`);
   fs.writeFileSync(filePath, JSON.stringify({ values }, null, 2), "utf-8");
   return { filePath, pdcUserName, rowCount: values.length - 1 };

@@ -990,6 +990,8 @@ function icsEventToRosterDoc(event, owner) {
     source: SLACK_ICAL_SOURCE,
     sourceUidHash: hashText(uid),
     sourceSummary: summary,
+    sourceDescription: description,
+    sourceLocation: location,
     importedAt: nowTimestamp(),
     updatedAt: nowTimestamp(),
   };
