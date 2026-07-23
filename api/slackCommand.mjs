@@ -152,7 +152,7 @@ function inviteUrl(code) {
   return `${appBaseUrl()}${path}?invite=${encodeURIComponent(code)}`;
 }
 
-function mailtoInviteUrl({ inviteUrl: url, ownerName = "", recipientEmail = "" }) {
+function mailInviteUrl({ inviteUrl: url, ownerName = "", recipientEmail = "" }) {
   const owner = cleanText(ownerName || "Roster Share", 120);
   const subject = "Roster Share 참여 링크";
   const body = [
@@ -166,7 +166,8 @@ function mailtoInviteUrl({ inviteUrl: url, ownerName = "", recipientEmail = "" }
     body,
   });
   const recipient = cleanText(recipientEmail, 240);
-  return `mailto:${encodeURIComponent(recipient)}?${params.toString()}`;
+  if (recipient) params.set("to", recipient);
+  return `${appBaseUrl()}/api/mailInvite?${params.toString()}`;
 }
 
 function inviteShareText(url) {
@@ -615,7 +616,7 @@ async function handleRosterShare(command) {
     note: `Created from Slack ${command.teamDomain || command.teamId} #${command.channelName || command.channelId}`,
   });
   const shareText = inviteShareText(invite.inviteUrl);
-  const mailUrl = mailtoInviteUrl({
+  const mailUrl = mailInviteUrl({
     inviteUrl: invite.inviteUrl,
     ownerName: invite.owner.displayName || invite.owner.email || command.userName,
     recipientEmail,
