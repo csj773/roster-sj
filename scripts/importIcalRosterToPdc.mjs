@@ -46,10 +46,6 @@ function ownerPdcDocId(ownerUid) {
   return cleanText(ownerUid, 500).replace(/\//g, "_") || "unknown_owner";
 }
 
-function pdcMonthKey(docData) {
-  return `${cleanText(docData.Year, 10)}_${cleanText(docData.Month, 10)}`;
-}
-
 function pdcEventDocId(docData) {
   return hashText([
     docData.owner,
@@ -120,20 +116,14 @@ function dedupeImportDocs(docs) {
   return groups.map((items) => items.reduce(preferredDuplicateDoc, null));
 }
 
-async function deleteExistingImportMonthDocs(db, docs) {
+async function deleteExistingOwnerPdcDocs(db, docs) {
   const owner = cleanText(docs[0]?.owner, 500);
   if (!owner) return 0;
-
-  const monthKeys = new Set(docs.map(pdcMonthKey).filter((key) => !key.includes("__")));
-  const shouldDelete = (data) =>
-    data?.source === SLACK_ICAL_SOURCE &&
-    data?.owner === owner &&
-    monthKeys.has(pdcMonthKey(data));
 
   const refs = new Map();
   const flatSnapshot = await db.collection(PDC_COLLECTION).where("owner", "==", owner).get();
   for (const doc of flatSnapshot.docs) {
-    if (shouldDelete(doc.data())) refs.set(doc.ref.path, doc.ref);
+    refs.set(doc.ref.path, doc.ref);
   }
 
   const eventsSnapshot = await db
@@ -142,7 +132,7 @@ async function deleteExistingImportMonthDocs(db, docs) {
     .collection("events")
     .get();
   for (const doc of eventsSnapshot.docs) {
-    if (shouldDelete(doc.data())) refs.set(doc.ref.path, doc.ref);
+    refs.set(doc.ref.path, doc.ref);
   }
 
   for (const ref of refs.values()) {
@@ -408,7 +398,7 @@ async function fetchIcsCalendar(calendarUrl) {
 
 async function uploadPdcDocs(db, docs) {
   const uniqueDocs = dedupeImportDocs(docs);
-  let deleted = await deleteExistingImportMonthDocs(db, uniqueDocs);
+  let deleted = await deleteExistingOwnerPdcDocs(db, uniqueDocs);
   let imported = 0;
 
   for (const docData of uniqueDocs) {
@@ -456,7 +446,7 @@ async function main() {
   if (!docs.length) throw new Error("iCal calendar was fetched, but no roster events were found");
 
   const result = await uploadPdcDocs(db, docs);
-  console.log(`Saved ${result.imported} event(s) to ${PDC_COLLECTION}; removed ${result.deleted} old event(s); skipped ${result.skippedDuplicates} duplicate event(s).`);
+  console.log(`Rewrote ${PDC_COLLECTION} for this owner; saved ${result.imported} event(s); removed ${result.deleted} previous owner event(s); skipped ${result.skippedDuplicates} duplicate event(s).`);
 }
 
 main().catch((error) => {

@@ -694,10 +694,6 @@ function ownerPdcDocId(ownerUid) {
   return cleanText(ownerUid, 500).replace(/\//g, "_") || "unknown_owner";
 }
 
-function pdcMonthKey(docData) {
-  return `${cleanText(docData.Year, 10)}_${cleanText(docData.Month, 10)}`;
-}
-
 function pdcEventDocId(docData) {
   return hashText([
     docData.owner,
@@ -773,20 +769,14 @@ function dedupeImportedRosterDocs(docs) {
   return groups.map((items) => items.reduce(preferredRosterDoc, null));
 }
 
-async function deleteExistingImportMonthDocs(docs) {
+async function deleteExistingOwnerPdcDocs(docs) {
   const owner = cleanText(docs[0]?.owner, 500);
   if (!owner) return 0;
-
-  const monthKeys = new Set(docs.map(pdcMonthKey).filter((key) => !key.includes("__")));
-  const shouldDelete = (data) =>
-    data?.source === SLACK_ICAL_SOURCE &&
-    data?.owner === owner &&
-    monthKeys.has(pdcMonthKey(data));
 
   const refs = new Map();
   const flatSnapshot = await db().collection(PDC_COLLECTION).where("owner", "==", owner).get();
   for (const doc of flatSnapshot.docs) {
-    if (shouldDelete(doc.data())) refs.set(doc.ref.path, doc.ref);
+    refs.set(doc.ref.path, doc.ref);
   }
 
   const eventsSnapshot = await db()
@@ -795,7 +785,7 @@ async function deleteExistingImportMonthDocs(docs) {
     .collection("events")
     .get();
   for (const doc of eventsSnapshot.docs) {
-    if (shouldDelete(doc.data())) refs.set(doc.ref.path, doc.ref);
+    refs.set(doc.ref.path, doc.ref);
   }
 
   for (const ref of refs.values()) {
@@ -1078,7 +1068,7 @@ async function fetchIcsCalendar(calendarUrl) {
 
 async function uploadImportedRosterToPdc(docs) {
   const uniqueDocs = dedupeImportedRosterDocs(docs);
-  let deleted = await deleteExistingImportMonthDocs(uniqueDocs);
+  let deleted = await deleteExistingOwnerPdcDocs(uniqueDocs);
   let imported = 0;
 
   for (const docData of uniqueDocs) {
@@ -1471,7 +1461,7 @@ async function handleRosterImport(command) {
   const result = await uploadImportedRosterToPdc(docs);
   return {
     response_type: "ephemeral",
-    text: `Roster iCal import complete. Saved ${result.imported} event(s) to pdc, removed ${result.deleted} old event(s), skipped ${result.skippedDuplicates} duplicate event(s).`,
+    text: `Roster iCal import complete. Rewrote pdc for this owner: saved ${result.imported} event(s), removed ${result.deleted} previous owner event(s), skipped ${result.skippedDuplicates} duplicate event(s).`,
   };
 }
 
