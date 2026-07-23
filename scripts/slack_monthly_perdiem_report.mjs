@@ -409,6 +409,10 @@ function formatKstTimestamp(date = new Date()) {
   }).format(date).replace(",", "");
 }
 
+function shortCommitSha() {
+  return cleanText(process.env.GITHUB_SHA || "", 40).slice(0, 7) || "local";
+}
+
 async function postSlack(text) {
   const responseUrl = optionalEnv("SLACK_RESPONSE_URL");
   if (!responseUrl) {
@@ -474,7 +478,7 @@ async function main() {
     `${reportName}: ${formatKoreanMonth(target)} Prediem=${totalPerdiem.toFixed(2)}/Transport fee=${totalTransportFee.toFixed(0)}`,
     "",
     `created at: ${formatKstTimestamp()} KST`,
-    `source: Firestore ${PDC_COLLECTION} -> ${PERDIEM_COLLECTION}/${ownerKey}/items, pdc_user_name=${pdcUserName || "blank"}, roster rows=${rowCount}, stored=${storedRows}, Month=${monthName}, Year=${target.year}`,
+    `source: Firestore ${PDC_COLLECTION} -> ${PERDIEM_COLLECTION}/${ownerKey}/items, pdc_user_name=${pdcUserName || "blank"}, roster rows=${rowCount}, stored=${storedRows}, Month=${monthName}, Year=${target.year}, commit=${shortCommitSha()}`,
   ].join("\n");
 
   await postSlack(text);
