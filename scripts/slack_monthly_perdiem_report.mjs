@@ -73,6 +73,35 @@ function firstText(...values) {
   return "";
 }
 
+function normalizePerDiemTime(value) {
+  const text = cleanText(value, 40);
+  if (!text) return "";
+  const match = text.match(/^(\d{1,2})(?::?(\d{2}))?([+-]\d+)?$/);
+  if (!match) return text;
+  const hour = match[1].padStart(2, "0");
+  const minute = (match[2] || "00").padStart(2, "0");
+  return `${hour}${minute}${match[3] || ""}`;
+}
+
+function compareHHMM(left, right) {
+  const leftMatch = normalizePerDiemTime(left).match(/^(\d{2})(\d{2})/);
+  const rightMatch = normalizePerDiemTime(right).match(/^(\d{2})(\d{2})/);
+  if (!leftMatch || !rightMatch) return null;
+  return (Number(leftMatch[1]) * 60 + Number(leftMatch[2])) -
+    (Number(rightMatch[1]) * 60 + Number(rightMatch[2]));
+}
+
+function arrivalTimeWithOffset({ from, to, departure, arrival }) {
+  const normalizedArrival = normalizePerDiemTime(arrival);
+  if (!normalizedArrival || /[+-]\d+$/.test(normalizedArrival)) return normalizedArrival;
+  const normalizedDeparture = normalizePerDiemTime(departure);
+  const comparison = compareHHMM(normalizedArrival, normalizedDeparture);
+  if (from && to && from !== to && comparison !== null && comparison <= 0) {
+    return `${normalizedArrival}+1`;
+  }
+  return normalizedArrival;
+}
+
 function cleanText(value, maxLength = 200) {
   return String(value ?? "").trim().slice(0, maxLength);
 }
@@ -112,6 +141,12 @@ function targetMonthYear() {
 }
 
 function pdcRosterRow(doc) {
+  const from = firstText(doc.From);
+  const to = firstText(doc.To, doc.Destination);
+  const stdl = firstText(doc.STDL, doc["STD(L)"]);
+  const stal = firstText(doc.STAL, doc["STA(L)"]);
+  const stdz = firstText(doc.STDZ, doc["STD(Z)"], stdl);
+  const staz = firstText(doc.STAZ, doc["STA(Z)"], stal);
   return [
     firstText(doc.DateRaw, doc.Date),
     firstText(doc.DC, doc["D/C"]),
@@ -119,12 +154,12 @@ function pdcRosterRow(doc) {
     firstText(doc.COL, doc["C/O(L)"]),
     firstText(doc.Activity),
     firstText(doc.F, doc.Activity),
-    firstText(doc.From),
-    firstText(doc.STDL, doc["STD(L)"]),
-    firstText(doc.STDZ, doc["STD(Z)"]),
-    firstText(doc.To, doc.Destination),
-    firstText(doc.STAL, doc["STA(L)"]),
-    firstText(doc.STAZ, doc["STA(Z)"]),
+    from,
+    normalizePerDiemTime(stdl),
+    normalizePerDiemTime(stdz),
+    to,
+    normalizePerDiemTime(stal),
+    arrivalTimeWithOffset({ from, to, departure: stdl, arrival: staz }),
     firstText(doc.BLH),
     firstText(doc.Crew),
   ];
