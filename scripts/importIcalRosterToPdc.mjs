@@ -30,6 +30,14 @@ function cleanText(value, maxLength = 200) {
   return String(value || "").trim().slice(0, maxLength);
 }
 
+function displayNameForEmail(email) {
+  const normalizedEmail = cleanText(email, 240).toLowerCase();
+  const displayNames = {
+    "cutecsj773@gmail.com": "최상준",
+  };
+  return displayNames[normalizedEmail] || "";
+}
+
 function hashText(value) {
   return crypto.createHash("sha256").update(String(value || "")).digest("hex");
 }
@@ -186,6 +194,7 @@ function icsEventToPdcDoc(event, owner) {
     Year: year,
     Month: monthName(month),
     pdc_user_name: owner.displayName || "",
+    display_name: owner.displayName || "",
     email: owner.email || "",
     source: SLACK_ICAL_SOURCE,
     sourceUidHash: hashText(uid),
@@ -247,9 +256,9 @@ async function main() {
 
   const owner = {
     uid: requiredEnv("FIREBASE_UID"),
-    displayName: optionalEnv("PDC_USER_NAME") || optionalEnv("USER_NAME"),
     email: optionalEnv("USER_ID") || optionalEnv("USER_EMAIL"),
   };
+  owner.displayName = optionalEnv("PDC_USER_NAME") || optionalEnv("USER_NAME") || displayNameForEmail(owner.email);
 
   admin.initializeApp({
     credential: admin.credential.cert(parseJsonEnv("FIREBASE_SERVICE_ACCOUNT")),

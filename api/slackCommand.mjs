@@ -178,6 +178,14 @@ function guestInviteUid(inviteCodeValue) {
   return `guest_${cleanText(inviteCodeValue, 80)}`.replace(/[^A-Za-z0-9_-]/g, "_");
 }
 
+function displayNameForEmail(email) {
+  const normalizedEmail = cleanText(email, 240).toLowerCase();
+  const displayNames = {
+    "cutecsj773@gmail.com": "최상준",
+  };
+  return displayNames[normalizedEmail] || "";
+}
+
 async function acceptedInviteForEmail(email) {
   const normalizedEmail = cleanText(email, 240).toLowerCase();
   if (!normalizedEmail) return null;
@@ -206,13 +214,14 @@ async function resolveImportOwnerForEmail(command, email) {
   const firebaseUid = cleanText(invite?.acceptedByUid || "", 160) || (
     invite ? guestInviteUid(invite.code) : guestEmailUid(normalizedEmail)
   );
-  const displayName = normalizedEmail || command.userName || "Roster Share guest";
+  const displayName = displayNameForEmail(normalizedEmail) || normalizedEmail || command.userName || "Roster Share guest";
   const linkId = slackLinkId(command.teamId, command.userId);
 
   await db().collection("users").doc(firebaseUid).set({
     uid: firebaseUid,
     email: normalizedEmail,
     display_name: displayName,
+    displayName,
     provider: "slack_guest_import",
     providers: ["slack_guest_import"],
     updated_time: nowTimestamp(),
@@ -657,6 +666,7 @@ function icsEventToRosterDoc(event, owner) {
     Year: year,
     Month: monthName(month),
     pdc_user_name: owner.displayName || "",
+    display_name: owner.displayName || "",
     email: owner.email || "",
     source: SLACK_ICAL_SOURCE,
     sourceUidHash: hashText(uid),
