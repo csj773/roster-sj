@@ -1292,7 +1292,7 @@ async function myRosterItemsFor(uid, { station, startDate, days }) {
         .filter((item) => !station || item.from === station || item.to === station);
     })
   );
-  return dedupeRosterItems(nested.flat()).sort((a, b) => {
+  return dedupeRosterItems(nested.flat(), { ignoreTimes: true }).sort((a, b) => {
     const left = `${dateSortKey(a.date)}_${a.stdl}_${a.activity}_${a.from}_${a.to}`;
     const right = `${dateSortKey(b.date)}_${b.stdl}_${b.activity}_${b.from}_${b.to}`;
     return left.localeCompare(right);
