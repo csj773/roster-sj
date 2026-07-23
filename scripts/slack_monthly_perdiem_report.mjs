@@ -2,7 +2,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import admin from "firebase-admin";
-import { generatePerDiemList } from "../perdiem.js";
+import { generateSlackPerDiemList } from "./slack_perdiem.js";
 
 const PDC_COLLECTION = "pdc";
 const PERDIEM_COLLECTION = "Perdiem";
@@ -366,7 +366,7 @@ async function main() {
 
   const db = admin.firestore();
   const { filePath, rowCount } = await pdcRosterJsonPath(db, ownerUid);
-  const calculatedRows = await generatePerDiemList(filePath, ownerUid);
+  const calculatedRows = await generateSlackPerDiemList(filePath);
   const storedRows = await storePersonalPerDiemRows(db, calculatedRows, ownerUid, displayName);
   const rows = await storedPerDiemRowsForMonth(db, ownerUid, target);
 

@@ -310,7 +310,7 @@ That workflow reads only the linked Slack user's Firestore `pdc` roster rows,
 calculates PerDiem from those roster rows, stores the calculated rows under
 `Perdiem/{ownerUid}/items`, and posts a table from the saved monthly data back
 to Slack through the command `response_url`; the existing monthly email
-workflow remains unchanged.
+workflow and `perdiem.js` remain unchanged.
 
 Required Vercel environment variable:
 

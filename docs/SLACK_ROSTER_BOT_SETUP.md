@@ -144,7 +144,8 @@ The `/perdiem-report` command queues the separate
 `monthly-perdiem-slack-report.yml` workflow, builds the report from the user's
 Firestore `pdc` roster rows, stores calculated rows under
 `Perdiem/{ownerUid}/items`, then posts the saved monthly result back to Slack
-instead of sending email.
+instead of sending email. Slack uses the separate `scripts/slack_perdiem.js`
+calculator so the existing `perdiem.js` behavior remains unchanged.
 
 ## Firestore Collections
 
