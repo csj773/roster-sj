@@ -6,7 +6,7 @@ import {
   publicUser,
   requireFirebaseUser,
   setCors,
-} from "./_shareUtils.mjs";
+} from "./_lib/shareUtils.mjs";
 
 const SHARE_COLLECTION = "roster_shares";
 const ROSTER_COLLECTION = "roster";

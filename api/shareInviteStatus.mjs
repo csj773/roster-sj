@@ -4,7 +4,7 @@ import {
   json,
   requireFirebaseUser,
   setCors,
-} from "./_shareUtils.mjs";
+} from "./_lib/shareUtils.mjs";
 
 const INVITE_COLLECTION = "roster_share_invites";
 

@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { createFirebaseTokenFromKakaoAccessToken } from "./_kakaoFirebase.mjs";
+import { createFirebaseTokenFromKakaoAccessToken } from "./_lib/kakaoFirebase.mjs";
 
 function base64url(input) {
   return Buffer.from(input)

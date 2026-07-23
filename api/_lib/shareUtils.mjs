@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import admin from "firebase-admin";
-import { initializeFirebaseAdmin } from "./_kakaoFirebase.mjs";
+import { initializeFirebaseAdmin } from "./kakaoFirebase.mjs";
 
 export function json(res, status, body) {
   res.statusCode = status;

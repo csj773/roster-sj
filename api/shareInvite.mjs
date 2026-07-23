@@ -9,8 +9,8 @@ import {
   readJsonBody,
   requireFirebaseUser,
   setCors,
-} from "./_shareUtils.mjs";
-import { sendRosterShareInviteEmail } from "./_email.mjs";
+} from "./_lib/shareUtils.mjs";
+import { sendRosterShareInviteEmail } from "./_lib/email.mjs";
 
 const INVITE_COLLECTION = "roster_share_invites";
 

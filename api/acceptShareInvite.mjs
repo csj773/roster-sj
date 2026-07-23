@@ -10,7 +10,7 @@ import {
   requireFirebaseUser,
   setCors,
   shareId,
-} from "./_shareUtils.mjs";
+} from "./_lib/shareUtils.mjs";
 
 const INVITE_COLLECTION = "roster_share_invites";
 const SHARE_COLLECTION = "roster_shares";

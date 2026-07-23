@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { createFirebaseTokenFromKakaoAccessToken } from "./_kakaoFirebase.mjs";
+import { createFirebaseTokenFromKakaoAccessToken } from "./_lib/kakaoFirebase.mjs";
 
 function json(res, status, body) {
   res.statusCode = status;
