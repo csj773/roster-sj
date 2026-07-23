@@ -267,7 +267,7 @@ export async function generateSlackPerDiemList(rosterJsonPath) {
     let roDate = null;
 
     if (to === "ICN" && from !== "ICN") {
-      roDate = parseHHMMOffset(stdz, dateFormatted);
+      roDate = parseHHMMOffset(staz || stdz, dateFormatted);
       if (i > 0) {
         const previousRow = flightRows[i - 1];
         riDate = parseHHMMOffset(previousRow[11], resolvedDateForRow(previousRow));

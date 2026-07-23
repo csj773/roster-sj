@@ -95,6 +95,13 @@ function compareHHMM(left, right) {
     (Number(rightMatch[1]) * 60 + Number(rightMatch[2]));
 }
 
+function endTimeWithOvernightOffset(startTime, endTime) {
+  const end = normalizePerDiemTime(endTime);
+  if (!end || /[+-]\d+$/.test(end)) return end;
+  const comparison = compareHHMM(end, startTime);
+  return comparison !== null && comparison <= 0 ? `${end}+1` : end;
+}
+
 function sameRosterDate(left, right) {
   return dateSortKey(left) === dateSortKey(right);
 }
@@ -163,7 +170,7 @@ function pdcRosterRow(doc) {
   const stdl = firstText(doc.STDL, doc["STD(L)"]);
   const stal = firstText(doc.STAL, doc["STA(L)"]);
   const stdz = firstText(doc.STDZ, doc["STD(Z)"], stdl);
-  const staz = firstText(doc.STAZ, doc["STA(Z)"], stal);
+  const staz = firstText(doc.STAZ, doc["STA(Z)"], endTimeWithOvernightOffset(stdz, stal));
   return [
     firstText(doc.DateRaw, doc.Date),
     firstText(doc.DC, doc["D/C"]),
@@ -175,7 +182,7 @@ function pdcRosterRow(doc) {
     normalizePerDiemTime(stdl),
     normalizePerDiemTime(stdz),
     to,
-    normalizePerDiemTime(stal),
+    endTimeWithOvernightOffset(stdl, stal),
     normalizePerDiemTime(staz),
     firstText(doc.BLH),
     firstText(doc.Crew),
