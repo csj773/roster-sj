@@ -205,15 +205,24 @@ function resolveRosterDateSequence(rows, dateIndex) {
 const auth = new google.auth.GoogleAuth({ credentials: creds, scopes:["https://www.googleapis.com/auth/calendar"] });
 const calendar = google.calendar({ version:"v3", auth });
 
+function eventStartDate(ev) {
+  return ev.start?.dateTime ? new Date(ev.start.dateTime).toISOString().slice(0,10) : ev.start?.date;
+}
+
 // ------------------- 기존 gcal.js 이벤트 삭제 -------------------
-async function deleteExistingGcalEvents(){
+async function deleteExistingGcalEvents(targetDates){
   console.log("🗑 기존 gcal.js 이벤트 삭제 시작...");
+  if(targetDates?.size) {
+    console.log(`🗓 삭제 대상 날짜 ${targetDates.size}개로 제한`);
+  }
   let pageToken;
   do {
     const res = await calendar.events.list({ calendarId: CALENDAR_ID, singleEvents:true, orderBy:"startTime", pageToken });
     const events = res.data.items || [];
     for(const ev of events){
       if((ev.description||"").includes("CREATED_BY_GCALJS")){
+        const startDate = eventStartDate(ev);
+        if(targetDates?.size && !targetDates.has(startDate)) continue;
         try{ await calendar.events.delete({calendarId:CALENDAR_ID,eventId:ev.id}); console.log(`🗑 삭제: ${ev.summary}`); }
         catch(e){ if(e.code!==410) console.error("❌ 삭제 실패:",e.message); }
       }
@@ -253,7 +262,7 @@ async function removeDuplicates() {
   const seen = new Map();
   for(const ev of allEvents){
     if(!(ev.description||"").includes("CREATED_BY_GCALJS")) continue;
-    const startDate = ev.start?.dateTime ? new Date(ev.start.dateTime).toISOString().slice(0,10) : ev.start?.date;
+    const startDate = eventStartDate(ev);
     const [from,to] = ev.location?.split(" → ") || ["",""];
     const key = `${startDate}|${ev.summary}|${from}|${to}`;
     if(seen.has(key)){
@@ -267,7 +276,6 @@ async function removeDuplicates() {
 // ------------------- Main -------------------
 (async()=>{
   console.log("🚀 Google Calendar 업로드 시작 (DST 자동적용 버전 10.18)");
-  await deleteExistingGcalEvents();
 
   const rosterPath = path.join(process.cwd(),"public","roster.json");
   if(!fs.existsSync(rosterPath)){ console.error("❌ roster.json 없음"); process.exit(1); }
@@ -279,6 +287,15 @@ async function removeDuplicates() {
   const idx = {};
   headers.forEach((h,i)=>idx[h]=i);
   const resolvedDates = resolveRosterDateSequence(values.slice(1), idx["Date"]);
+  const targetDates = new Set();
+  for(let r=1;r<values.length;r++){
+    const row = values[r];
+    const activity = row[idx["Activity"]];
+    if(!activity||!activity.trim()) continue;
+    const convDate = resolvedDates.get(row) || convertDate(row[idx["Date"]]);
+    if(convDate) targetDates.add(convDate);
+  }
+  await deleteExistingGcalEvents(targetDates);
 
   for(let r=1;r<values.length;r++){
     const row = values[r];
