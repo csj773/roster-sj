@@ -10,6 +10,7 @@ import {
   requireFirebaseUser,
   setCors,
 } from "./_shareUtils.mjs";
+import { sendRosterShareInviteEmail } from "./_email.mjs";
 
 const INVITE_COLLECTION = "roster_share_invites";
 
@@ -53,6 +54,9 @@ export default async function handler(req, res) {
     );
     const code = inviteCode();
     const owner = await publicUser(user.uid);
+    const url = inviteUrl(req, code);
+    const createdAt = nowTimestamp();
+    const initialEmailStatus = recipientEmail ? "pending" : "not_required";
 
     await db().collection(INVITE_COLLECTION).doc(code).set({
       code,
@@ -67,23 +71,58 @@ export default async function handler(req, res) {
       confirmationRequired,
       confirmationStatus: confirmationRequired ? "pending" : "not_required",
       confirmed: false,
+      emailProvider: recipientEmail ? "resend" : "",
+      emailStatus: initialEmailStatus,
+      emailSent: false,
       maxUses: 1,
       useCount: 0,
-      createdAt: nowTimestamp(),
-      updatedAt: nowTimestamp(),
+      createdAt,
+      updatedAt: createdAt,
       expiresAt: admin.firestore.Timestamp.fromDate(
         new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000)
       ),
     });
 
+    let emailResult = { sent: false, status: initialEmailStatus };
+    if (recipientEmail) {
+      emailResult = await sendRosterShareInviteEmail({
+        to: recipientEmail,
+        ownerName: owner.displayName || user.name || owner.email || user.email || "Roster Share",
+        inviteUrl: url,
+        scope,
+        expiresInDays,
+        confirmationRequired,
+      });
+
+      const emailUpdate = {
+        emailStatus: emailResult.status,
+        emailSent: emailResult.sent === true,
+        emailProvider: "resend",
+        updatedAt: nowTimestamp(),
+      };
+      if (emailResult.sent) {
+        emailUpdate.emailSentAt = nowTimestamp();
+        emailUpdate.resendEmailId = emailResult.id || "";
+      }
+      if (emailResult.error) {
+        emailUpdate.emailError = emailResult.error;
+      }
+
+      await db().collection(INVITE_COLLECTION).doc(code).update(emailUpdate);
+    }
+
     json(res, 201, {
       ok: true,
       inviteCode: code,
-      inviteUrl: inviteUrl(req, code),
+      inviteUrl: url,
       scope,
       deliveryMethod,
       confirmationRequired,
       confirmationStatus: confirmationRequired ? "pending" : "not_required",
+      emailSent: emailResult.sent === true,
+      emailStatus: emailResult.status,
+      emailProvider: recipientEmail ? "resend" : "",
+      resendEmailId: emailResult.id || "",
       expiresInDays,
     });
   } catch (error) {

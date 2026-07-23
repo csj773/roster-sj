@@ -149,6 +149,22 @@ Response includes `inviteCode` and `inviteUrl`.
 When `recipientEmail` is provided, the invite records `deliveryMethod: "email"`
 and starts with `confirmationStatus: "pending"`.
 
+Invite email delivery uses Resend when these Vercel environment variables are
+configured:
+
+```text
+RESEND_API_KEY=<Resend API key>
+RESEND_FROM_EMAIL=Roster Share <verified-sender@example.com>
+RESEND_REPLY_TO=optional-reply-address@example.com
+```
+
+For a quick Resend test, `RESEND_FROM_EMAIL` can be omitted to use
+`Roster Share <onboarding@resend.dev>`, but production delivery should use a
+verified sender/domain. The create response includes `emailSent`,
+`emailStatus`, `emailProvider`, and `resendEmailId`. If Resend is not
+configured or delivery fails, the invite link is still created and the email
+status is saved on the invite document.
+
 ### Accept Share Invite
 
 ```text
@@ -178,7 +194,8 @@ Authorization: Bearer <Firebase ID token>
 
 Only the invite owner or the accepted user can read the status. The response
 includes `status`, `deliveryMethod`, `recipientEmail`, `confirmationRequired`,
-`confirmationStatus`, `confirmed`, `confirmedByUid`, and `confirmedAt`.
+`confirmationStatus`, `confirmed`, `confirmedByUid`, `confirmedAt`,
+`emailStatus`, `emailSent`, and `emailSentAt`.
 
 ### Read Shared Calendar and Layovers
 
