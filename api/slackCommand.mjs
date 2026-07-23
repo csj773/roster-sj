@@ -497,6 +497,21 @@ function hashText(value) {
   return crypto.createHash("sha256").update(String(value || "")).digest("hex");
 }
 
+function ownerPdcDocId(ownerUid) {
+  return cleanText(ownerUid, 500).replace(/\//g, "_") || "unknown_owner";
+}
+
+function pdcEventDocId(docData) {
+  return hashText([
+    docData.owner,
+    docData.Date,
+    docData.DC,
+    docData.Activity,
+    docData.From,
+    docData.To,
+  ].join("|"));
+}
+
 function parseSlackArgs(text) {
   return cleanText(text, 500).split(/\s+/).filter(Boolean);
 }
@@ -706,16 +721,25 @@ async function uploadImportedRosterToPdc(docs) {
       .where("To", "==", docData.To)
       .get();
 
-    if (!querySnapshot.empty) {
-      const batch = db().batch();
-      for (const duplicate of querySnapshot.docs) {
-        batch.delete(duplicate.ref);
-        deleted += 1;
-      }
-      await batch.commit();
+    const batch = db().batch();
+    for (const duplicate of querySnapshot.docs) {
+      batch.delete(duplicate.ref);
+      deleted += 1;
     }
 
-    await db().collection(PDC_COLLECTION).add(docData);
+    const ownerRef = db().collection(PDC_COLLECTION).doc(ownerPdcDocId(docData.owner));
+    const eventRef = ownerRef.collection("events").doc(pdcEventDocId(docData));
+    batch.set(ownerRef, {
+      owner: docData.owner,
+      uid: docData.uid,
+      display_name: docData.display_name || docData.pdc_user_name || "",
+      pdc_user_name: docData.pdc_user_name || "",
+      email: docData.email || "",
+      updatedAt: nowTimestamp(),
+    }, { merge: true });
+    batch.set(eventRef, docData, { merge: true });
+    batch.set(db().collection(PDC_COLLECTION).doc(), docData);
+    await batch.commit();
     imported += 1;
   }
 

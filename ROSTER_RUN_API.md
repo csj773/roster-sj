@@ -280,6 +280,10 @@ duplicate key as the existing roster upload logic:
 `source: slack_ical`. The original calendar URL is used only for that import
 request and is not stored in Firestore.
 
+For easier Firestore console management, each imported event is also mirrored
+under `pdc/{ownerUid}/events/{eventId}` while the existing flat `pdc` event
+documents remain available for current roster and layover queries.
+
 When an email is included in the import command, the Slack user is linked
 automatically to that email's accepted invite owner. If no accepted invite is
 found, the import uses a generated `guest_email_<email>` owner UID. This lets a
