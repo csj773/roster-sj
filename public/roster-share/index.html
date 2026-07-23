@@ -13,6 +13,7 @@
         --surface: #f6f8fa;
         --accent: #0f7b6c;
         --accent-strong: #095f53;
+        --secondary: #1f5f99;
         --warn: #995d13;
       }
 
@@ -95,6 +96,12 @@
         background: var(--accent-strong);
       }
 
+      a.secondary {
+        border-color: var(--secondary);
+        color: var(--secondary);
+        background: white;
+      }
+
       button {
         background: white;
         color: var(--accent);
@@ -117,7 +124,8 @@
       <p id="summary">초대 링크를 확인하고 있습니다.</p>
       <div class="code" id="inviteCode">invite loading...</div>
       <div class="actions">
-        <a class="primary" id="openApp" href="https://logbook-tljs60.flutterflow.app/auth3">앱에서 참여하기</a>
+        <a class="primary" id="openApp" href="https://logbook-tljs60.flutterflow.app/auth3">수락하기</a>
+        <a class="secondary" id="checkStatus" href="https://logbook-tljs60.flutterflow.app/auth3">수락 여부 확인</a>
         <button id="copyCode" type="button">초대 코드 복사</button>
         <button id="copyLink" type="button">링크 복사</button>
       </div>
@@ -127,17 +135,26 @@
     <script>
       const params = new URLSearchParams(window.location.search);
       const invite = params.get("invite") || "";
+      const mode = params.get("mode") || "";
       const summary = document.getElementById("summary");
       const inviteCode = document.getElementById("inviteCode");
       const openApp = document.getElementById("openApp");
+      const checkStatus = document.getElementById("checkStatus");
       const status = document.getElementById("status");
       const appUrl = new URL("https://logbook-tljs60.flutterflow.app/auth3");
+      const statusUrl = new URL("https://logbook-tljs60.flutterflow.app/auth3");
 
       if (invite) {
         appUrl.searchParams.set("invite", invite);
+        statusUrl.searchParams.set("invite", invite);
+        statusUrl.searchParams.set("mode", "shareInviteStatus");
         openApp.href = appUrl.toString();
+        checkStatus.href = statusUrl.toString();
         inviteCode.textContent = invite;
-        summary.textContent = "로그인 후 이 초대 코드로 roster 공유에 참여할 수 있습니다.";
+        summary.textContent =
+          mode === "status"
+            ? "로그인 후 이 초대의 수락 여부를 확인할 수 있습니다."
+            : "로그인 후 이 초대 코드로 roster 공유에 참여할 수 있습니다.";
       } else {
         inviteCode.textContent = "초대 코드가 없습니다.";
         inviteCode.classList.add("empty");

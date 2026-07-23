@@ -155,11 +155,17 @@ function inviteUrl(code) {
 function mailInviteUrl({ inviteUrl: url, ownerName = "", recipientEmail = "" }) {
   const owner = cleanText(ownerName || "Roster Share", 120);
   const subject = "Roster Share 참여 링크";
+  const statusUrl = `${url}${url.includes("?") ? "&" : "?"}mode=status`;
   const body = [
     `${owner} 님이 Roster Share에 초대했습니다.`,
     "",
-    "아래 링크를 열어서 roster share를 수락해 주세요.",
+    "[수락하기]",
     url,
+    "",
+    "[수락 여부 확인]",
+    statusUrl,
+    "",
+    "메일 앱에서는 보안상 버튼 대신 위 링크가 표시됩니다.",
   ].join("\n");
   const params = new URLSearchParams({
     subject,
@@ -171,10 +177,15 @@ function mailInviteUrl({ inviteUrl: url, ownerName = "", recipientEmail = "" }) 
 }
 
 function inviteShareText(url) {
+  const statusUrl = `${url}${url.includes("?") ? "&" : "?"}mode=status`;
   return [
     "Roster Share 참여 링크입니다.",
-    "아래 링크를 열어서 roster share를 수락해 주세요.",
+    "",
+    "[수락하기]",
     url,
+    "",
+    "[수락 여부 확인]",
+    statusUrl,
   ].join("\n");
 }
 
