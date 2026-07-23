@@ -242,13 +242,18 @@ function dedupeRosterRows(rows) {
 }
 
 async function pdcRosterJsonPath(db, ownerUid) {
-  const snapshot = await db.collection(PDC_COLLECTION).where("owner", "==", ownerUid).get();
+  const ownerRef = db.collection(PDC_COLLECTION).doc(safeDocIdPart(ownerUid));
+  const profile = await ownerRef.get().catch(() => null);
+  let snapshot = await ownerRef.collection("events").get();
+  if (snapshot.empty) {
+    snapshot = await db.collection(PDC_COLLECTION).where("owner", "==", ownerUid).get();
+  }
   const pdcDocs = snapshot.docs
     .map((doc) => doc.data())
     .filter((doc) => cleanText(doc.Activity, 80));
   const pdcUserName = pdcDocs
     .map((doc) => firstText(doc.pdc_user_name, doc.display_name, doc.ownerDisplayName, doc.userName))
-    .find(Boolean) || "";
+    .find(Boolean) || firstText(profile?.data()?.pdc_user_name, profile?.data()?.display_name);
 
   const rows = pdcDocs
     .filter((doc) => firstText(doc.From) && firstText(doc.To, doc.Destination))

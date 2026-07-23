@@ -694,6 +694,10 @@ function ownerPdcDocId(ownerUid) {
   return cleanText(ownerUid, 500).replace(/\//g, "_") || "unknown_owner";
 }
 
+function pdcMonthKey(docData) {
+  return `${cleanText(docData.Year, 10)}_${cleanText(docData.Month, 10)}`;
+}
+
 function pdcEventDocId(docData) {
   return hashText([
     docData.owner,
@@ -703,6 +707,37 @@ function pdcEventDocId(docData) {
     docData.From,
     docData.To,
   ].join("|"));
+}
+
+async function deleteExistingImportMonthDocs(docs) {
+  const owner = cleanText(docs[0]?.owner, 500);
+  if (!owner) return 0;
+
+  const monthKeys = new Set(docs.map(pdcMonthKey).filter((key) => !key.includes("__")));
+  const shouldDelete = (data) =>
+    data?.source === SLACK_ICAL_SOURCE &&
+    data?.owner === owner &&
+    monthKeys.has(pdcMonthKey(data));
+
+  const refs = new Map();
+  const flatSnapshot = await db().collection(PDC_COLLECTION).where("owner", "==", owner).get();
+  for (const doc of flatSnapshot.docs) {
+    if (shouldDelete(doc.data())) refs.set(doc.ref.path, doc.ref);
+  }
+
+  const eventsSnapshot = await db()
+    .collection(PDC_COLLECTION)
+    .doc(ownerPdcDocId(owner))
+    .collection("events")
+    .get();
+  for (const doc of eventsSnapshot.docs) {
+    if (shouldDelete(doc.data())) refs.set(doc.ref.path, doc.ref);
+  }
+
+  for (const ref of refs.values()) {
+    await ref.delete();
+  }
+  return refs.size;
 }
 
 function parseSlackArgs(text) {
@@ -952,26 +987,11 @@ async function fetchIcsCalendar(calendarUrl) {
 }
 
 async function uploadImportedRosterToPdc(docs) {
-  let deleted = 0;
+  let deleted = await deleteExistingImportMonthDocs(docs);
   let imported = 0;
 
   for (const docData of docs) {
-    const querySnapshot = await db()
-      .collection(PDC_COLLECTION)
-      .where("owner", "==", docData.owner)
-      .where("Date", "==", docData.Date)
-      .where("DC", "==", docData.DC)
-      .where("Activity", "==", docData.Activity)
-      .where("From", "==", docData.From)
-      .where("To", "==", docData.To)
-      .get();
-
     const batch = db().batch();
-    for (const duplicate of querySnapshot.docs) {
-      batch.delete(duplicate.ref);
-      deleted += 1;
-    }
-
     const ownerRef = db().collection(PDC_COLLECTION).doc(ownerPdcDocId(docData.owner));
     const eventRef = ownerRef.collection("events").doc(pdcEventDocId(docData));
     batch.set(ownerRef, {
