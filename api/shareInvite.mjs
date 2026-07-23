@@ -44,6 +44,9 @@ export default async function handler(req, res) {
     const body = await readJsonBody(req);
     const scope = cleanText(body.scope || "layover_only", 40) || "layover_only";
     const note = cleanText(body.note || "", 500);
+    const recipientEmail = cleanText(body.recipientEmail || body.email || body.toEmail || "", 240);
+    const deliveryMethod = recipientEmail ? "email" : cleanText(body.deliveryMethod || "link", 40);
+    const confirmationRequired = body.confirmationRequired !== false;
     const expiresInDays = Math.min(
       Math.max(Number.parseInt(body.expiresInDays || "14", 10) || 14, 1),
       90
@@ -56,9 +59,14 @@ export default async function handler(req, res) {
       ownerUid: user.uid,
       ownerDisplayName: owner.displayName || user.name || "",
       ownerEmail: owner.email || user.email || "",
+      recipientEmail,
       scope,
       note,
       status: "open",
+      deliveryMethod,
+      confirmationRequired,
+      confirmationStatus: confirmationRequired ? "pending" : "not_required",
+      confirmed: false,
       maxUses: 1,
       useCount: 0,
       createdAt: nowTimestamp(),
@@ -73,6 +81,9 @@ export default async function handler(req, res) {
       inviteCode: code,
       inviteUrl: inviteUrl(req, code),
       scope,
+      deliveryMethod,
+      confirmationRequired,
+      confirmationStatus: confirmationRequired ? "pending" : "not_required",
       expiresInDays,
     });
   } catch (error) {

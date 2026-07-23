@@ -16,7 +16,7 @@ const INVITE_COLLECTION = "roster_share_invites";
 const SHARE_COLLECTION = "roster_shares";
 const FRIEND_COLLECTION = "roster_friendships";
 
-function writeShare(tx, { owner, sharedWith, scope, inviteCode, acceptedByUid }) {
+function writeShare(tx, { owner, sharedWith, scope, inviteCode, acceptedByUid, confirmationStatus }) {
   const ownerUid = owner.uid;
   const sharedWithUid = sharedWith.uid;
   const ref = db().collection(SHARE_COLLECTION).doc(shareId(ownerUid, sharedWithUid));
@@ -29,8 +29,12 @@ function writeShare(tx, { owner, sharedWith, scope, inviteCode, acceptedByUid })
     sharedWithEmail: sharedWith.email,
     scope,
     status: "active",
+    confirmationStatus,
+    confirmed: confirmationStatus === "accepted",
     inviteCode,
     acceptedByUid,
+    confirmedByUid: acceptedByUid,
+    confirmedAt: nowTimestamp(),
     updatedAt: nowTimestamp(),
     createdAt: nowTimestamp(),
   }, { merge: true });
@@ -85,6 +89,7 @@ export default async function handler(req, res) {
 
     const ownerUid = invite.ownerUid;
     const scope = invite.scope || "layover_only";
+    const confirmationStatus = invite.confirmationRequired === false ? "not_required" : "accepted";
     const ownerProfile = await publicUser(ownerUid);
     const userProfile = await publicUser(user.uid);
     await db().runTransaction(async (tx) => {
@@ -99,6 +104,7 @@ export default async function handler(req, res) {
         scope,
         inviteCode: code,
         acceptedByUid: user.uid,
+        confirmationStatus,
       });
       if (mutual) {
         writeShare(tx, {
@@ -107,6 +113,7 @@ export default async function handler(req, res) {
           scope,
           inviteCode: code,
           acceptedByUid: user.uid,
+          confirmationStatus,
         });
       }
 
@@ -118,14 +125,22 @@ export default async function handler(req, res) {
         source: "invite",
         inviteCode: code,
         mutual,
+        confirmationStatus,
+        confirmed: confirmationStatus === "accepted",
+        confirmedByUid: user.uid,
+        confirmedAt: nowTimestamp(),
         updatedAt: nowTimestamp(),
         createdAt: nowTimestamp(),
       }, { merge: true });
 
       tx.update(inviteRef, {
         status: "accepted",
+        confirmationStatus,
+        confirmed: confirmationStatus === "accepted",
         acceptedByUid: user.uid,
         acceptedAt: nowTimestamp(),
+        confirmedByUid: user.uid,
+        confirmedAt: nowTimestamp(),
         updatedAt: nowTimestamp(),
         useCount: admin.firestore.FieldValue.increment(1),
       });
@@ -137,6 +152,8 @@ export default async function handler(req, res) {
       sharedWithUid: user.uid,
       mutual,
       scope,
+      confirmationStatus,
+      confirmed: confirmationStatus === "accepted",
     });
   } catch (error) {
     json(res, error.statusCode || 500, { error: error.message });

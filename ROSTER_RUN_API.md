@@ -139,11 +139,15 @@ Content-Type: application/json
 {
   "scope": "layover_only",
   "expiresInDays": 14,
-  "note": "Share my roster with this crew friend."
+  "note": "Share my roster with this crew friend.",
+  "recipientEmail": "friend@example.com",
+  "confirmationRequired": true
 }
 ```
 
 Response includes `inviteCode` and `inviteUrl`.
+When `recipientEmail` is provided, the invite records `deliveryMethod: "email"`
+and starts with `confirmationStatus: "pending"`.
 
 ### Accept Share Invite
 
@@ -162,6 +166,19 @@ Content-Type: application/json
 
 This creates `roster_shares` records. With `mutual: true`, both users share
 their roster with each other.
+Accepting an invite updates the invite confirmation fields to
+`confirmationStatus: "accepted"` and `confirmed: true`.
+
+### Check Share Invite Confirmation
+
+```text
+GET /api/shareInviteStatus?inviteCode=<inviteCode>
+Authorization: Bearer <Firebase ID token>
+```
+
+Only the invite owner or the accepted user can read the status. The response
+includes `status`, `deliveryMethod`, `recipientEmail`, `confirmationRequired`,
+`confirmationStatus`, `confirmed`, `confirmedByUid`, and `confirmedAt`.
 
 ### Read Shared Calendar and Layovers
 
