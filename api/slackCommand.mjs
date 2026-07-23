@@ -467,9 +467,14 @@ function parsePerDiemReportText(text) {
   const parts = parseSlackArgs(text);
   let targetMonth = "";
   let targetYear = "";
+  let reportEmail = "";
 
   for (const part of parts) {
     const normalizedPart = cleanText(part, 20).toLowerCase();
+    if (looksLikeEmail(part)) {
+      reportEmail = cleanText(part, 240).toLowerCase();
+      continue;
+    }
     const yearMonth = part.match(/^(\d{4})[-/.](\d{1,2})$/);
     if (yearMonth) {
       targetYear = yearMonth[1];
@@ -488,7 +493,7 @@ function parsePerDiemReportText(text) {
     }
   }
 
-  return { targetMonth, targetYear };
+  return { targetMonth, targetYear, reportEmail };
 }
 
 function perDiemMonthHint({ targetMonth, targetYear }) {
@@ -535,6 +540,64 @@ async function dispatchPerDiemSlackWorkflow({ command, firebaseUid, owner, targe
     dispatched: true,
     actionsUrl: `https://github.com/${repo}/actions/workflows/${workflowFile}`,
   };
+}
+
+async function pdcOwnerForEmail(email) {
+  const normalizedEmail = cleanText(email, 240).toLowerCase();
+  if (!normalizedEmail) return null;
+
+  const pdcByEmail = await db()
+    .collection(PDC_COLLECTION)
+    .where("email", "==", normalizedEmail)
+    .limit(1)
+    .get();
+  if (!pdcByEmail.empty) {
+    const data = pdcByEmail.docs[0].data();
+    const uid = cleanText(data.owner || data.uid || "", 160);
+    if (uid) {
+      return {
+        firebaseUid: uid,
+        owner: {
+          uid,
+          displayName: data.display_name || data.pdc_user_name || displayNameForEmail(normalizedEmail) || normalizedEmail,
+          email: normalizedEmail,
+        },
+      };
+    }
+  }
+
+  const usersByEmail = await db()
+    .collection("users")
+    .where("email", "==", normalizedEmail)
+    .limit(1)
+    .get();
+  const userUid = usersByEmail.empty ? "" : usersByEmail.docs[0].id;
+  const candidates = [
+    cleanText(usersByEmail.docs[0]?.data()?.uid || userUid || "", 160),
+    guestEmailUid(normalizedEmail),
+    normalizedEmail,
+  ].filter(Boolean);
+
+  for (const uid of candidates) {
+    const pdcByOwner = await db()
+      .collection(PDC_COLLECTION)
+      .where("owner", "==", uid)
+      .limit(1)
+      .get();
+    if (!pdcByOwner.empty) {
+      const owner = await publicUser(uid);
+      return {
+        firebaseUid: uid,
+        owner: {
+          uid,
+          displayName: owner.displayName || displayNameForEmail(normalizedEmail) || normalizedEmail,
+          email: owner.email || normalizedEmail,
+        },
+      };
+    }
+  }
+
+  return null;
 }
 
 async function createInviteForUid(uid, { scope = "layover_only", note = "" } = {}) {
@@ -1000,7 +1063,7 @@ function helpText() {
     "`/my-roster` - show only your roster for today + 30 days",
     "`/my-roster HNL 2026-07-22 14` - show only your roster with optional station/date/days",
     "`/perdiem-report` - show your monthly PerDiem report in Slack",
-    "`/perdiem-report jul` or `/perdiem-report 2026-07` - choose report month",
+    "`/perdiem-report sjchoi787@gmail.com jul` - choose report owner and month",
     "`/layover HNL` - show shared HNL crew for today + 30 days",
     "`/layover HNL 2026-07-22 14` - choose start date and days",
   ].join("\n");
@@ -1257,16 +1320,24 @@ async function handleMyRoster(command) {
 }
 
 async function handlePerDiemReport(command) {
-  const firebaseUid = await linkedFirebaseUid(command, { allowDefault: false });
-  if (!firebaseUid) {
+  const parsed = parsePerDiemReportText(command.text);
+  const requestedOwner = parsed.reportEmail ? await pdcOwnerForEmail(parsed.reportEmail) : null;
+  if (parsed.reportEmail && !requestedOwner) {
     return {
       response_type: "ephemeral",
-      text: `${notLinkedText(command)}\n\nUse \`/roster-share link-me\` first, then run \`/perdiem-report\`.`,
+      text: `No pdc roster owner found for \`${parsed.reportEmail}\`. Run roster import for that email first, then retry \`/perdiem-report ${parsed.reportEmail} jul\`.`,
     };
   }
 
-  const owner = await publicUser(firebaseUid);
-  const parsed = parsePerDiemReportText(command.text);
+  const firebaseUid = requestedOwner?.firebaseUid || (await linkedFirebaseUid(command, { allowDefault: false }));
+  if (!firebaseUid) {
+    return {
+      response_type: "ephemeral",
+      text: `${notLinkedText(command)}\n\nUse \`/roster-share link-me\` first, or run \`/perdiem-report sjchoi787@gmail.com jul\`.`,
+    };
+  }
+
+  const owner = requestedOwner?.owner || await publicUser(firebaseUid);
   const dispatch = await dispatchPerDiemSlackWorkflow({
     command,
     firebaseUid,
@@ -1285,7 +1356,7 @@ async function handlePerDiemReport(command) {
     response_type: "ephemeral",
     text: [
       `Monthly PerDiem Slack report workflow queued for ${monthHint}.`,
-      `Owner: \`${owner.displayName || owner.email || firebaseUid}\``,
+      `Owner: \`${owner.displayName || owner.email || firebaseUid}\`${parsed.reportEmail ? ` (${parsed.reportEmail})` : ""}`,
       dispatch.actionsUrl,
     ].join("\n"),
   };
