@@ -190,9 +190,9 @@ function pdcRosterRow(doc) {
   const from = firstText(doc.From);
   const to = firstText(doc.To, doc.Destination);
   const stdl = normalizePdcTime(firstText(doc.STDL, doc["STD(L)"], doc.STD), date);
-  const stal = normalizePdcTime(firstText(doc.STAL, doc["STA(L)"], doc.STA, doc.RI, doc.RO), date);
+  const stal = normalizePdcTime(firstText(doc.STAL, doc["STA(L)"], doc.STA), date);
   const stdz = normalizePdcTime(firstText(doc.STDZ, doc["STD(Z)"], doc.STD), date) || stdl;
-  const staz = normalizePdcTime(firstText(doc.STAZ, doc["STA(Z)"], doc.STA, doc.RI, doc.RO), date) ||
+  const staz = normalizePdcTime(firstText(doc.STAZ, doc["STA(Z)"], doc.STA), date) ||
     endTimeWithOvernightOffset(stdz, stal);
   return [
     date,

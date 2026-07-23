@@ -250,7 +250,7 @@ export async function generateSlackPerDiemList(rosterJsonPath) {
 
   for (let i = 0; i < flightRows.length; i += 1) {
     const row = flightRows[i];
-    const [dateText, , , , activity, , fromRaw, stdl, stdz, toRaw, , staz] = row;
+    const [dateText, , , , activity, , fromRaw, stdl, stdz, toRaw, stal, staz] = row;
     const from = normalizeAirportCode(fromRaw) || "UNKNOWN";
     const to = normalizeAirportCode(toRaw) || "UNKNOWN";
 
@@ -309,6 +309,10 @@ export async function generateSlackPerDiemList(rosterJsonPath) {
       Activity: activity,
       From: from,
       Destination: to,
+      STDL: stdl,
+      STDZ: stdz,
+      STAL: stal,
+      STAZ: staz,
       RI: riValid ? riValid.toISOString() : "",
       RO: roValid ? roValid.toISOString() : "",
       StayHours,
