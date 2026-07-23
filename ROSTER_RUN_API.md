@@ -289,6 +289,10 @@ friend import with one command after joining Slack:
 /roster-share import friend@example.com webcal://your-private-calendar-url
 ```
 
+Email-based imports are automatically shared with the current Slack team's
+linked roster participants, and invite-code acceptances automatically share the
+accepted guest owner with existing Roster Share participants.
+
 Required Vercel environment variable:
 
 ```text

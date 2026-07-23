@@ -9,6 +9,7 @@ import {
   json,
   nowTimestamp,
   publicUser,
+  shareId,
 } from "./_lib/shareUtils.mjs";
 
 const INVITE_COLLECTION = "roster_share_invites";
@@ -245,6 +246,78 @@ async function resolveImportOwnerForEmail(command, email) {
     linkId,
     inviteCode: invite?.code || "",
   };
+}
+
+function shareDocData({ owner, sharedWith, scope = "layover_only", source = "slack_email_import_auto_share" }) {
+  return {
+    ownerUid: owner.uid,
+    ownerDisplayName: owner.displayName || "",
+    ownerEmail: owner.email || "",
+    sharedWithUid: sharedWith.uid,
+    sharedWithDisplayName: sharedWith.displayName || "",
+    sharedWithEmail: sharedWith.email || "",
+    scope,
+    status: "active",
+    confirmationStatus: "accepted",
+    confirmed: true,
+    source,
+    confirmedByUid: sharedWith.uid,
+    confirmedAt: nowTimestamp(),
+    updatedAt: nowTimestamp(),
+    createdAt: nowTimestamp(),
+  };
+}
+
+async function slackTeamParticipantOwners(command) {
+  if (!command.teamId) return [];
+  const snap = await db()
+    .collection(SLACK_LINK_COLLECTION)
+    .where("slackTeamId", "==", command.teamId)
+    .get();
+
+  const owners = new Map();
+  for (const doc of snap.docs) {
+    const link = doc.data();
+    if (link.status === "disabled") continue;
+    const uid = cleanText(link.firebaseUid || link.uid || "", 160);
+    if (!uid) continue;
+    owners.set(uid, {
+      uid,
+      displayName: link.firebaseDisplayName || link.recipientEmail || link.firebaseEmail || link.slackUserName || uid,
+      email: link.recipientEmail || link.firebaseEmail || "",
+    });
+  }
+  return [...owners.values()];
+}
+
+async function autoShareOwnerWithSlackTeam(command, owner) {
+  const participants = (await slackTeamParticipantOwners(command)).filter((participant) => participant.uid !== owner.uid);
+  const ownerVariants = [
+    owner,
+    ...(owner.email ? [{ ...owner, uid: owner.email, displayName: owner.displayName || owner.email }] : []),
+  ];
+  let writeCount = 0;
+  for (let i = 0; i < participants.length; i += 200) {
+    const batch = db().batch();
+    for (const ownerVariant of ownerVariants) {
+      for (const participant of participants.slice(i, i + 200)) {
+        if (participant.uid === ownerVariant.uid) continue;
+        batch.set(
+          db().collection(SHARE_COLLECTION).doc(shareId(ownerVariant.uid, participant.uid)),
+          shareDocData({ owner: ownerVariant, sharedWith: participant }),
+          { merge: true }
+        );
+        batch.set(
+          db().collection(SHARE_COLLECTION).doc(shareId(participant.uid, ownerVariant.uid)),
+          shareDocData({ owner: participant, sharedWith: ownerVariant }),
+          { merge: true }
+        );
+        writeCount += 1;
+      }
+    }
+    await batch.commit();
+  }
+  return writeCount;
 }
 
 function appBaseUrl() {
@@ -862,6 +935,7 @@ async function handleRosterImport(command) {
     autoLinked = await resolveImportOwnerForEmail(command, email);
     firebaseUid = autoLinked.firebaseUid;
     owner = autoLinked.owner;
+    autoLinked.sharedWithCount = await autoShareOwnerWithSlackTeam(command, owner);
   } else {
     firebaseUid = await linkedFirebaseUid(command, { allowDefault: false });
     if (!firebaseUid) {
@@ -881,6 +955,7 @@ async function handleRosterImport(command) {
         `Roster iCal import workflow queued: ${dispatch.actionsUrl}`,
         `Owner: \`${owner.displayName || owner.email || firebaseUid}\``,
         ...(autoLinked ? [`Slack link: \`${SLACK_LINK_COLLECTION}/${autoLinked.linkId}\``] : []),
+        ...(autoLinked ? [`Auto shared with ${autoLinked.sharedWithCount} Slack roster participant(s).`] : []),
       ].join("\n"),
     };
   }
