@@ -123,6 +123,7 @@ Post a monthly PerDiem report back to Slack:
 
 ```text
 /perdiem-report
+/perdiem-report jul
 /perdiem-report 2026-07
 ```
 

@@ -23,6 +23,21 @@ const DEFAULT_GITHUB_REPO = "csj773/roster-sj";
 const DEFAULT_GITHUB_REF = "main";
 const ICAL_IMPORT_WORKFLOW_FILE = "import-ical-roster-to-pdc.yml";
 const PERDIEM_SLACK_WORKFLOW_FILE = "monthly-perdiem-slack-report.yml";
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const FULL_MONTH_NAMES = [
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december",
+];
 
 function slackJson(res, status, body) {
   res.statusCode = status;
@@ -454,6 +469,7 @@ function parsePerDiemReportText(text) {
   let targetYear = "";
 
   for (const part of parts) {
+    const normalizedPart = cleanText(part, 20).toLowerCase();
     const yearMonth = part.match(/^(\d{4})[-/.](\d{1,2})$/);
     if (yearMonth) {
       targetYear = yearMonth[1];
@@ -464,10 +480,22 @@ function parsePerDiemReportText(text) {
       targetYear = part;
     } else if (/^\d{1,2}$/.test(part)) {
       targetMonth = part;
+    } else {
+      const monthIndex = MONTH_NAMES.findIndex((month) => month.toLowerCase() === normalizedPart);
+      const fullMonthIndex = FULL_MONTH_NAMES.indexOf(normalizedPart);
+      const resolvedIndex = monthIndex >= 0 ? monthIndex : fullMonthIndex;
+      if (resolvedIndex >= 0) targetMonth = String(resolvedIndex + 1);
     }
   }
 
   return { targetMonth, targetYear };
+}
+
+function perDiemMonthHint({ targetMonth, targetYear }) {
+  if (!targetMonth) return "default month";
+  const monthNumber = Number(targetMonth);
+  const monthName = MONTH_NAMES[monthNumber - 1] || String(targetMonth);
+  return targetYear ? `${monthName} ${targetYear}` : monthName;
 }
 
 async function dispatchPerDiemSlackWorkflow({ command, firebaseUid, owner, targetMonth, targetYear }) {
@@ -972,7 +1000,7 @@ function helpText() {
     "`/my-roster` - show only your roster for today + 30 days",
     "`/my-roster HNL 2026-07-22 14` - show only your roster with optional station/date/days",
     "`/perdiem-report` - show your monthly PerDiem report in Slack",
-    "`/perdiem-report 2026-07` - choose report month",
+    "`/perdiem-report jul` or `/perdiem-report 2026-07` - choose report month",
     "`/layover HNL` - show shared HNL crew for today + 30 days",
     "`/layover HNL 2026-07-22 14` - choose start date and days",
   ].join("\n");
@@ -1252,9 +1280,7 @@ async function handlePerDiemReport(command) {
     };
   }
 
-  const monthHint = parsed.targetYear && parsed.targetMonth
-    ? `${parsed.targetYear}-${String(parsed.targetMonth).padStart(2, "0")}`
-    : "default month";
+  const monthHint = perDiemMonthHint(parsed);
   return {
     response_type: "ephemeral",
     text: [
@@ -1266,13 +1292,14 @@ async function handlePerDiemReport(command) {
 }
 
 async function handleCommand(command) {
-  if (command.text === "help" || command.command === "/roster-help") {
+  const commandName = cleanText(command.command, 80).toLowerCase();
+  if (command.text === "help" || commandName === "/roster-help") {
     return { response_type: "ephemeral", text: helpText() };
   }
-  if (command.command === "/roster-share") return handleRosterShare(command);
-  if (command.command === "/my-roster") return handleMyRoster(command);
-  if (command.command === "/perdiem-report") return handlePerDiemReport(command);
-  if (command.command === "/layover") return handleLayover(command);
+  if (commandName === "/roster-share") return handleRosterShare(command);
+  if (commandName === "/my-roster") return handleMyRoster(command);
+  if (commandName === "/perdiem-report") return handlePerDiemReport(command);
+  if (commandName === "/layover") return handleLayover(command);
   return { response_type: "ephemeral", text: helpText() };
 }
 
