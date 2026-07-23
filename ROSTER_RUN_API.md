@@ -185,6 +185,34 @@ their roster with each other.
 Accepting an invite updates the invite confirmation fields to
 `confirmationStatus: "accepted"` and `confirmed: true`.
 
+### Accept Share Invite By Code
+
+```text
+POST /api/acceptShareInviteByCode
+Content-Type: application/json
+```
+
+```json
+{
+  "inviteCode": "<inviteCode>"
+}
+```
+
+This public endpoint accepts the invite with the invite code only. It is used
+by the Vercel `/roster-share?invite=...` landing page so invitees do not need
+to go through FlutterFlow. The accepted user is recorded as
+`guest_<inviteCode>`, and the invite confirmation fields are updated to
+`confirmationStatus: "accepted"` and `confirmed: true`.
+
+### Public Share Invite Status
+
+```text
+GET /api/publicShareInviteStatus?invite=<inviteCode>
+```
+
+Returns invite status and confirmation status for anyone holding the invite
+code.
+
 ### Check Share Invite Confirmation
 
 ```text
