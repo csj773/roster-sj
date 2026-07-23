@@ -1,0 +1,90 @@
+name: Inspect PDC PerDiem Source Once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/inspect-pdc-perdiem-source-once.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    if: contains(github.event.head_commit.message, '[inspect-pdc-source-once]')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - run: npm install
+
+      - name: Inspect nearby PDC rows
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          node --input-type=module <<'NODE'
+          import admin from "firebase-admin";
+
+          function parseJsonEnv(name) {
+            const raw = String(process.env[name] || "").trim()
+              .replace(/^\uFEFF/, "")
+              .replace(/[“”]/g, "\"")
+              .replace(/[‘’]/g, "'")
+              .replace(/-----BEGIN PRIVATE KEY[—–-]+/g, "-----BEGIN PRIVATE KEY-----")
+              .replace(/[—–-]+END PRIVATE KEY[—–-]+/g, "-----END PRIVATE KEY-----");
+            const parsed = JSON.parse(raw);
+            if (parsed.private_key) parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
+            return parsed;
+          }
+
+          admin.initializeApp({ credential: admin.credential.cert(parseJsonEnv("FIREBASE_SERVICE_ACCOUNT")) });
+          const db = admin.firestore();
+          const owner = "guest_email_sjchoi787_gmail_com";
+          const dates = new Set([
+            "2026.07.03", "2026.07.04", "2026.07.05", "2026.07.06", "2026.07.07",
+            "2026.07.12", "2026.07.13", "2026.07.14", "2026.07.15", "2026.07.16",
+            "2026.07.20", "2026.07.30", "2026.07.31",
+          ]);
+          const snap = await db.collection("pdc").doc(owner).collection("events").get();
+          const rows = snap.docs
+            .map((doc) => ({ id: doc.id, ...doc.data() }))
+            .filter((row) => dates.has(String(row.Date || row.DateRaw || "").trim()))
+            .sort((a, b) => [
+              String(a.Date || a.DateRaw || ""),
+              String(a.STDZ || a["STD(Z)"] || ""),
+              String(a.Activity || ""),
+              String(a.From || ""),
+              String(a.To || a.Destination || ""),
+            ].join("|").localeCompare([
+              String(b.Date || b.DateRaw || ""),
+              String(b.STDZ || b["STD(Z)"] || ""),
+              String(b.Activity || ""),
+              String(b.From || ""),
+              String(b.To || b.Destination || ""),
+            ].join("|")));
+          console.log(`pdc events=${snap.size} nearby=${rows.length}`);
+          for (const row of rows) {
+            console.log([
+              `Date=${row.Date || row.DateRaw || ""}`,
+              `Activity=${row.Activity || ""}`,
+              `From=${row.From || ""}`,
+              `To=${row.To || row.Destination || ""}`,
+              `STD=${row.STD || ""}`,
+              `STA=${row.STA || ""}`,
+              `STDL=${row.STDL || row["STD(L)"] || ""}`,
+              `STDZ=${row.STDZ || row["STD(Z)"] || ""}`,
+              `STAL=${row.STAL || row["STA(L)"] || ""}`,
+              `STAZ=${row.STAZ || row["STA(Z)"] || ""}`,
+              `RI=${row.RI || ""}`,
+              `RO=${row.RO || ""}`,
+              `summary=${String(row.sourceSummary || "").slice(0, 120)}`,
+              `desc=${String(row.sourceDescription || "").replace(/\s+/g, " ").slice(0, 180)}`,
+            ].join(" | "));
+          }
+          NODE
