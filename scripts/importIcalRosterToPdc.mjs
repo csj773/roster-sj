@@ -69,7 +69,6 @@ function crewKey(docData) {
 function importDuplicateKey(docData) {
   return [
     docData.owner,
-    docData.Date,
     docData.Activity,
     docData.From,
     docData.To,
@@ -77,20 +76,48 @@ function importDuplicateKey(docData) {
   ].join("|");
 }
 
+function dateNumber(value) {
+  const match = cleanText(value, 20).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return Number.NaN;
+  return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) / 86400000;
+}
+
+function timeMinutes(value) {
+  const match = cleanText(value, 40).match(/(\d{1,2}):?(\d{2})/);
+  if (!match) return Number.NaN;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function looksLikeSameRosterEvent(a, b) {
+  if (importDuplicateKey(a) !== importDuplicateKey(b)) return false;
+  const dayDiff = Math.abs(dateNumber(a.Date) - dateNumber(b.Date));
+  if (dayDiff === 0) return true;
+  if (dayDiff !== 1) return false;
+
+  const aTime = timeMinutes(a.STDL || a["STD(L)"] || a.STDZ || a.STD);
+  const bTime = timeMinutes(b.STDL || b["STD(L)"] || b.STDZ || b.STD);
+  if (!Number.isFinite(aTime) || !Number.isFinite(bTime)) return false;
+  return Math.max(aTime, bTime) >= 20 * 60 && Math.min(aTime, bTime) <= 4 * 60;
+}
+
 function preferredDuplicateDoc(current, candidate) {
   if (!current) return candidate;
-  const currentTime = cleanText(current.STDL || current["STD(L)"] || current.STDZ || current.STD, 40);
-  const candidateTime = cleanText(candidate.STDL || candidate["STD(L)"] || candidate.STDZ || candidate.STD, 40);
-  return candidateTime >= currentTime ? candidate : current;
+  const currentDateTime = `${cleanText(current.Date, 20)} ${cleanText(current.STDL || current["STD(L)"] || current.STDZ || current.STD, 40)}`;
+  const candidateDateTime = `${cleanText(candidate.Date, 20)} ${cleanText(candidate.STDL || candidate["STD(L)"] || candidate.STDZ || candidate.STD, 40)}`;
+  return candidateDateTime >= currentDateTime ? candidate : current;
 }
 
 function dedupeImportDocs(docs) {
-  const byKey = new Map();
+  const groups = [];
   for (const docData of docs) {
-    const key = importDuplicateKey(docData);
-    byKey.set(key, preferredDuplicateDoc(byKey.get(key), docData));
+    const group = groups.find((items) => looksLikeSameRosterEvent(items[0], docData));
+    if (group) {
+      group.push(docData);
+    } else {
+      groups.push([docData]);
+    }
   }
-  return [...byKey.values()];
+  return groups.map((items) => items.reduce(preferredDuplicateDoc, null));
 }
 
 async function deleteExistingImportMonthDocs(db, docs) {

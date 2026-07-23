@@ -721,7 +721,6 @@ function crewKey(value) {
 function importedRosterDuplicateKey(docData) {
   return [
     docData.owner,
-    docData.Date,
     docData.Activity,
     docData.From,
     docData.To,
@@ -729,20 +728,49 @@ function importedRosterDuplicateKey(docData) {
   ].join("|");
 }
 
+function dayNumber(value) {
+  const key = dateSortKey(value);
+  const match = key.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return Number.NaN;
+  return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) / 86400000;
+}
+
+function timeMinutes(value) {
+  const match = cleanText(value, 40).match(/(\d{1,2}):?(\d{2})/);
+  if (!match) return Number.NaN;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function looksLikeSameImportedRosterEvent(a, b) {
+  if (importedRosterDuplicateKey(a) !== importedRosterDuplicateKey(b)) return false;
+  const dayDiff = Math.abs(dayNumber(a.Date) - dayNumber(b.Date));
+  if (dayDiff === 0) return true;
+  if (dayDiff !== 1) return false;
+
+  const aTime = timeMinutes(a.STDL || a["STD(L)"] || a.STDZ || a.STD);
+  const bTime = timeMinutes(b.STDL || b["STD(L)"] || b.STDZ || b.STD);
+  if (!Number.isFinite(aTime) || !Number.isFinite(bTime)) return false;
+  return Math.max(aTime, bTime) >= 20 * 60 && Math.min(aTime, bTime) <= 4 * 60;
+}
+
 function preferredRosterDoc(current, candidate) {
   if (!current) return candidate;
-  const currentTime = cleanText(current.STDL || current["STD(L)"] || current.STDZ || current.STD, 40);
-  const candidateTime = cleanText(candidate.STDL || candidate["STD(L)"] || candidate.STDZ || candidate.STD, 40);
-  return candidateTime >= currentTime ? candidate : current;
+  const currentDateTime = `${dateSortKey(current.Date)} ${cleanText(current.STDL || current["STD(L)"] || current.STDZ || current.STD, 40)}`;
+  const candidateDateTime = `${dateSortKey(candidate.Date)} ${cleanText(candidate.STDL || candidate["STD(L)"] || candidate.STDZ || candidate.STD, 40)}`;
+  return candidateDateTime >= currentDateTime ? candidate : current;
 }
 
 function dedupeImportedRosterDocs(docs) {
-  const byKey = new Map();
+  const groups = [];
   for (const docData of docs) {
-    const key = importedRosterDuplicateKey(docData);
-    byKey.set(key, preferredRosterDoc(byKey.get(key), docData));
+    const group = groups.find((items) => looksLikeSameImportedRosterEvent(items[0], docData));
+    if (group) {
+      group.push(docData);
+    } else {
+      groups.push([docData]);
+    }
   }
-  return [...byKey.values()];
+  return groups.map((items) => items.reduce(preferredRosterDoc, null));
 }
 
 async function deleteExistingImportMonthDocs(docs) {
@@ -1185,6 +1213,8 @@ async function layoverItemsFor(uid, { station, startDate, days }, command = {}) 
 }
 
 function dedupeRosterItems(items, { ignoreTimes = false } = {}) {
+  if (ignoreTimes) return dedupeNearDuplicateRosterItems(items);
+
   const byKey = new Map();
   for (const item of items) {
     const key = [
@@ -1202,11 +1232,46 @@ function dedupeRosterItems(items, { ignoreTimes = false } = {}) {
   return [...byKey.values()];
 }
 
+function rosterItemDuplicateKey(item) {
+  return [
+    item.ownerUid,
+    item.activity,
+    item.from,
+    item.to,
+    crewKey(item),
+  ].join("|");
+}
+
+function looksLikeSameRosterItem(a, b) {
+  if (rosterItemDuplicateKey(a) !== rosterItemDuplicateKey(b)) return false;
+  const dayDiff = Math.abs(dayNumber(a.date) - dayNumber(b.date));
+  if (dayDiff === 0) return true;
+  if (dayDiff !== 1) return false;
+
+  const aTime = timeMinutes(a.stdl || a.stal);
+  const bTime = timeMinutes(b.stdl || b.stal);
+  if (!Number.isFinite(aTime) || !Number.isFinite(bTime)) return false;
+  return Math.max(aTime, bTime) >= 20 * 60 && Math.min(aTime, bTime) <= 4 * 60;
+}
+
+function dedupeNearDuplicateRosterItems(items) {
+  const groups = [];
+  for (const item of items) {
+    const group = groups.find((existing) => looksLikeSameRosterItem(existing[0], item));
+    if (group) {
+      group.push(item);
+    } else {
+      groups.push([item]);
+    }
+  }
+  return groups.map((group) => group.reduce(preferredRosterItem, null));
+}
+
 function preferredRosterItem(current, candidate) {
   if (!current) return candidate;
-  const currentTime = cleanText(current.stdl || current.stal, 40);
-  const candidateTime = cleanText(candidate.stdl || candidate.stal, 40);
-  return candidateTime >= currentTime ? candidate : current;
+  const currentDateTime = `${dateSortKey(current.date)} ${cleanText(current.stdl || current.stal, 40)}`;
+  const candidateDateTime = `${dateSortKey(candidate.date)} ${cleanText(candidate.stdl || candidate.stal, 40)}`;
+  return candidateDateTime >= currentDateTime ? candidate : current;
 }
 
 async function myRosterItemsFor(uid, { station, startDate, days }) {
