@@ -6,6 +6,7 @@ import { generateSlackPerDiemList } from "./slack_perdiem.js";
 
 const PDC_COLLECTION = "pdc";
 const PERDIEM_COLLECTION = "Perdiem";
+const PERDIEM_OVERRIDE_COLLECTION = "PerdiemOverrides";
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const ROSTER_HEADERS = ["Date", "D/C", "C/I(L)", "C/O(L)", "Activity", "F", "From", "STD(L)", "STD(Z)", "To", "STA(L)", "STA(Z)", "BLH", "Crew"];
 
@@ -273,6 +274,15 @@ function perDiemDocId(item, ownerKey) {
   ].map(safeDocIdPart).join("_");
 }
 
+function perDiemRowKey(item) {
+  return [
+    dateSortKey(item.Date),
+    cleanText(item.Activity, 40).toUpperCase(),
+    cleanText(item.From, 10).toUpperCase(),
+    cleanText(item.Destination, 10).toUpperCase(),
+  ].join("|");
+}
+
 function targetMonthYear() {
   const fallback = defaultTargetMonthYear();
   const month = Number(optionalEnv("PERDIEM_TARGET_MONTH") || fallback.month);
@@ -307,6 +317,55 @@ function pdcRosterRow(doc) {
     firstText(doc.BLH),
     firstText(doc.Crew),
   ];
+}
+
+async function overrideRowsForMonth(db, ownerKey, target) {
+  const snapshot = await db
+    .collection(PERDIEM_OVERRIDE_COLLECTION)
+    .doc(ownerKey)
+    .collection("items")
+    .get();
+
+  return snapshot.docs
+    .map((doc) => doc.data())
+    .filter((row) => monthToNumber(row.Month) === target.month)
+    .filter((row) => String(row.Year || "").trim() === String(target.year))
+    .filter((row) => cleanText(row.Activity, 40))
+    .map((row) => ({
+      Date: cleanText(row.Date, 20),
+      Activity: cleanText(row.Activity, 40),
+      From: cleanText(row.From, 10),
+      Destination: cleanText(row.Destination, 10),
+      RI: cleanText(row.RI, 40),
+      RO: cleanText(row.RO, 40),
+      StayHours: cleanText(row.StayHours, 20),
+      Rate: parseMoney(row.Rate),
+      Total: parseMoney(row.Total),
+      TransportFee: parseMoney(row.TransportFee),
+      Month: cleanText(row.Month, 20),
+      Year: cleanText(row.Year, 10),
+      source: "manual_perdiem_override",
+    }));
+}
+
+async function applyPerDiemOverrides(db, rows, ownerKey, target) {
+  const overrides = await overrideRowsForMonth(db, ownerKey, target);
+  if (!overrides.length) return { rows, overrideCount: 0 };
+
+  const byKey = new Map(overrides.map((row) => [perDiemRowKey(row), row]));
+  const merged = rows.map((row) => {
+    const override = byKey.get(perDiemRowKey(row));
+    return override ? { ...row, ...override, overrideApplied: true } : row;
+  });
+  const existingKeys = new Set(merged.map(perDiemRowKey));
+  for (const override of overrides) {
+    if (!existingKeys.has(perDiemRowKey(override))) merged.push({ ...override, overrideApplied: true });
+  }
+
+  merged.sort((a, b) => `${dateSortKey(a.Date)}_${a.Activity}_${a.From}_${a.Destination}`.localeCompare(
+    `${dateSortKey(b.Date)}_${b.Activity}_${b.From}_${b.Destination}`
+  ));
+  return { rows: merged, overrideCount: overrides.length };
 }
 
 function withReturnDepartureOffsets(rows) {
@@ -417,7 +476,8 @@ async function storePersonalPerDiemRows(db, rows, { ownerUid, displayName, pdcUs
     const docId = perDiemDocId(row, ownerKey);
     const data = {
       ...row,
-      Total: appDisplayTotal(row.Total),
+      Total: parseMoney(row.Total),
+      TotalDisplay: appDisplayTotal(row.Total),
       owner: ownerUid,
       uid: ownerUid,
       display_name: displayName,
@@ -464,7 +524,8 @@ async function storedPerDiemRowsForMonth(db, ownerKey, target) {
       Destination: cleanText(row.Destination, 20),
       StayHours: cleanText(row.StayHours, 20),
       Rate: parseMoney(row.Rate),
-      Total: appDisplayTotal(row.Total),
+      Total: parseMoney(row.Total),
+      TotalDisplay: appDisplayTotal(row.Total),
       TransportFee: parseMoney(row.TransportFee),
     }))
     .sort((a, b) => `${dateSortKey(a.Date)}_${a.Activity}_${a.From}_${a.Destination}`.localeCompare(
@@ -488,7 +549,7 @@ function reportTable(rows) {
     row.Destination,
     row.StayHours,
     Number(row.Rate || 0).toFixed(2),
-    String(Math.round(Number(row.Total || 0))),
+    Number(row.Total || 0).toFixed(2),
     String(Math.round(Number(row.TransportFee || 0))),
   ]));
   return [formatRow(header), ...body].join("\n");
@@ -559,7 +620,8 @@ async function main() {
   const reportName = pdcUserName || displayName;
   const ownerKey = safeDocIdPart(reportName || ownerUid);
   const calculatedRows = await generateSlackPerDiemList(filePath);
-  const storedRows = await storePersonalPerDiemRows(db, calculatedRows, {
+  const { rows: finalRows, overrideCount } = await applyPerDiemOverrides(db, calculatedRows, ownerKey, target);
+  const storedRows = await storePersonalPerDiemRows(db, finalRows, {
     ownerUid,
     displayName: reportName,
     pdcUserName,
@@ -567,7 +629,7 @@ async function main() {
   });
   const rows = await storedPerDiemRowsForMonth(db, ownerKey, target);
 
-  const totalPerdiem = rows.reduce((sum, row) => sum + row.Total, 0);
+  const totalPerdiem = rows.reduce((sum, row) => sum + appDisplayTotal(row.Total), 0);
   const totalTransportFee = rows.reduce((sum, row) => sum + row.TransportFee, 0);
   const table = rows.length ? reportTable(rows) : "No PerDiem rows found.";
   const truncatedTable = table.length > 2500 ? `${table.slice(0, 2500)}\n...truncated` : table;
@@ -580,7 +642,7 @@ async function main() {
     `${reportName}: ${formatKoreanMonth(target)} Prediem=${totalPerdiem.toFixed(2)}/Transport fee=${totalTransportFee.toFixed(0)}`,
     "",
     `created at: ${formatKstTimestamp()} KST`,
-    `source: Firestore ${PDC_COLLECTION} -> ${PERDIEM_COLLECTION}/${ownerKey}/items, pdc_user_name=${pdcUserName || "blank"}, roster rows=${rowCount}, stored=${storedRows}, Month=${monthName}, Year=${target.year}, commit=${shortCommitSha()}`,
+    `source: Firestore ${PDC_COLLECTION} -> ${PERDIEM_COLLECTION}/${ownerKey}/items, pdc_user_name=${pdcUserName || "blank"}, roster rows=${rowCount}, stored=${storedRows}, overrides=${overrideCount}, Month=${monthName}, Year=${target.year}, commit=${shortCommitSha()}`,
   ].join("\n");
 
   await postSlack(text);
