@@ -216,8 +216,17 @@ function dateSortKey(value) {
   return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
 }
 
-function dateMonthKey(value) {
-  return dateSortKey(value).slice(0, 7);
+function dateUtcMs(value) {
+  const match = dateSortKey(value).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+}
+
+function daysBetweenDates(left, right) {
+  const leftMs = dateUtcMs(left);
+  const rightMs = dateUtcMs(right);
+  if (leftMs === null || rightMs === null) return Number.POSITIVE_INFINITY;
+  return Math.abs(leftMs - rightMs) / 86400000;
 }
 
 function calculateTotalFromHours(hours, rate, destination) {
@@ -247,7 +256,7 @@ function dedupeInboundRows(rows) {
   const groups = new Map();
   for (const row of rows) {
     if (row.Destination !== "ICN" || row.From === "ICN") continue;
-    const key = [row.Activity, row.From, row.Destination, dateMonthKey(row.Date)].join("|");
+    const key = [row.Activity, row.From, row.Destination].join("|");
     const list = groups.get(key) || [];
     list.push(row);
     groups.set(key, list);
@@ -256,13 +265,32 @@ function dedupeInboundRows(rows) {
   const keep = new Set(rows);
   for (const list of groups.values()) {
     if (list.length < 2) continue;
-    const sorted = [...list].sort((a, b) => {
-      const hoursDiff = (hoursFromTimeString(a.StayHours) ?? Number.POSITIVE_INFINITY) -
-        (hoursFromTimeString(b.StayHours) ?? Number.POSITIVE_INFINITY);
-      if (hoursDiff !== 0) return hoursDiff;
-      return dateSortKey(a.Date).localeCompare(dateSortKey(b.Date));
-    });
-    for (const duplicate of sorted.slice(1)) keep.delete(duplicate);
+    const sorted = [...list].sort((a, b) => dateSortKey(a.Date).localeCompare(dateSortKey(b.Date)));
+    let cluster = [];
+    const flushCluster = () => {
+      if (cluster.length < 2) {
+        cluster = [];
+        return;
+      }
+      const canonical = [...cluster].sort((a, b) => {
+        const hoursDiff = (hoursFromTimeString(a.StayHours) ?? Number.POSITIVE_INFINITY) -
+          (hoursFromTimeString(b.StayHours) ?? Number.POSITIVE_INFINITY);
+        if (hoursDiff !== 0) return hoursDiff;
+        return dateSortKey(a.Date).localeCompare(dateSortKey(b.Date));
+      })[0];
+      for (const duplicate of cluster) {
+        if (duplicate !== canonical) keep.delete(duplicate);
+      }
+      cluster = [];
+    };
+
+    for (const row of sorted) {
+      if (cluster.length && daysBetweenDates(cluster[cluster.length - 1].Date, row.Date) > 1) {
+        flushCluster();
+      }
+      cluster.push(row);
+    }
+    flushCluster();
   }
   return rows.filter((row) => keep.has(row));
 }
