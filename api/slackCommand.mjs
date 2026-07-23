@@ -159,13 +159,13 @@ function mailInviteUrl({ inviteUrl: url, ownerName = "", recipientEmail = "" }) 
   const body = [
     `${owner} 님이 Roster Share에 초대했습니다.`,
     "",
-    "[수락하기]",
+    "수락하려면 아래 링크를 열어주세요:",
     url,
     "",
-    "[수락 여부 확인]",
+    "수락 여부를 확인하려면 아래 링크를 열어주세요:",
     statusUrl,
     "",
-    "메일 앱에서는 보안상 버튼 대신 위 링크가 표시됩니다.",
+    "메일 앱에서 링크가 바로 열리지 않으면 URL을 복사해서 브라우저에 붙여넣어 주세요.",
   ].join("\n");
   const params = new URLSearchParams({
     subject,
@@ -181,10 +181,10 @@ function inviteShareText(url) {
   return [
     "Roster Share 참여 링크입니다.",
     "",
-    "[수락하기]",
+    "수락 링크:",
     url,
     "",
-    "[수락 여부 확인]",
+    "수락 여부 확인 링크:",
     statusUrl,
   ].join("\n");
 }
