@@ -346,6 +346,17 @@ export async function generateSlackPerDiemList(rosterJsonPath) {
       roDate = parseHHMMOffset(stdz, dateFormatted);
     }
 
+    if (to === "ICN" && from !== "ICN" && i > 0) {
+      const previousRow = flightRows[i - 1];
+      if (normalizeAirportCode(previousRow[6]) === "ICN" && normalizeAirportCode(previousRow[9]) === from) {
+        const previousArrival = parseHHMMOffset(previousRow[11], resolvedDateForRow(previousRow));
+        if (previousArrival instanceof Date && !Number.isNaN(previousArrival.valueOf())) {
+          riDate = previousArrival;
+          if (!String(row[0] || "").trim()) dateFormatted = resolvedDateForRow(previousRow);
+        }
+      }
+    }
+
     const riValid = riDate instanceof Date && !Number.isNaN(riDate.valueOf()) ? riDate : null;
     const roValid = roDate instanceof Date && !Number.isNaN(roDate.valueOf()) ? roDate : null;
     let { StayHours, Total, Hours } = calculatePerDiem(riValid, roValid, rate);
