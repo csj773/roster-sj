@@ -65,6 +65,10 @@ function parseMoney(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function appDisplayTotal(value) {
+  return Math.round(parseMoney(value));
+}
+
 function firstText(...values) {
   for (const value of values) {
     const text = cleanText(value, 200);
@@ -281,6 +285,7 @@ async function storePersonalPerDiemRows(db, rows, { ownerUid, displayName, pdcUs
     const docId = perDiemDocId(row, ownerKey);
     const data = {
       ...row,
+      Total: appDisplayTotal(row.Total),
       owner: ownerUid,
       uid: ownerUid,
       display_name: displayName,
@@ -327,7 +332,7 @@ async function storedPerDiemRowsForMonth(db, ownerKey, target) {
       Destination: cleanText(row.Destination, 20),
       StayHours: cleanText(row.StayHours, 20),
       Rate: parseMoney(row.Rate),
-      Total: parseMoney(row.Total),
+      Total: appDisplayTotal(row.Total),
       TransportFee: parseMoney(row.TransportFee),
     }))
     .sort((a, b) => `${dateSortKey(a.Date)}_${a.Activity}_${a.From}_${a.Destination}`.localeCompare(
@@ -351,7 +356,7 @@ function reportTable(rows) {
     row.Destination,
     row.StayHours,
     Number(row.Rate || 0).toFixed(2),
-    Number(row.Total || 0).toFixed(2),
+    String(Math.round(Number(row.Total || 0))),
     String(Math.round(Number(row.TransportFee || 0))),
   ]));
   return [formatRow(header), ...body].join("\n");

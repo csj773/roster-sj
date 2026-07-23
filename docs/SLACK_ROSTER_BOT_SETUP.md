@@ -145,7 +145,8 @@ The `/perdiem-report` command queues the separate
 Firestore `pdc` roster rows, stores calculated rows under
 `Perdiem/{pdc_user_name}/items`, removes previous Slack PerDiem rows for the
 same Firebase owner or `pdc_user_name`, then posts the saved monthly result back
-to Slack instead of sending email. Slack uses the separate
+to Slack instead of sending email. Slack row totals are rounded the same way as
+the app display before monthly totals are summed. Slack uses the separate
 `scripts/slack_perdiem.js` calculator so the existing `perdiem.js` behavior
 remains unchanged.
 

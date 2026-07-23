@@ -308,9 +308,10 @@ accepted guest owner with existing Roster Share participants.
 The `/perdiem-report` command dispatches `monthly-perdiem-slack-report.yml`.
 That workflow reads only the linked Slack user's Firestore `pdc` roster rows,
 calculates PerDiem from those roster rows, stores the calculated rows under
-`Perdiem/{ownerUid}/items`, and posts a table from the saved monthly data back
-to Slack through the command `response_url`; the existing monthly email
-workflow and `perdiem.js` remain unchanged.
+`Perdiem/{pdc_user_name}/items`, and posts a table from the saved monthly data
+back to Slack through the command `response_url`. Slack PerDiem row totals are
+rounded the same way as the app display before monthly totals are summed; the
+existing monthly email workflow and `perdiem.js` remain unchanged.
 
 Required Vercel environment variable:
 
