@@ -248,9 +248,25 @@ export async function generateSlackPerDiemList(rosterJsonPath) {
     return FLIGHT_ACTIVITY_RE.test(activity) && from && to && from !== to;
   });
 
+  const findPreviousOutboundArrival = (currentIndex, station, beforeDate) => {
+    let best = null;
+    for (let j = currentIndex - 1; j >= 0; j -= 1) {
+      const previousRow = flightRows[j];
+      const previousFrom = normalizeAirportCode(previousRow[6]);
+      const previousTo = normalizeAirportCode(previousRow[9]);
+      if (previousFrom !== "ICN" || previousTo !== station) continue;
+
+      const arrival = parseHHMMOffset(previousRow[11], resolvedDateForRow(previousRow));
+      if (!(arrival instanceof Date) || Number.isNaN(arrival.valueOf())) continue;
+      if (beforeDate instanceof Date && !Number.isNaN(beforeDate.valueOf()) && arrival > beforeDate) continue;
+      if (!best || arrival > best.date) best = { date: arrival, row: previousRow };
+    }
+    return best;
+  };
+
   for (let i = 0; i < flightRows.length; i += 1) {
     const row = flightRows[i];
-    const [dateText, , , , activity, , fromRaw, stdl, stdz, toRaw, stal, staz] = row;
+    const [, , , , activity, , fromRaw, stdl, stdz, toRaw, stal, staz] = row;
     const from = normalizeAirportCode(fromRaw) || "UNKNOWN";
     const to = normalizeAirportCode(toRaw) || "UNKNOWN";
 
@@ -268,26 +284,13 @@ export async function generateSlackPerDiemList(rosterJsonPath) {
 
     if (to === "ICN" && from !== "ICN") {
       roDate = parseHHMMOffset(staz || stdz, dateFormatted);
-      if (i > 0) {
-        const previousRow = flightRows[i - 1];
-        riDate = parseHHMMOffset(previousRow[11], resolvedDateForRow(previousRow));
-      }
+      const previousOutbound = findPreviousOutboundArrival(i, from, roDate);
+      if (previousOutbound) riDate = previousOutbound.date;
     } else if (from === "ICN") {
       riDate = parseHHMMOffset(staz, dateFormatted);
     } else {
       riDate = parseHHMMOffset(staz, dateFormatted);
       roDate = parseHHMMOffset(stdz, dateFormatted);
-    }
-
-    if (to === "ICN" && from !== "ICN" && i > 0) {
-      const previousRow = flightRows[i - 1];
-      if (normalizeAirportCode(previousRow[6]) === "ICN" && normalizeAirportCode(previousRow[9]) === from) {
-        const previousRI = parseHHMMOffset(previousRow[11], resolvedDateForRow(previousRow));
-        if (previousRI instanceof Date && !Number.isNaN(previousRI.valueOf())) {
-          riDate = previousRI;
-          if (!dateText || !dateText.trim()) dateFormatted = resolvedDateForRow(previousRow);
-        }
-      }
     }
 
     const riValid = riDate instanceof Date && !Number.isNaN(riDate.valueOf()) ? riDate : null;
