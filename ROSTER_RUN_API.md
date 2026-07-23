@@ -272,6 +272,7 @@ Slack commands:
 /my-roster HNL
 /my-roster HNL 2026-07-22 14
 /perdiem-report
+/perdiem-report set-email sjchoi787@gmail.com
 /perdiem-report jul
 /perdiem-report sjchoi787@gmail.com jul
 /perdiem-report 2026-07
