@@ -139,6 +139,36 @@ async function linkedFirebaseUid(command, { allowDefault = true } = {}) {
   return configuredUid;
 }
 
+async function linkSlackUserToDefaultUid(command) {
+  const firebaseUid = cleanText(process.env.SLACK_DEFAULT_FIREBASE_UID || "", 160);
+  if (!firebaseUid) {
+    throw new Error("SLACK_DEFAULT_FIREBASE_UID is not configured");
+  }
+
+  const owner = await publicUser(firebaseUid);
+  const linkId = slackLinkId(command.teamId, command.userId);
+  await db().collection(SLACK_LINK_COLLECTION).doc(linkId).set({
+    firebaseUid,
+    uid: firebaseUid,
+    slackTeamId: command.teamId,
+    slackTeamDomain: command.teamDomain || "",
+    slackUserId: command.userId,
+    slackUserName: command.userName || "",
+    firebaseDisplayName: owner.displayName || "",
+    firebaseEmail: owner.email || "",
+    status: "active",
+    source: "slack_link_me",
+    updatedAt: nowTimestamp(),
+    createdAt: nowTimestamp(),
+  }, { merge: true });
+
+  return {
+    linkId,
+    firebaseUid,
+    owner,
+  };
+}
+
 function appBaseUrl() {
   return String(
     process.env.ROSTER_SHARE_APP_URL ||
@@ -590,6 +620,7 @@ function helpText() {
     "*Roster Slack commands*",
     "`/roster-share` - create a Roster Share invite link",
     "`/roster-share friend@example.com` - create an invite link with an email-compose button",
+    "`/roster-share link-me` - link your Slack user to the default Firebase roster user",
     "`/roster-share import webcal://...` - import your personal iCal roster privately",
     "`/layover HNL` - show shared HNL crew for today + 7 days",
     "`/layover HNL 2026-07-22 14` - choose start date and days",
@@ -613,6 +644,18 @@ function notLinkedText(command) {
 async function handleRosterShare(command) {
   const args = parseSlackArgs(command.text);
   const action = cleanText(args[0] || "", 40).toLowerCase();
+  if (["link-me", "linkme", "connect-me", "connectme"].includes(action)) {
+    const link = await linkSlackUserToDefaultUid(command);
+    return {
+      response_type: "ephemeral",
+      text: [
+        "Slack user linked to Firebase roster user.",
+        `Firestore document: \`${SLACK_LINK_COLLECTION}/${link.linkId}\``,
+        `Firebase user: \`${link.owner.displayName || link.owner.email || link.firebaseUid}\``,
+      ].join("\n"),
+    };
+  }
+
   const isImportAction = ["import", "sync", "link", "ical", "webcal"].includes(action);
   const firebaseUid = await linkedFirebaseUid(command, { allowDefault: !isImportAction });
   if (!firebaseUid) {

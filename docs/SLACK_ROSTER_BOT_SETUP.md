@@ -66,6 +66,12 @@ Create a Roster Share invite:
 /roster-share
 ```
 
+Link your Slack user to the configured default Firebase roster user:
+
+```text
+/roster-share link-me
+```
+
 Import a personal iCal roster link without using FlutterFlow:
 
 ```text

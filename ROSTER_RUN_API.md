@@ -265,6 +265,7 @@ Slack commands:
 ```text
 /roster-share
 /roster-share friend@example.com
+/roster-share link-me
 /roster-share import webcal://your-private-calendar-url
 /layover HNL
 /layover HNL 2026-07-22 14
