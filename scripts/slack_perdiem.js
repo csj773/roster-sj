@@ -210,6 +210,12 @@ function hoursFromTimeString(value) {
   return Number(match[1]) + Number(match[2]) / 60;
 }
 
+function dateSortKey(value) {
+  const match = String(value || "").match(/^(\d{4})[-.](\d{1,2})[-.](\d{1,2})$/);
+  if (!match) return String(value || "");
+  return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
+}
+
 function calculateTotalFromHours(hours, rate, destination) {
   if (!Number.isFinite(hours) || hours <= 0 || rate <= 0) return 0;
   if (normalizeAirportCode(destination) === "ICN" && hours < QUICK_TURN_THRESHOLD_HOURS) {
@@ -231,6 +237,49 @@ function normalizeSlackPerDiemItem(item) {
     Rate,
     Total,
   };
+}
+
+function dedupeInboundRows(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    if (row.Destination !== "ICN" || row.From === "ICN") continue;
+    const key = [row.Activity, row.From, row.Destination].join("|");
+    const list = groups.get(key) || [];
+    list.push(row);
+    groups.set(key, list);
+  }
+
+  const keep = new Set(rows);
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    const sorted = [...list].sort((a, b) => {
+      const hoursDiff = (hoursFromTimeString(a.StayHours) ?? Number.POSITIVE_INFINITY) -
+        (hoursFromTimeString(b.StayHours) ?? Number.POSITIVE_INFINITY);
+      if (hoursDiff !== 0) return hoursDiff;
+      return dateSortKey(a.Date).localeCompare(dateSortKey(b.Date));
+    });
+    for (const duplicate of sorted.slice(1)) keep.delete(duplicate);
+  }
+  return rows.filter((row) => keep.has(row));
+}
+
+function filterUnusedOutboundRows(rows) {
+  const inboundRows = rows.filter((row) => row.Destination === "ICN" && row.From !== "ICN");
+  const usedRi = new Set(inboundRows.map((row) => row.RI).filter(Boolean));
+  const lastInboundDate = inboundRows
+    .map((row) => dateSortKey(row.Date))
+    .sort()
+    .at(-1) || "";
+
+  return rows.filter((row) => {
+    if (row.From !== "ICN") return true;
+    if (row.RI && usedRi.has(row.RI)) return true;
+    return lastInboundDate && dateSortKey(row.Date) > lastInboundDate;
+  });
+}
+
+function normalizeSlackPerDiemRows(rows) {
+  return filterUnusedOutboundRows(dedupeInboundRows(rows));
 }
 
 export async function generateSlackPerDiemList(rosterJsonPath) {
@@ -327,5 +376,5 @@ export async function generateSlackPerDiemList(rosterJsonPath) {
     }));
   }
 
-  return perdiemList;
+  return normalizeSlackPerDiemRows(perdiemList);
 }

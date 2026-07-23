@@ -199,6 +199,27 @@ function compactTimeWithOffset(value) {
   return `${match[1].padStart(2, "0")}${match[2]}${match[3] || ""}`;
 }
 
+function extractedTime(text, kind, zone) {
+  const source = cleanText(text, 2000);
+  const pattern = new RegExp(`${kind}\\\\s*(?:\\\\(${zone}\\\\)|${zone})?[^0-9+-]{0,12}(\\\\d{1,2}:?\\\\d{2}(?:[+-]\\\\d+)?)`, "i");
+  const match = source.match(pattern);
+  return match ? compactTimeWithOffset(match[1]) : "";
+}
+
+function comparePerDiemTimes(left, right) {
+  const a = compactTimeWithOffset(left).match(/^(\d{2})(\d{2})/);
+  const b = compactTimeWithOffset(right).match(/^(\d{2})(\d{2})/);
+  if (!a || !b) return null;
+  return (Number(a[1]) * 60 + Number(a[2])) - (Number(b[1]) * 60 + Number(b[2]));
+}
+
+function arrivalWithOffset(std, sta) {
+  const arrival = compactTimeWithOffset(sta);
+  if (!arrival || /[+-]\d+$/.test(arrival)) return arrival;
+  const comparison = comparePerDiemTimes(arrival, std);
+  return comparison !== null && comparison <= 0 ? `${arrival}+1` : arrival;
+}
+
 function perDiemMarkers(route, end) {
   const from = cleanText(route.from, 10).toUpperCase();
   const to = cleanText(route.to, 10).toUpperCase();
@@ -249,14 +270,17 @@ function icsEventToPdcDoc(event, owner) {
   const summary = cleanText(event.SUMMARY?.value || "", 200);
   const description = cleanText(event.DESCRIPTION?.value || "", 1000);
   const location = cleanText(event.LOCATION?.value || "", 200);
+  const text = `${summary}\n${description}\n${location}`;
   const start = parseIcsDate(event.DTSTART?.value || "");
   const end = parseIcsDate(event.DTEND?.value || "");
   const endTime = timeWithDateOffset(start, end);
-  const startCompact = compactTimeWithOffset(start.time);
-  const endCompact = compactTimeWithOffset(endTime);
-  const route = firstRoute(`${summary}\n${description}\n${location}`);
+  const route = firstRoute(text);
   const activity = activityFromIcs(summary, description);
   if (!start.date || !activity) return null;
+  const stdl = extractedTime(text, "STD", "L") || start.time;
+  const stal = extractedTime(text, "STA", "L") || endTime;
+  const startCompact = extractedTime(text, "STD", "Z") || compactTimeWithOffset(start.time);
+  const endCompact = arrivalWithOffset(startCompact, extractedTime(text, "STA", "Z") || endTime);
 
   const uid = cleanText(event.UID?.value || hashText(`${summary}_${description}_${start.date}_${start.time}`), 200);
   const year = start.date.slice(0, 4);
@@ -274,12 +298,12 @@ function icsEventToPdcDoc(event, owner) {
     To: route.to,
     STD: start.iso || "",
     STA: end.iso || "",
-    STDL: start.time,
-    STAL: endTime,
+    STDL: stdl,
+    STAL: stal,
     STDZ: startCompact,
     STAZ: endCompact,
-    "STD(L)": start.time,
-    "STA(L)": endTime,
+    "STD(L)": stdl,
+    "STA(L)": stal,
     "STD(Z)": startCompact,
     "STA(Z)": endCompact,
     RI: markers.RI,
