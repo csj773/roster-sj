@@ -429,7 +429,7 @@ async function main() {
   if (!docs.length) throw new Error("iCal calendar was fetched, but no roster events were found");
 
   const result = await uploadPdcDocs(db, docs);
-  console.log(`Saved ${result.imported} event(s) to ${PDC_COLLECTION}; removed ${result.deleted} duplicate event(s).`);
+  console.log(`Saved ${result.imported} event(s) to ${PDC_COLLECTION}; removed ${result.deleted} old event(s); skipped ${result.skippedDuplicates} duplicate event(s).`);
 }
 
 main().catch((error) => {

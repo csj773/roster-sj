@@ -1406,7 +1406,7 @@ async function handleRosterImport(command) {
   const result = await uploadImportedRosterToPdc(docs);
   return {
     response_type: "ephemeral",
-    text: `Roster iCal import complete. Saved ${result.imported} event(s) to pdc, removed ${result.deleted} duplicate event(s).`,
+    text: `Roster iCal import complete. Saved ${result.imported} event(s) to pdc, removed ${result.deleted} old event(s), skipped ${result.skippedDuplicates} duplicate event(s).`,
   };
 }
 
