@@ -10,11 +10,9 @@ function requestQuery(req) {
 }
 
 function buildMailto({ to, subject, body }) {
-  const params = new URLSearchParams({
-    subject: cleanText(subject || "Roster Share 참여 링크", 200),
-    body: cleanText(body || "", 1800),
-  });
-  return `mailto:${encodeURIComponent(cleanText(to, 240))}?${params.toString()}`;
+  const encodedSubject = encodeURIComponent(cleanText(subject || "Roster Share 참여 링크", 200));
+  const encodedBody = encodeURIComponent(cleanText(body || "", 1800));
+  return `mailto:${encodeURIComponent(cleanText(to, 240))}?subject=${encodedSubject}&body=${encodedBody}`;
 }
 
 export default async function handler(req, res) {
