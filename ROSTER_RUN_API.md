@@ -271,6 +271,8 @@ Slack commands:
 /my-roster
 /my-roster HNL
 /my-roster HNL 2026-07-22 14
+/perdiem-report
+/perdiem-report 2026-07
 /layover HNL
 /layover HNL 2026-07-22 14
 ```
@@ -299,6 +301,11 @@ friend import with one command after joining Slack:
 Email-based imports are automatically shared with the current Slack team's
 linked roster participants, and invite-code acceptances automatically share the
 accepted guest owner with existing Roster Share participants.
+
+The `/perdiem-report` command dispatches `monthly-perdiem-slack-report.yml`.
+That workflow reads only the linked Slack user's Firestore `Perdiem` documents
+and posts a table back to Slack through the command `response_url`; the existing
+monthly email workflow remains unchanged.
 
 Required Vercel environment variable:
 

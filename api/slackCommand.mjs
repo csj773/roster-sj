@@ -22,6 +22,7 @@ const SLACK_ICAL_SOURCE = "slack_ical";
 const DEFAULT_GITHUB_REPO = "csj773/roster-sj";
 const DEFAULT_GITHUB_REF = "main";
 const ICAL_IMPORT_WORKFLOW_FILE = "import-ical-roster-to-pdc.yml";
+const PERDIEM_SLACK_WORKFLOW_FILE = "monthly-perdiem-slack-report.yml";
 
 function slackJson(res, status, body) {
   res.statusCode = status;
@@ -439,6 +440,67 @@ async function dispatchIcalImportWorkflow({ calendarUrl, firebaseUid, owner }) {
   const text = await response.text();
   if (!response.ok) {
     throw new Error(`GitHub iCal import workflow dispatch failed (${response.status}): ${text}`);
+  }
+
+  return {
+    dispatched: true,
+    actionsUrl: `https://github.com/${repo}/actions/workflows/${workflowFile}`,
+  };
+}
+
+function parsePerDiemReportText(text) {
+  const parts = parseSlackArgs(text);
+  let targetMonth = "";
+  let targetYear = "";
+
+  for (const part of parts) {
+    const yearMonth = part.match(/^(\d{4})[-/.](\d{1,2})$/);
+    if (yearMonth) {
+      targetYear = yearMonth[1];
+      targetMonth = yearMonth[2];
+      continue;
+    }
+    if (/^\d{4}$/.test(part)) {
+      targetYear = part;
+    } else if (/^\d{1,2}$/.test(part)) {
+      targetMonth = part;
+    }
+  }
+
+  return { targetMonth, targetYear };
+}
+
+async function dispatchPerDiemSlackWorkflow({ command, firebaseUid, owner, targetMonth, targetYear }) {
+  const token = process.env.GITHUB_TOKEN || "";
+  if (!token) return { dispatched: false };
+
+  const repo = process.env.GITHUB_REPO || DEFAULT_GITHUB_REPO;
+  const ref = process.env.GITHUB_REF || DEFAULT_GITHUB_REF;
+  const workflowFile = process.env.GITHUB_PERDIEM_SLACK_WORKFLOW_FILE || PERDIEM_SLACK_WORKFLOW_FILE;
+  const url = `https://api.github.com/repos/${repo}/actions/workflows/${workflowFile}/dispatches`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "Content-Type": "application/json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    body: JSON.stringify({
+      ref,
+      inputs: {
+        current_user_uid: firebaseUid,
+        current_user_name: owner.displayName || owner.email || command.userName || "",
+        target_month: targetMonth || "",
+        target_year: targetYear || "",
+        slack_response_url: command.responseUrl || "",
+      },
+    }),
+  });
+
+  const responseText = await response.text();
+  if (!response.ok) {
+    throw new Error(`GitHub PerDiem Slack workflow dispatch failed (${response.status}): ${responseText}`);
   }
 
   return {
@@ -909,6 +971,8 @@ function helpText() {
     "`/roster-share import friend@example.com webcal://...` - link that Slack user to an email owner and import",
     "`/my-roster` - show only your roster for today + 30 days",
     "`/my-roster HNL 2026-07-22 14` - show only your roster with optional station/date/days",
+    "`/perdiem-report` - show your monthly PerDiem report in Slack",
+    "`/perdiem-report 2026-07` - choose report month",
     "`/layover HNL` - show shared HNL crew for today + 30 days",
     "`/layover HNL 2026-07-22 14` - choose start date and days",
   ].join("\n");
@@ -1164,12 +1228,50 @@ async function handleMyRoster(command) {
   };
 }
 
+async function handlePerDiemReport(command) {
+  const firebaseUid = await linkedFirebaseUid(command, { allowDefault: false });
+  if (!firebaseUid) {
+    return {
+      response_type: "ephemeral",
+      text: `${notLinkedText(command)}\n\nUse \`/roster-share link-me\` first, then run \`/perdiem-report\`.`,
+    };
+  }
+
+  const owner = await publicUser(firebaseUid);
+  const parsed = parsePerDiemReportText(command.text);
+  const dispatch = await dispatchPerDiemSlackWorkflow({
+    command,
+    firebaseUid,
+    owner,
+    ...parsed,
+  });
+  if (!dispatch.dispatched) {
+    return {
+      response_type: "ephemeral",
+      text: "GITHUB_TOKEN is not configured on Vercel, so the Slack PerDiem workflow could not be queued.",
+    };
+  }
+
+  const monthHint = parsed.targetYear && parsed.targetMonth
+    ? `${parsed.targetYear}-${String(parsed.targetMonth).padStart(2, "0")}`
+    : "default month";
+  return {
+    response_type: "ephemeral",
+    text: [
+      `Monthly PerDiem Slack report workflow queued for ${monthHint}.`,
+      `Owner: \`${owner.displayName || owner.email || firebaseUid}\``,
+      dispatch.actionsUrl,
+    ].join("\n"),
+  };
+}
+
 async function handleCommand(command) {
   if (command.text === "help" || command.command === "/roster-help") {
     return { response_type: "ephemeral", text: helpText() };
   }
   if (command.command === "/roster-share") return handleRosterShare(command);
   if (command.command === "/my-roster") return handleMyRoster(command);
+  if (command.command === "/perdiem-report") return handlePerDiemReport(command);
   if (command.command === "/layover") return handleLayover(command);
   return { response_type: "ephemeral", text: helpText() };
 }

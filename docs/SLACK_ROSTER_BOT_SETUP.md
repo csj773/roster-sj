@@ -9,6 +9,7 @@ This MVP adds Slack slash commands for roster sharing and layover lookup.
 3. Add slash commands:
    - `/roster-share`
    - `/my-roster`
+   - `/perdiem-report`
    - `/layover`
 4. Set each request URL to:
 
@@ -118,6 +119,13 @@ Look up only your own roster:
 /my-roster HNL
 ```
 
+Post a monthly PerDiem report back to Slack:
+
+```text
+/perdiem-report
+/perdiem-report 2026-07
+```
+
 Choose start date and range:
 
 ```text
@@ -129,6 +137,9 @@ Choose start date and range:
 The `/my-roster` command returns only the signed-in Slack user's linked roster.
 The `/layover` command returns that user's own roster plus rosters shared with
 that Firebase user through `roster_shares`.
+The `/perdiem-report` command queues the separate
+`monthly-perdiem-slack-report.yml` workflow and posts the user's Firestore
+`Perdiem` rows back to Slack instead of sending email.
 
 ## Firestore Collections
 
