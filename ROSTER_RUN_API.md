@@ -268,6 +268,9 @@ Slack commands:
 /roster-share link-me
 /roster-share import webcal://your-private-calendar-url
 /roster-share import friend@example.com webcal://your-private-calendar-url
+/my-roster
+/my-roster HNL
+/my-roster HNL 2026-07-22 14
 /layover HNL
 /layover HNL 2026-07-22 14
 ```

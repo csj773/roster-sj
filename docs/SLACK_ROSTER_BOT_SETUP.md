@@ -8,6 +8,7 @@ This MVP adds Slack slash commands for roster sharing and layover lookup.
 2. Create a Slack app for the crew workspace.
 3. Add slash commands:
    - `/roster-share`
+   - `/my-roster`
    - `/layover`
 4. Set each request URL to:
 
@@ -110,14 +111,24 @@ Look up shared layover crew:
 /layover HNL
 ```
 
+Look up only your own roster:
+
+```text
+/my-roster
+/my-roster HNL
+```
+
 Choose start date and range:
 
 ```text
+/my-roster 2026-07-22 14
+/my-roster HNL 2026-07-22 14
 /layover HNL 2026-07-22 14
 ```
 
-The command returns the signed-in Slack user's own roster plus rosters shared
-with that Firebase user through `roster_shares`.
+The `/my-roster` command returns only the signed-in Slack user's linked roster.
+The `/layover` command returns that user's own roster plus rosters shared with
+that Firebase user through `roster_shares`.
 
 ## Firestore Collections
 

@@ -856,6 +856,49 @@ async function layoverItemsFor(uid, { station, startDate, days }, command = {}) 
   });
 }
 
+function dedupeRosterItems(items) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = [
+      item.ownerUid,
+      dateSortKey(item.date),
+      item.stdl,
+      item.stal,
+      item.activity,
+      item.from,
+      item.to,
+    ].join("|");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function myRosterItemsFor(uid, { station, startDate, days }) {
+  const owner = { uid, relation: "self", scope: "full", ...(await publicUser(uid)) };
+  const endDate = addDays(startDate, days - 1);
+  const startKey = dateSortKey(startDate);
+  const endKey = dateSortKey(endDate);
+  const nested = await Promise.all(
+    SHARE_ROSTER_COLLECTIONS.map(async (collectionName) => {
+      const snap = await db().collection(collectionName).where("owner", "==", uid).get();
+      return snap.docs
+        .map((doc) => rosterItem(doc, owner))
+        .filter((item) => item.date && item.activity)
+        .filter((item) => {
+          const key = dateSortKey(item.date);
+          return key >= startKey && key <= endKey;
+        })
+        .filter((item) => !station || item.from === station || item.to === station);
+    })
+  );
+  return dedupeRosterItems(nested.flat()).sort((a, b) => {
+    const left = `${dateSortKey(a.date)}_${a.stdl}_${a.activity}_${a.from}_${a.to}`;
+    const right = `${dateSortKey(b.date)}_${b.stdl}_${b.activity}_${b.from}_${b.to}`;
+    return left.localeCompare(right);
+  });
+}
+
 function helpText() {
   return [
     "*Roster Slack commands*",
@@ -864,6 +907,8 @@ function helpText() {
     "`/roster-share link-me` - link your Slack user to the default Firebase roster user",
     "`/roster-share import webcal://...` - import your personal iCal roster privately",
     "`/roster-share import friend@example.com webcal://...` - link that Slack user to an email owner and import",
+    "`/my-roster` - show only your roster for today + 30 days",
+    "`/my-roster HNL 2026-07-22 14` - show only your roster with optional station/date/days",
     "`/layover HNL` - show shared HNL crew for today + 30 days",
     "`/layover HNL 2026-07-22 14` - choose start date and days",
   ].join("\n");
@@ -1035,6 +1080,35 @@ function parseLayoverText(text) {
   return { station, startDate, days };
 }
 
+function parseMyRosterText(text) {
+  const parts = cleanText(text, 200).split(/\s+/).filter(Boolean);
+  let station = "";
+  let startDate = todaySeoul();
+  let days = 30;
+
+  for (const part of parts) {
+    const date = cleanDate(part);
+    const number = Number.parseInt(part, 10);
+    if (date) {
+      startDate = date;
+    } else if (/^\d{1,3}$/.test(part) && !Number.isNaN(number)) {
+      days = Math.min(Math.max(number, 1), 30);
+    } else if (!station) {
+      station = upper(part);
+    }
+  }
+
+  return { station, startDate, days };
+}
+
+function rosterLine(item, { includeName = false } = {}) {
+  const route = [item.from, item.to].filter(Boolean).join("-");
+  const time = item.stdl || item.stal || "";
+  const name = includeName ? `${item.crewName || item.ownerUid}: ` : "";
+  const crew = item.crewArray?.length ? ` | Crew: ${item.crewArray.join(", ")}` : "";
+  return `- ${item.date} ${time} ${name}${item.activity} ${route}${crew}`.trim();
+}
+
 function layoverResponseText({ station, startDate, days, items }) {
   if (!station) return "Usage: `/layover HNL` or `/layover HNL 2026-07-22 14`";
   if (!items.length) {
@@ -1042,14 +1116,21 @@ function layoverResponseText({ station, startDate, days, items }) {
   }
 
   const lines = items.slice(0, 30).map((item) => {
-    const route = [item.from, item.to].filter(Boolean).join("-");
-    const time = item.stdl || item.stal || "";
-    const name = item.crewName || item.ownerUid;
-    const crew = item.crewArray?.length ? ` | Crew: ${item.crewArray.join(", ")}` : "";
-    return `- ${item.date} ${time} ${name}: ${item.activity} ${route}${crew}`.trim();
+    return rosterLine(item, { includeName: true });
   });
   const suffix = items.length > 30 ? `\n…and ${items.length - 30} more` : "";
   return `*${station} shared layover crew* (${startDate}, ${days} day(s))\n${lines.join("\n")}${suffix}`;
+}
+
+function myRosterResponseText({ station, startDate, days, items }) {
+  const stationText = station ? ` ${station}` : "";
+  if (!items.length) {
+    return `No personal roster found${stationText} from ${startDate} for ${days} day(s).`;
+  }
+
+  const lines = items.slice(0, 40).map((item) => rosterLine(item));
+  const suffix = items.length > 40 ? `\n…and ${items.length - 40} more` : "";
+  return `*My roster${stationText}* (${startDate}, ${days} day(s))\n${lines.join("\n")}${suffix}`;
 }
 
 async function handleLayover(command) {
@@ -1066,11 +1147,29 @@ async function handleLayover(command) {
   };
 }
 
+async function handleMyRoster(command) {
+  const firebaseUid = await linkedFirebaseUid(command, { allowDefault: false });
+  if (!firebaseUid) {
+    return {
+      response_type: "ephemeral",
+      text: `${notLinkedText(command)}\n\nUse \`/roster-share link-me\` first, then run \`/my-roster\`.`,
+    };
+  }
+
+  const parsed = parseMyRosterText(command.text);
+  const items = await myRosterItemsFor(firebaseUid, parsed);
+  return {
+    response_type: "ephemeral",
+    text: myRosterResponseText({ ...parsed, items }),
+  };
+}
+
 async function handleCommand(command) {
   if (command.text === "help" || command.command === "/roster-help") {
     return { response_type: "ephemeral", text: helpText() };
   }
   if (command.command === "/roster-share") return handleRosterShare(command);
+  if (command.command === "/my-roster") return handleMyRoster(command);
   if (command.command === "/layover") return handleLayover(command);
   return { response_type: "ephemeral", text: helpText() };
 }
