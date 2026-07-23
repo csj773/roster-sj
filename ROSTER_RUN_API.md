@@ -219,6 +219,9 @@ Firestore collections used:
 
 Slack slash commands can create roster share invite links and look up shared
 layover crew without building additional FlutterFlow pages.
+The `/roster-share` response includes copy-ready text for Slack DM/channel
+sharing and a `mailto:` button so the user can send the invite link through
+their existing Gmail/Yahoo/Mail app without Resend domain verification.
 
 Endpoint:
 
@@ -230,6 +233,7 @@ Slack commands:
 
 ```text
 /roster-share
+/roster-share friend@example.com
 /roster-share import webcal://your-private-calendar-url
 /layover HNL
 /layover HNL 2026-07-22 14

@@ -152,6 +152,35 @@ function inviteUrl(code) {
   return `${appBaseUrl()}${path}?invite=${encodeURIComponent(code)}`;
 }
 
+function mailtoInviteUrl({ inviteUrl: url, ownerName = "", recipientEmail = "" }) {
+  const owner = cleanText(ownerName || "Roster Share", 120);
+  const subject = "Roster Share 참여 링크";
+  const body = [
+    `${owner} 님이 Roster Share에 초대했습니다.`,
+    "",
+    "아래 링크를 열어서 roster share를 수락해 주세요.",
+    url,
+  ].join("\n");
+  const params = new URLSearchParams({
+    subject,
+    body,
+  });
+  const recipient = cleanText(recipientEmail, 240);
+  return `mailto:${encodeURIComponent(recipient)}?${params.toString()}`;
+}
+
+function inviteShareText(url) {
+  return [
+    "Roster Share 참여 링크입니다.",
+    "아래 링크를 열어서 roster share를 수락해 주세요.",
+    url,
+  ].join("\n");
+}
+
+function looksLikeEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanText(value, 240));
+}
+
 async function dispatchIcalImportWorkflow({ calendarUrl, firebaseUid, owner }) {
   const token = process.env.GITHUB_TOKEN || "";
   if (!token) return { dispatched: false };
@@ -539,6 +568,7 @@ function helpText() {
   return [
     "*Roster Slack commands*",
     "`/roster-share` - create a Roster Share invite link",
+    "`/roster-share friend@example.com` - create an invite link with an email-compose button",
     "`/roster-share import webcal://...` - import your personal iCal roster privately",
     "`/layover HNL` - show shared HNL crew for today + 7 days",
     "`/layover HNL 2026-07-22 14` - choose start date and days",
@@ -577,21 +607,30 @@ async function handleRosterShare(command) {
     return handleRosterImport(command, firebaseUid);
   }
 
-  const scope = cleanText(args[0] || "layover_only", 40) || "layover_only";
+  const recipientEmail = looksLikeEmail(args[0]) ? cleanText(args[0], 240) : "";
+  const scopeArgIndex = recipientEmail ? 1 : 0;
+  const scope = cleanText(args[scopeArgIndex] || "layover_only", 40) || "layover_only";
   const invite = await createInviteForUid(firebaseUid, {
     scope,
     note: `Created from Slack ${command.teamDomain || command.teamId} #${command.channelName || command.channelId}`,
   });
+  const shareText = inviteShareText(invite.inviteUrl);
+  const mailUrl = mailtoInviteUrl({
+    inviteUrl: invite.inviteUrl,
+    ownerName: invite.owner.displayName || invite.owner.email || command.userName,
+    recipientEmail,
+  });
+  const emailHint = recipientEmail ? `\nEmail recipient: \`${recipientEmail}\`` : "";
 
   return {
     response_type: "ephemeral",
-    text: `Roster Share invite created: ${invite.inviteUrl}`,
+    text: `Roster Share invite created: ${invite.inviteUrl}\n\n${shareText}`,
     blocks: [
       {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*Roster Share invite created*\nScope: \`${scope}\`\n${invite.inviteUrl}`,
+          text: `*Roster Share invite created*\nScope: \`${scope}\`${emailHint}\n\n*Slack DM/채널에 아래 문구를 복사해서 보내세요:*\n\`\`\`${shareText}\`\`\``,
         },
       },
       {
@@ -601,6 +640,11 @@ async function handleRosterShare(command) {
             type: "button",
             text: { type: "plain_text", text: "Open invite" },
             url: invite.inviteUrl,
+          },
+          {
+            type: "button",
+            text: { type: "plain_text", text: "Send by email" },
+            url: mailUrl,
           },
         ],
       },
