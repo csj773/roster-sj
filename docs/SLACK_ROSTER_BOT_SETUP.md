@@ -139,8 +139,9 @@ The `/layover` command returns that user's own roster plus rosters shared with
 that Firebase user through `roster_shares`.
 The `/perdiem-report` command queues the separate
 `monthly-perdiem-slack-report.yml` workflow, builds the report from the user's
-Firestore `pdc` roster rows, and posts the result back to Slack instead of
-sending email.
+Firestore `pdc` roster rows, stores calculated rows under
+`Perdiem/{ownerUid}/items`, then posts the saved monthly result back to Slack
+instead of sending email.
 
 ## Firestore Collections
 

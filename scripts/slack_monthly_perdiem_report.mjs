@@ -5,6 +5,7 @@ import admin from "firebase-admin";
 import { generatePerDiemList } from "../perdiem.js";
 
 const PDC_COLLECTION = "pdc";
+const PERDIEM_COLLECTION = "Perdiem";
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const ROSTER_HEADERS = ["Date", "D/C", "C/I(L)", "C/O(L)", "Activity", "F", "From", "STD(L)", "STD(Z)", "To", "STA(L)", "STA(Z)", "BLH", "Crew"];
 
@@ -82,6 +83,25 @@ function dateSortKey(value) {
   return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
 }
 
+function safeDocIdPart(value) {
+  return String(value ?? "")
+    .trim()
+    .replace(/[^A-Za-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "blank";
+}
+
+function perDiemDocId(item, ownerUid) {
+  return [
+    ownerUid,
+    item.Year,
+    item.Month,
+    item.Date,
+    item.Activity,
+    item.From,
+    item.Destination,
+  ].map(safeDocIdPart).join("_");
+}
+
 function targetMonthYear() {
   const fallback = defaultTargetMonthYear();
   const month = Number(optionalEnv("PERDIEM_TARGET_MONTH") || fallback.month);
@@ -145,6 +165,69 @@ async function pdcRosterJsonPath(db, ownerUid) {
   const filePath = path.join(os.tmpdir(), `pdc-roster-${ownerUid.replace(/[^A-Za-z0-9_-]/g, "_")}.json`);
   fs.writeFileSync(filePath, JSON.stringify({ values }, null, 2), "utf-8");
   return { filePath, rowCount: values.length - 1 };
+}
+
+async function storePersonalPerDiemRows(db, rows, ownerUid, displayName) {
+  const ownerRef = db.collection(PERDIEM_COLLECTION).doc(safeDocIdPart(ownerUid));
+  const existingSnapshot = await ownerRef.collection("items").get();
+  for (const doc of existingSnapshot.docs) {
+    await doc.ref.delete();
+  }
+
+  let stored = 0;
+
+  for (const row of rows) {
+    const docId = perDiemDocId(row, ownerUid);
+    const data = {
+      ...row,
+      owner: ownerUid,
+      uid: ownerUid,
+      display_name: displayName,
+      source: "slack_pdc_perdiem",
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    const batch = db.batch();
+    batch.set(ownerRef, {
+      owner: ownerUid,
+      uid: ownerUid,
+      display_name: displayName,
+      source: "slack_pdc_perdiem",
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    batch.set(ownerRef.collection("items").doc(docId), data, { merge: true });
+    batch.set(db.collection(PERDIEM_COLLECTION).doc(docId), data, { merge: true });
+    await batch.commit();
+    stored += 1;
+  }
+
+  return stored;
+}
+
+async function storedPerDiemRowsForMonth(db, ownerUid, target) {
+  const snapshot = await db
+    .collection(PERDIEM_COLLECTION)
+    .doc(safeDocIdPart(ownerUid))
+    .collection("items")
+    .get();
+
+  return snapshot.docs
+    .map((doc) => doc.data())
+    .filter((row) => monthToNumber(row.Month) === target.month)
+    .filter((row) => String(row.Year || "").trim() === String(target.year))
+    .filter((row) => !["RI", "RO"].includes(cleanText(row.Activity, 20).toUpperCase()))
+    .map((row) => ({
+      Date: cleanText(row.Date, 20),
+      Activity: cleanText(row.Activity, 40),
+      From: cleanText(row.From, 10),
+      Destination: cleanText(row.Destination, 20),
+      StayHours: cleanText(row.StayHours, 20),
+      Rate: parseMoney(row.Rate),
+      Total: parseMoney(row.Total),
+      TransportFee: parseMoney(row.TransportFee),
+    }))
+    .sort((a, b) => `${dateSortKey(a.Date)}_${a.Activity}_${a.From}_${a.Destination}`.localeCompare(
+      `${dateSortKey(b.Date)}_${b.Activity}_${b.From}_${b.Destination}`
+    ));
 }
 
 function tableCell(value, width) {
@@ -225,24 +308,11 @@ async function main() {
     throw new Error(`No pdc roster rows found for owner ${ownerUid}`);
   }
 
-  const { filePath, rowCount } = await pdcRosterJsonPath(admin.firestore(), ownerUid);
-  const rows = (await generatePerDiemList(filePath, ownerUid))
-    .filter((row) => monthToNumber(row.Month) === target.month)
-    .filter((row) => String(row.Year || "").trim() === String(target.year))
-    .filter((row) => !["RI", "RO"].includes(cleanText(row.Activity, 20).toUpperCase()))
-    .map((row) => ({
-      Date: cleanText(row.Date, 20),
-      Activity: cleanText(row.Activity, 40),
-      From: cleanText(row.From, 10),
-      Destination: cleanText(row.Destination, 20),
-      StayHours: cleanText(row.StayHours, 20),
-      Rate: parseMoney(row.Rate),
-      Total: parseMoney(row.Total),
-      TransportFee: parseMoney(row.TransportFee),
-    }))
-    .sort((a, b) => `${dateSortKey(a.Date)}_${a.Activity}_${a.From}_${a.Destination}`.localeCompare(
-      `${dateSortKey(b.Date)}_${b.Activity}_${b.From}_${b.Destination}`
-    ));
+  const db = admin.firestore();
+  const { filePath, rowCount } = await pdcRosterJsonPath(db, ownerUid);
+  const calculatedRows = await generatePerDiemList(filePath, ownerUid);
+  const storedRows = await storePersonalPerDiemRows(db, calculatedRows, ownerUid, displayName);
+  const rows = await storedPerDiemRowsForMonth(db, ownerUid, target);
 
   const totalPerdiem = rows.reduce((sum, row) => sum + row.Total, 0);
   const totalTransportFee = rows.reduce((sum, row) => sum + row.TransportFee, 0);
@@ -257,7 +327,7 @@ async function main() {
     `${displayName}: ${formatKoreanMonth(target)} Prediem=${totalPerdiem.toFixed(2)}/Transport fee=${totalTransportFee.toFixed(0)}`,
     "",
     `created at: ${formatKstTimestamp()} KST`,
-    `source: Firestore ${PDC_COLLECTION} roster rows=${rowCount}, Month=${monthName}, Year=${target.year}`,
+    `source: Firestore ${PDC_COLLECTION} -> ${PERDIEM_COLLECTION}/${safeDocIdPart(ownerUid)}/items, roster rows=${rowCount}, stored=${storedRows}, Month=${monthName}, Year=${target.year}`,
   ].join("\n");
 
   await postSlack(text);
