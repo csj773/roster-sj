@@ -299,10 +299,47 @@ async function clickNextRosterPeriod(page) {
 
   for (const frame of page.frames()) {
     const submitted = await frame.evaluate(() => {
+      const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const pad2 = (value) => String(value).padStart(2, "0");
+      const lastDayOfMonth = (year, monthIndex) => new Date(year, monthIndex + 1, 0).getDate();
+      const optionRangeText = (year, monthIndex) =>
+        `${year}-${pad2(monthIndex + 1)}-01|${year}-${pad2(monthIndex + 1)}-${pad2(lastDayOfMonth(year, monthIndex))}`;
+
+      const periodSelect = document.querySelector("#ctl00_Main_periodSelect, select[name='ctl00$Main$periodSelect']");
+      if (periodSelect) {
+        const selected = periodSelect.value || "";
+        const match = selected.match(/^(\d{4})-(\d{2})-\d{2}\|/);
+        if (match) {
+          const currentYear = Number(match[1]);
+          const currentMonthIndex = Number(match[2]) - 1;
+          const nextMonthIndex = (currentMonthIndex + 1) % 12;
+          const nextYear = currentMonthIndex === 11 ? currentYear + 1 : currentYear;
+          const nextValue = optionRangeText(nextYear, nextMonthIndex);
+          const option = Array.from(periodSelect.options).find((item) => item.value === nextValue);
+          if (option) {
+            periodSelect.value = nextValue;
+            periodSelect.dispatchEvent(new Event("change", { bubbles: true }));
+            const periodButton = document.querySelector("#ctl00_Main_period, input[name='ctl00$Main$period']");
+            if (periodButton) {
+              periodButton.click();
+            } else {
+              (periodSelect.form || document.forms[0])?.submit();
+            }
+            return {
+              method: "periodSelectSubmit",
+              previousValue: selected,
+              nextValue,
+              nextLabel: option.text,
+              selectId: periodSelect.id,
+              selectName: periodSelect.name,
+            };
+          }
+        }
+      }
+
       const hidden = document.querySelector("#ctl00_Main_dateRangeHidden, input[name='ctl00$Main$dateRangeHidden']");
       if (!hidden) return null;
 
-      const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
       const parseRange = (value) => {
         const match = String(value || "").match(/(\d{2})([A-Za-z]{3})(\d{2})\s*-\s*(\d{2})([A-Za-z]{3})(\d{2})/);
         if (!match) return null;
@@ -310,8 +347,6 @@ async function clickNextRosterPeriod(page) {
         if (monthIndex < 0) return null;
         return { year: 2000 + Number(match[3]), monthIndex };
       };
-      const pad2 = (value) => String(value).padStart(2, "0");
-      const lastDayOfMonth = (year, monthIndex) => new Date(year, monthIndex + 1, 0).getDate();
       const current = parseRange(hidden.value);
       if (!current) return null;
 
