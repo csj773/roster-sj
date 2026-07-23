@@ -373,67 +373,6 @@ async function clickNextRosterPeriod(page) {
   return null;
 }
 
-async function collectNextRosterPeriodCandidates(page) {
-  const diagnostics = [];
-  for (const frame of page.frames()) {
-    const candidates = await frame.evaluate(() => {
-      const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
-      return Array.from(document.querySelectorAll("a,button,input,[role='button'],[onclick],img"))
-        .slice(0, 120)
-        .map((element) => ({
-          text: normalize(element.innerText || element.textContent || element.value || "").slice(0, 80),
-          aria: normalize(element.getAttribute("aria-label") || "").slice(0, 80),
-          title: normalize(element.getAttribute("title") || "").slice(0, 80),
-          alt: normalize(element.getAttribute("alt") || "").slice(0, 80),
-          id: normalize(element.getAttribute("id") || "").slice(0, 120),
-          name: normalize(element.getAttribute("name") || "").slice(0, 120),
-          className: normalize(element.getAttribute("class") || "").slice(0, 120),
-          src: normalize(element.getAttribute("src") || "").slice(0, 160),
-          href: normalize(element.getAttribute("href") || "").slice(0, 160),
-          onclick: normalize(element.getAttribute("onclick") || "").slice(0, 160),
-        }))
-        .filter((item) => Object.values(item).some(Boolean));
-    });
-    diagnostics.push({ url: frame.url(), candidates });
-  }
-  return diagnostics;
-}
-
-async function collectRosterFormState(page) {
-  const states = [];
-  for (const frame of page.frames()) {
-    const state = await frame.evaluate(() => {
-      const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
-      const fields = Array.from(document.querySelectorAll("input,select,textarea"))
-        .map((element) => ({
-          tag: element.tagName.toLowerCase(),
-          type: normalize(element.getAttribute("type") || ""),
-          id: normalize(element.getAttribute("id") || ""),
-          name: normalize(element.getAttribute("name") || ""),
-          value: normalize(element.value || "").slice(0, 120),
-          checked: Boolean(element.checked),
-          selectedText: element.tagName.toLowerCase() === "select"
-            ? normalize(element.options[element.selectedIndex]?.text || "")
-            : "",
-        }))
-        .filter((item) =>
-          !/^__VIEWSTATE/.test(item.id) &&
-          !/^__VIEWSTATE/.test(item.name) &&
-          !/^__EVENTVALIDATION/.test(item.id) &&
-          !/^__EVENTVALIDATION/.test(item.name)
-        );
-      return {
-        url: location.href,
-        title: document.title,
-        bodyStart: normalize(document.body?.innerText || "").slice(0, 300),
-        fields,
-      };
-    });
-    states.push(state);
-  }
-  return states;
-}
-
 async function extractRosterAcrossPeriods(page, periodCount = 2) {
   const allRows = [];
   let header = null;
@@ -458,16 +397,12 @@ async function extractRosterAcrossPeriods(page, periodCount = 2) {
       previousSignature = signature;
     } else {
       console.log(`ℹ️ Roster period ${period + 1}/${periodCount}: 데이터 없음`);
-      const formState = await collectRosterFormState(page);
-      console.log(`🔎 Roster form state: ${JSON.stringify(formState).slice(0, 6000)}`);
     }
 
     if (period >= periodCount - 1) break;
     const clicked = await clickNextRosterPeriod(page);
     if (!clicked) {
       console.log("ℹ️ 다음 Roster period 버튼을 찾지 못해 현재까지 추출한 데이터만 사용");
-      const diagnostics = await collectNextRosterPeriodCandidates(page);
-      console.log(`🔎 다음 period 후보: ${JSON.stringify(diagnostics).slice(0, 4000)}`);
       break;
     }
     console.log(`✅ 다음 Roster period 이동 클릭: ${JSON.stringify(clicked)}`);
