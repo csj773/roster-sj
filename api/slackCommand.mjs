@@ -840,7 +840,7 @@ function helpText() {
     "`/roster-share link-me` - link your Slack user to the default Firebase roster user",
     "`/roster-share import webcal://...` - import your personal iCal roster privately",
     "`/roster-share import friend@example.com webcal://...` - link that Slack user to an email owner and import",
-    "`/layover HNL` - show shared HNL crew for today + 7 days",
+    "`/layover HNL` - show shared HNL crew for today + 30 days",
     "`/layover HNL 2026-07-22 14` - choose start date and days",
   ].join("\n");
 }
@@ -1007,7 +1007,7 @@ function parseLayoverText(text) {
   const parts = cleanText(text, 200).split(/\s+/).filter(Boolean);
   const station = upper(parts[0] || "");
   const startDate = cleanDate(parts[1]) || todaySeoul();
-  const days = Math.min(Math.max(Number.parseInt(parts[2] || "7", 10) || 7, 1), 21);
+  const days = Math.min(Math.max(Number.parseInt(parts[2] || "30", 10) || 30, 1), 30);
   return { station, startDate, days };
 }
 
