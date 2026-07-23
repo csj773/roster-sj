@@ -364,6 +364,41 @@ async function collectNextRosterPeriodCandidates(page) {
   return diagnostics;
 }
 
+async function collectRosterFormState(page) {
+  const states = [];
+  for (const frame of page.frames()) {
+    const state = await frame.evaluate(() => {
+      const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
+      const fields = Array.from(document.querySelectorAll("input,select,textarea"))
+        .map((element) => ({
+          tag: element.tagName.toLowerCase(),
+          type: normalize(element.getAttribute("type") || ""),
+          id: normalize(element.getAttribute("id") || ""),
+          name: normalize(element.getAttribute("name") || ""),
+          value: normalize(element.value || "").slice(0, 120),
+          checked: Boolean(element.checked),
+          selectedText: element.tagName.toLowerCase() === "select"
+            ? normalize(element.options[element.selectedIndex]?.text || "")
+            : "",
+        }))
+        .filter((item) =>
+          !/^__VIEWSTATE/.test(item.id) &&
+          !/^__VIEWSTATE/.test(item.name) &&
+          !/^__EVENTVALIDATION/.test(item.id) &&
+          !/^__EVENTVALIDATION/.test(item.name)
+        );
+      return {
+        url: location.href,
+        title: document.title,
+        bodyStart: normalize(document.body?.innerText || "").slice(0, 300),
+        fields,
+      };
+    });
+    states.push(state);
+  }
+  return states;
+}
+
 async function extractRosterAcrossPeriods(page, periodCount = 2) {
   const allRows = [];
   let header = null;
@@ -388,6 +423,8 @@ async function extractRosterAcrossPeriods(page, periodCount = 2) {
       previousSignature = signature;
     } else {
       console.log(`ℹ️ Roster period ${period + 1}/${periodCount}: 데이터 없음`);
+      const formState = await collectRosterFormState(page);
+      console.log(`🔎 Roster form state: ${JSON.stringify(formState).slice(0, 6000)}`);
     }
 
     if (period >= periodCount - 1) break;
