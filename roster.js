@@ -222,6 +222,124 @@ async function extractRosterRaw(page) {
   return fallback;
 }
 
+function looksLikeRosterHeader(row) {
+  return ["Date", "Activity", "From", "To"].every(header =>
+    row.some(cell => cell === header || cell.includes(header))
+  );
+}
+
+function rosterRowsFromRaw(rawRows) {
+  const rosterHeaderIndex = rawRows.findIndex(looksLikeRosterHeader);
+  return rosterHeaderIndex >= 0 ? rawRows.slice(rosterHeaderIndex) : rawRows;
+}
+
+function rosterRowsSignature(rows) {
+  return rows
+    .slice(0, 12)
+    .map(row => row.map(cell => String(cell || "").trim()).join("|"))
+    .join("\n");
+}
+
+async function clickNextRosterPeriod(page) {
+  for (const frame of page.frames()) {
+    const clicked = await frame.evaluate(() => {
+      const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
+      const isVisible = (element) => {
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      };
+      const candidates = Array.from(document.querySelectorAll("a,button,input,[role='button'],[onclick],img"))
+        .filter(isVisible)
+        .map((element) => {
+          const text = normalize(element.innerText || element.textContent || element.value || "");
+          const aria = normalize(element.getAttribute("aria-label") || "");
+          const title = normalize(element.getAttribute("title") || "");
+          const alt = normalize(element.getAttribute("alt") || "");
+          const id = normalize(element.getAttribute("id") || "");
+          const name = normalize(element.getAttribute("name") || "");
+          const className = normalize(element.getAttribute("class") || "");
+          const href = normalize(element.getAttribute("href") || "");
+          const onclick = normalize(element.getAttribute("onclick") || "");
+          const combined = `${text} ${aria} ${title} ${alt} ${id} ${name} ${className} ${href} ${onclick}`.toLowerCase();
+          const label = `${text} ${aria} ${title} ${alt}`.trim();
+          let score = 0;
+          if (/^(>|›|»|next|next month|다음|익월)$/i.test(label)) score += 50;
+          if (/\b(next|nextmonth|monthnext)\b/i.test(combined)) score += 35;
+          if (/다음|익월|이후월|다음달/.test(combined)) score += 35;
+          if (/(^|\s)(>|›|»)(\s|$)/.test(label)) score += 20;
+          if (/prev|previous|back|before|이전|전월|logout|home|today/.test(combined)) score -= 100;
+          return { element, score, text, aria, title, alt, id, name, className, href, onclick };
+        })
+        .filter(item => item.score > 0)
+        .sort((a, b) => b.score - a.score);
+
+      const target = candidates[0];
+      if (!target) return null;
+      target.element.scrollIntoView({ block: "center", inline: "center" });
+      target.element.click();
+      return {
+        score: target.score,
+        text: target.text,
+        aria: target.aria,
+        title: target.title,
+        alt: target.alt,
+        id: target.id,
+        name: target.name,
+        className: target.className,
+        href: target.href,
+        onclick: target.onclick,
+      };
+    });
+
+    if (clicked) return clicked;
+  }
+
+  return null;
+}
+
+async function extractRosterAcrossPeriods(page, periodCount = 2) {
+  const allRows = [];
+  let header = null;
+  let previousSignature = "";
+
+  for (let period = 0; period < periodCount; period += 1) {
+    await sleep(3000);
+    const raw = await extractRosterRaw(page);
+    const rows = rosterRowsFromRaw(raw);
+    if (rows.length >= 2) {
+      const signature = rosterRowsSignature(rows);
+      if (period === 0 || signature !== previousSignature) {
+        if (!header) {
+          header = rows[0];
+          allRows.push(rows[0]);
+        }
+        allRows.push(...rows.slice(1));
+        console.log(`✅ Roster period ${period + 1}/${periodCount}: ${rows.length - 1}행 추출`);
+      } else {
+        console.log(`ℹ️ Roster period ${period + 1}/${periodCount}: 이전 period와 동일하여 건너뜀`);
+      }
+      previousSignature = signature;
+    } else {
+      console.log(`ℹ️ Roster period ${period + 1}/${periodCount}: 데이터 없음`);
+    }
+
+    if (period >= periodCount - 1) break;
+    const clicked = await clickNextRosterPeriod(page);
+    if (!clicked) {
+      console.log("ℹ️ 다음 Roster period 버튼을 찾지 못해 현재까지 추출한 데이터만 사용");
+      break;
+    }
+    console.log(`✅ 다음 Roster period 이동 클릭: ${JSON.stringify(clicked)}`);
+    await Promise.race([
+      page.waitForNavigation({ waitUntil: "networkidle0", timeout: 12000 }).catch(() => null),
+      sleep(5000),
+    ]);
+  }
+
+  return allRows;
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -307,14 +425,8 @@ function sleep(ms) {
 
   // ------------------- Roster 데이터 추출 -------------------
   console.log("🚀 Roster 데이터 추출");
-  await sleep(3000);
-  const rosterRaw = await extractRosterRaw(page);
-  const looksLikeRosterHeader = (row) =>
-    ["Date", "Activity", "From", "To"].every(header =>
-      row.some(cell => cell === header || cell.includes(header))
-    );
-  const rosterHeaderIndex = rosterRaw.findIndex(looksLikeRosterHeader);
-  const rosterRows = rosterHeaderIndex >= 0 ? rosterRaw.slice(rosterHeaderIndex) : rosterRaw;
+  const rosterPeriodCount = Number.parseInt(process.env.ROSTER_PERIODS_TO_EXTRACT || "2", 10);
+  const rosterRows = await extractRosterAcrossPeriods(page, Number.isFinite(rosterPeriodCount) ? rosterPeriodCount : 2);
   if (rosterRows.length < 2) { console.error("❌ Roster 데이터 비어 있음"); await browser.close(); return; }
   console.log(`✅ Roster 데이터 ${rosterRows.length - 1}행 추출 완료`);
 
@@ -439,6 +551,13 @@ function sleep(ms) {
   const dedupedRows = Array.from(mapByKey.values());
   values = [headers, ...dedupedRows];
   console.log("✅ CSV/JSON 저장 전 중복 제거 완료. 최종 행 수:", values.length - 1);
+  const monthSummary = values.slice(1).reduce((summary, row) => {
+    const { Year, Month } = resolvedYearMonth(resolvedDateForRow(row));
+    const key = `${Year || "Unknown"}-${Month || "Unknown"}`;
+    summary[key] = (summary[key] || 0) + 1;
+    return summary;
+  }, {});
+  console.log(`📆 Roster 월별 추출 요약: ${JSON.stringify(monthSummary)}`);
 
   await browser.close();
 
