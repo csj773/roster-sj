@@ -128,9 +128,13 @@ function parseIcsDate(value) {
   const text = cleanText(value, 40);
   const match = text.match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2}))?/);
   if (!match) return { date: "", time: "" };
+  const iso = match[4]
+    ? `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:00.000Z`
+    : `${match[1]}-${match[2]}-${match[3]}T00:00:00.000Z`;
   return {
     date: `${match[1]}.${match[2]}.${match[3]}`,
     time: match[4] ? `${match[4]}:${match[5]}` : "",
+    iso,
   };
 }
 
@@ -152,6 +156,22 @@ function timeWithDateOffset(start, end) {
   return startMinutes !== null && endMinutes !== null && endMinutes <= startMinutes
     ? `${end.time}+1`
     : end.time;
+}
+
+function compactTimeWithOffset(value) {
+  const match = cleanText(value, 40).match(/^(\d{1,2}):(\d{2})([+-]\d+)?$/);
+  if (!match) return cleanText(value, 40);
+  return `${match[1].padStart(2, "0")}${match[2]}${match[3] || ""}`;
+}
+
+function perDiemMarkers(route, end) {
+  const from = cleanText(route.from, 10).toUpperCase();
+  const to = cleanText(route.to, 10).toUpperCase();
+  const arrivalIso = end.iso || "";
+  return {
+    RI: from === "ICN" && to && to !== "ICN" ? arrivalIso : "",
+    RO: to === "ICN" && from && from !== "ICN" ? arrivalIso : "",
+  };
 }
 
 function firstRoute(text) {
@@ -197,6 +217,8 @@ function icsEventToPdcDoc(event, owner) {
   const start = parseIcsDate(event.DTSTART?.value || "");
   const end = parseIcsDate(event.DTEND?.value || "");
   const endTime = timeWithDateOffset(start, end);
+  const startCompact = compactTimeWithOffset(start.time);
+  const endCompact = compactTimeWithOffset(endTime);
   const route = firstRoute(`${summary}\n${description}\n${location}`);
   const activity = activityFromIcs(summary, description);
   if (!start.date || !activity) return null;
@@ -205,6 +227,7 @@ function icsEventToPdcDoc(event, owner) {
   const year = start.date.slice(0, 4);
   const month = Number.parseInt(start.date.slice(5, 7), 10);
   const { crew, crewArray } = crewFromIcsDescription(description);
+  const markers = perDiemMarkers(route, end);
 
   return {
     owner: owner.uid,
@@ -214,10 +237,18 @@ function icsEventToPdcDoc(event, owner) {
     Activity: activity,
     From: route.from,
     To: route.to,
+    STD: start.iso || "",
+    STA: end.iso || "",
     STDL: start.time,
     STAL: endTime,
-    STDZ: "",
-    STAZ: endTime,
+    STDZ: startCompact,
+    STAZ: endCompact,
+    "STD(L)": start.time,
+    "STA(L)": endTime,
+    "STD(Z)": startCompact,
+    "STA(Z)": endCompact,
+    RI: markers.RI,
+    RO: markers.RO,
     CIL: "",
     COL: "",
     DC: "",
