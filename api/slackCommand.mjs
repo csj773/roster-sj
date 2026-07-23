@@ -633,7 +633,38 @@ function isOffDuty(activity) {
   return /^(REST|OFF|OFFD|DAY OFF|DO|VAC|LEAVE|RSV)$/i.test(cleanText(activity, 40));
 }
 
-async function sharedOwnersFor(uid) {
+async function emailImportOwnersForSlackTeam(command) {
+  if (!command.teamId) return [];
+  const snap = await db()
+    .collection(SLACK_LINK_COLLECTION)
+    .where("slackTeamId", "==", command.teamId)
+    .get();
+
+  const owners = new Map();
+  for (const doc of snap.docs) {
+    const link = doc.data();
+    if (link.status === "disabled") continue;
+    const email = cleanText(link.recipientEmail || link.firebaseEmail || "", 240).toLowerCase();
+    const uidCandidates = [
+      cleanText(link.firebaseUid || link.uid || "", 160),
+      email,
+    ].filter(Boolean);
+    if (!email || !uidCandidates.length) continue;
+    for (const ownerUid of uidCandidates) {
+      owners.set(ownerUid, {
+        uid: ownerUid,
+        relation: "slack_email_import",
+        scope: "layover_only",
+        displayName: link.firebaseDisplayName || email,
+        email,
+      });
+    }
+  }
+
+  return [...owners.values()];
+}
+
+async function sharedOwnersFor(uid, command = {}) {
   const owners = new Map();
   owners.set(uid, { uid, relation: "self", scope: "full", ...(await publicUser(uid)) });
 
@@ -652,6 +683,10 @@ async function sharedOwnersFor(uid) {
       displayName: share.ownerDisplayName || "",
       email: share.ownerEmail || "",
     });
+  }
+
+  for (const owner of await emailImportOwnersForSlackTeam(command)) {
+    if (!owners.has(owner.uid)) owners.set(owner.uid, owner);
   }
 
   return [...owners.values()];
@@ -673,11 +708,11 @@ function rosterItem(doc, owner) {
   };
 }
 
-async function layoverItemsFor(uid, { station, startDate, days }) {
+async function layoverItemsFor(uid, { station, startDate, days }, command = {}) {
   const endDate = addDays(startDate, days - 1);
   const startKey = dateSortKey(startDate);
   const endKey = dateSortKey(endDate);
-  const owners = await sharedOwnersFor(uid);
+  const owners = await sharedOwnersFor(uid, command);
   const nested = await Promise.all(
     owners.flatMap((owner) =>
       SHARE_ROSTER_COLLECTIONS.map(async (collectionName) => {
@@ -900,7 +935,7 @@ async function handleLayover(command) {
   }
 
   const parsed = parseLayoverText(command.text);
-  const items = await layoverItemsFor(firebaseUid, parsed);
+  const items = await layoverItemsFor(firebaseUid, parsed, command);
   return {
     response_type: "ephemeral",
     text: layoverResponseText({ ...parsed, items }),
