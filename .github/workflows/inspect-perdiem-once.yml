@@ -1,5 +1,7 @@
 name: Inspect Slack PerDiem Once
 
+# Temporary one-shot verification workflow.
+
 on:
   push:
     branches: [main]
