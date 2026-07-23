@@ -123,15 +123,18 @@ function dateSortKey(value) {
 }
 
 function safeDocIdPart(value) {
-  return String(value ?? "")
+  const text = String(value ?? "")
     .trim()
-    .replace(/[^A-Za-z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "blank";
+    .replace(/[\/\\?#\[\]\x00-\x1F\x7F]+/g, "-")
+    .replace(/\s+/g, " ")
+    .slice(0, 200)
+    .trim();
+  return text && text !== "." && text !== ".." ? text : "blank";
 }
 
-function perDiemDocId(item, ownerUid) {
+function perDiemDocId(item, ownerKey) {
   return [
-    ownerUid,
+    ownerKey,
     item.Year,
     item.Month,
     item.Date,
@@ -206,9 +209,14 @@ function dedupeRosterRows(rows) {
 
 async function pdcRosterJsonPath(db, ownerUid) {
   const snapshot = await db.collection(PDC_COLLECTION).where("owner", "==", ownerUid).get();
-  const rows = snapshot.docs
+  const pdcDocs = snapshot.docs
     .map((doc) => doc.data())
-    .filter((doc) => cleanText(doc.Activity, 80))
+    .filter((doc) => cleanText(doc.Activity, 80));
+  const pdcUserName = pdcDocs
+    .map((doc) => firstText(doc.pdc_user_name, doc.display_name, doc.ownerDisplayName, doc.userName))
+    .find(Boolean) || "";
+
+  const rows = pdcDocs
     .filter((doc) => firstText(doc.From) && firstText(doc.To, doc.Destination))
     .sort((a, b) => {
       const left = `${dateSortKey(firstText(a.Date, a.DateRaw))}_${firstText(a.STDL, a["STD(L)"])}_${firstText(a.Activity)}`;
@@ -220,25 +228,64 @@ async function pdcRosterJsonPath(db, ownerUid) {
   const values = [ROSTER_HEADERS, ...withReturnDepartureOffsets(dedupeRosterRows(rows))];
   const filePath = path.join(os.tmpdir(), `pdc-roster-${ownerUid.replace(/[^A-Za-z0-9_-]/g, "_")}.json`);
   fs.writeFileSync(filePath, JSON.stringify({ values }, null, 2), "utf-8");
-  return { filePath, rowCount: values.length - 1 };
+  return { filePath, pdcUserName, rowCount: values.length - 1 };
 }
 
-async function storePersonalPerDiemRows(db, rows, ownerUid, displayName) {
-  const ownerRef = db.collection(PERDIEM_COLLECTION).doc(safeDocIdPart(ownerUid));
-  const existingSnapshot = await ownerRef.collection("items").get();
-  for (const doc of existingSnapshot.docs) {
+async function deleteQueryDocs(snapshot) {
+  for (const doc of snapshot.docs) {
     await doc.ref.delete();
   }
+}
+
+async function deleteExistingFlatSlackPerDiemRows(db, { ownerUid, pdcUserName }) {
+  const collection = db.collection(PERDIEM_COLLECTION);
+  const snapshots = [];
+  snapshots.push(await collection.where("owner", "==", ownerUid).get());
+  if (pdcUserName) snapshots.push(await collection.where("pdc_user_name", "==", pdcUserName).get());
+
+  const refs = new Map();
+  for (const snapshot of snapshots) {
+    for (const doc of snapshot.docs) {
+      const data = doc.data();
+      if (data?.source === "slack_pdc_perdiem" && data?.Date && data?.Activity) {
+        refs.set(doc.ref.path, doc.ref);
+      }
+    }
+  }
+
+  for (const ref of refs.values()) {
+    await ref.delete();
+  }
+
+  return refs.size;
+}
+
+async function storePersonalPerDiemRows(db, rows, { ownerUid, displayName, pdcUserName, ownerKey }) {
+  const ownerRef = db.collection(PERDIEM_COLLECTION).doc(ownerKey);
+  const existingSnapshot = await ownerRef.collection("items").get();
+  await deleteQueryDocs(existingSnapshot);
+  const legacyOwnerKey = safeDocIdPart(ownerUid);
+  if (legacyOwnerKey !== ownerKey) {
+    const legacySnapshot = await db
+      .collection(PERDIEM_COLLECTION)
+      .doc(legacyOwnerKey)
+      .collection("items")
+      .get();
+    await deleteQueryDocs(legacySnapshot);
+  }
+  await deleteExistingFlatSlackPerDiemRows(db, { ownerUid, pdcUserName });
 
   let stored = 0;
 
   for (const row of rows) {
-    const docId = perDiemDocId(row, ownerUid);
+    const docId = perDiemDocId(row, ownerKey);
     const data = {
       ...row,
       owner: ownerUid,
       uid: ownerUid,
       display_name: displayName,
+      pdc_user_name: pdcUserName,
+      perdiem_owner_key: ownerKey,
       source: "slack_pdc_perdiem",
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
@@ -247,6 +294,8 @@ async function storePersonalPerDiemRows(db, rows, ownerUid, displayName) {
       owner: ownerUid,
       uid: ownerUid,
       display_name: displayName,
+      pdc_user_name: pdcUserName,
+      perdiem_owner_key: ownerKey,
       source: "slack_pdc_perdiem",
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
@@ -259,10 +308,10 @@ async function storePersonalPerDiemRows(db, rows, ownerUid, displayName) {
   return stored;
 }
 
-async function storedPerDiemRowsForMonth(db, ownerUid, target) {
+async function storedPerDiemRowsForMonth(db, ownerKey, target) {
   const snapshot = await db
     .collection(PERDIEM_COLLECTION)
-    .doc(safeDocIdPart(ownerUid))
+    .doc(ownerKey)
     .collection("items")
     .get();
 
@@ -365,29 +414,36 @@ async function main() {
   }
 
   const db = admin.firestore();
-  const { filePath, rowCount } = await pdcRosterJsonPath(db, ownerUid);
+  const { filePath, pdcUserName, rowCount } = await pdcRosterJsonPath(db, ownerUid);
+  const reportName = pdcUserName || displayName;
+  const ownerKey = safeDocIdPart(reportName || ownerUid);
   const calculatedRows = await generateSlackPerDiemList(filePath);
-  const storedRows = await storePersonalPerDiemRows(db, calculatedRows, ownerUid, displayName);
-  const rows = await storedPerDiemRowsForMonth(db, ownerUid, target);
+  const storedRows = await storePersonalPerDiemRows(db, calculatedRows, {
+    ownerUid,
+    displayName: reportName,
+    pdcUserName,
+    ownerKey,
+  });
+  const rows = await storedPerDiemRowsForMonth(db, ownerKey, target);
 
   const totalPerdiem = rows.reduce((sum, row) => sum + row.Total, 0);
   const totalTransportFee = rows.reduce((sum, row) => sum + row.TransportFee, 0);
   const table = rows.length ? reportTable(rows) : "No PerDiem rows found.";
   const truncatedTable = table.length > 2500 ? `${table.slice(0, 2500)}\n...truncated` : table;
   const text = [
-    `*${displayName}*`,
+    `*${reportName}*`,
     `*${formatKoreanMonth(target)} PerDiem Report*`,
     "```",
     truncatedTable,
     "```",
-    `${displayName}: ${formatKoreanMonth(target)} Prediem=${totalPerdiem.toFixed(2)}/Transport fee=${totalTransportFee.toFixed(0)}`,
+    `${reportName}: ${formatKoreanMonth(target)} Prediem=${totalPerdiem.toFixed(2)}/Transport fee=${totalTransportFee.toFixed(0)}`,
     "",
     `created at: ${formatKstTimestamp()} KST`,
-    `source: Firestore ${PDC_COLLECTION} -> ${PERDIEM_COLLECTION}/${safeDocIdPart(ownerUid)}/items, roster rows=${rowCount}, stored=${storedRows}, Month=${monthName}, Year=${target.year}`,
+    `source: Firestore ${PDC_COLLECTION} -> ${PERDIEM_COLLECTION}/${ownerKey}/items, pdc_user_name=${pdcUserName || "blank"}, roster rows=${rowCount}, stored=${storedRows}, Month=${monthName}, Year=${target.year}`,
   ].join("\n");
 
   await postSlack(text);
-  console.log(`Posted Slack PerDiem report for ${ownerUid}: ${rows.length} row(s).`);
+  console.log(`Posted Slack PerDiem report for ${ownerUid} (${reportName}): ${rows.length} row(s).`);
 }
 
 main().catch(async (error) => {

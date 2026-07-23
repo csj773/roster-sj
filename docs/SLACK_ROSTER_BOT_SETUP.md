@@ -143,9 +143,11 @@ that Firebase user through `roster_shares`.
 The `/perdiem-report` command queues the separate
 `monthly-perdiem-slack-report.yml` workflow, builds the report from the user's
 Firestore `pdc` roster rows, stores calculated rows under
-`Perdiem/{ownerUid}/items`, then posts the saved monthly result back to Slack
-instead of sending email. Slack uses the separate `scripts/slack_perdiem.js`
-calculator so the existing `perdiem.js` behavior remains unchanged.
+`Perdiem/{pdc_user_name}/items`, removes previous Slack PerDiem rows for the
+same Firebase owner or `pdc_user_name`, then posts the saved monthly result back
+to Slack instead of sending email. Slack uses the separate
+`scripts/slack_perdiem.js` calculator so the existing `perdiem.js` behavior
+remains unchanged.
 
 ## Firestore Collections
 
