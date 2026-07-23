@@ -91,15 +91,25 @@ function compareHHMM(left, right) {
     (Number(rightMatch[1]) * 60 + Number(rightMatch[2]));
 }
 
-function arrivalTimeWithOffset({ from, to, departure, arrival }) {
-  const normalizedArrival = normalizePerDiemTime(arrival);
-  if (!normalizedArrival || /[+-]\d+$/.test(normalizedArrival)) return normalizedArrival;
-  const normalizedDeparture = normalizePerDiemTime(departure);
-  const comparison = compareHHMM(normalizedArrival, normalizedDeparture);
-  if (from && to && from !== to && comparison !== null && comparison <= 0) {
-    return `${normalizedArrival}+1`;
+function sameRosterDate(left, right) {
+  return dateSortKey(left) === dateSortKey(right);
+}
+
+function returnDepartureTimeWithOffset({ currentRow, previousRow }) {
+  const departure = normalizePerDiemTime(currentRow[8]);
+  if (!departure || /[+-]\d+$/.test(departure)) return departure;
+  if (!previousRow) return departure;
+
+  const from = currentRow[6];
+  const to = currentRow[9];
+  const previousTo = previousRow[9];
+  const previousArrival = previousRow[11];
+  if (to !== "ICN" || from !== previousTo || !sameRosterDate(currentRow[0], previousRow[0])) {
+    return departure;
   }
-  return normalizedArrival;
+
+  const comparison = compareHHMM(departure, previousArrival);
+  return comparison !== null && comparison <= 0 ? `${departure}+1` : departure;
 }
 
 function cleanText(value, maxLength = 200) {
@@ -159,10 +169,21 @@ function pdcRosterRow(doc) {
     normalizePerDiemTime(stdz),
     to,
     normalizePerDiemTime(stal),
-    arrivalTimeWithOffset({ from, to, departure: stdl, arrival: staz }),
+    normalizePerDiemTime(staz),
     firstText(doc.BLH),
     firstText(doc.Crew),
   ];
+}
+
+function withReturnDepartureOffsets(rows) {
+  return rows.map((row, index) => {
+    const adjusted = [...row];
+    adjusted[8] = returnDepartureTimeWithOffset({
+      currentRow: adjusted,
+      previousRow: index > 0 ? rows[index - 1] : null,
+    });
+    return adjusted;
+  });
 }
 
 function dedupeRosterRows(rows) {
@@ -196,7 +217,7 @@ async function pdcRosterJsonPath(db, ownerUid) {
     })
     .map(pdcRosterRow);
 
-  const values = [ROSTER_HEADERS, ...dedupeRosterRows(rows)];
+  const values = [ROSTER_HEADERS, ...withReturnDepartureOffsets(dedupeRosterRows(rows))];
   const filePath = path.join(os.tmpdir(), `pdc-roster-${ownerUid.replace(/[^A-Za-z0-9_-]/g, "_")}.json`);
   fs.writeFileSync(filePath, JSON.stringify({ values }, null, 2), "utf-8");
   return { filePath, rowCount: values.length - 1 };
