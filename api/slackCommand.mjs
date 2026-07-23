@@ -157,15 +157,16 @@ function mailInviteUrl({ inviteUrl: url, ownerName = "", recipientEmail = "" }) 
   const subject = "Roster Share 참여 링크";
   const statusUrl = `${url}${url.includes("?") ? "&" : "?"}mode=status`;
   const body = [
-    `${owner} 님이 Roster Share에 초대했습니다.`,
-    "",
-    "수락하려면 아래 링크를 열어주세요:",
     url,
     "",
-    "수락 여부를 확인하려면 아래 링크를 열어주세요:",
     statusUrl,
     "",
-    "메일 앱에서 링크가 바로 열리지 않으면 URL을 복사해서 브라우저에 붙여넣어 주세요.",
+    `${owner} 님이 Roster Share에 초대했습니다.`,
+    "",
+    "첫 번째 URL: 수락하기",
+    "두 번째 URL: 수락 여부 확인",
+    "",
+    "메일 앱에서 URL이 클릭되지 않으면 첫 번째 URL을 복사해서 브라우저 주소창에 붙여넣어 주세요.",
   ].join("\n");
   const params = new URLSearchParams({
     subject,
@@ -179,13 +180,12 @@ function mailInviteUrl({ inviteUrl: url, ownerName = "", recipientEmail = "" }) 
 function inviteShareText(url) {
   const statusUrl = `${url}${url.includes("?") ? "&" : "?"}mode=status`;
   return [
-    "Roster Share 참여 링크입니다.",
-    "",
-    "수락 링크:",
     url,
     "",
-    "수락 여부 확인 링크:",
     statusUrl,
+    "",
+    "첫 번째 URL: 수락하기",
+    "두 번째 URL: 수락 여부 확인",
   ].join("\n");
 }
 
