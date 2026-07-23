@@ -267,6 +267,7 @@ Slack commands:
 /roster-share friend@example.com
 /roster-share link-me
 /roster-share import webcal://your-private-calendar-url
+/roster-share import friend@example.com webcal://your-private-calendar-url
 /layover HNL
 /layover HNL 2026-07-22 14
 ```
@@ -278,6 +279,15 @@ duplicate key as the existing roster upload logic:
 `owner`, `Date`, `DC`, `Activity`, `From`, `To`. Imported events include
 `source: slack_ical`. The original calendar URL is used only for that import
 request and is not stored in Firestore.
+
+When an email is included in the import command, the Slack user is linked
+automatically to that email's accepted invite owner. If no accepted invite is
+found, the import uses a generated `guest_email_<email>` owner UID. This lets a
+friend import with one command after joining Slack:
+
+```text
+/roster-share import friend@example.com webcal://your-private-calendar-url
+```
 
 Required Vercel environment variable:
 

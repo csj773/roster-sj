@@ -169,6 +169,84 @@ async function linkSlackUserToDefaultUid(command) {
   };
 }
 
+function guestEmailUid(email) {
+  return `guest_email_${cleanText(email, 240).toLowerCase()}`.replace(/[^A-Za-z0-9_-]/g, "_");
+}
+
+function guestInviteUid(inviteCodeValue) {
+  return `guest_${cleanText(inviteCodeValue, 80)}`.replace(/[^A-Za-z0-9_-]/g, "_");
+}
+
+async function acceptedInviteForEmail(email) {
+  const normalizedEmail = cleanText(email, 240).toLowerCase();
+  if (!normalizedEmail) return null;
+
+  const snap = await db()
+    .collection(INVITE_COLLECTION)
+    .where("recipientEmail", "==", normalizedEmail)
+    .limit(10)
+    .get();
+
+  const accepted = snap.docs
+    .map((doc) => ({ code: doc.id, ...doc.data() }))
+    .filter((invite) => invite.confirmed === true || invite.confirmationStatus === "accepted")
+    .sort((a, b) => {
+      const left = a.acceptedAt?.toMillis?.() || a.confirmedAt?.toMillis?.() || 0;
+      const right = b.acceptedAt?.toMillis?.() || b.confirmedAt?.toMillis?.() || 0;
+      return right - left;
+    });
+
+  return accepted[0] || null;
+}
+
+async function resolveImportOwnerForEmail(command, email) {
+  const normalizedEmail = cleanText(email, 240).toLowerCase();
+  const invite = await acceptedInviteForEmail(normalizedEmail);
+  const firebaseUid = cleanText(invite?.acceptedByUid || "", 160) || (
+    invite ? guestInviteUid(invite.code) : guestEmailUid(normalizedEmail)
+  );
+  const displayName = normalizedEmail || command.userName || "Roster Share guest";
+  const linkId = slackLinkId(command.teamId, command.userId);
+
+  await db().collection("users").doc(firebaseUid).set({
+    uid: firebaseUid,
+    email: normalizedEmail,
+    display_name: displayName,
+    provider: "slack_guest_import",
+    providers: ["slack_guest_import"],
+    updated_time: nowTimestamp(),
+    created_time: nowTimestamp(),
+  }, { merge: true });
+
+  await db().collection(SLACK_LINK_COLLECTION).doc(linkId).set({
+    firebaseUid,
+    uid: firebaseUid,
+    slackTeamId: command.teamId,
+    slackTeamDomain: command.teamDomain || "",
+    slackUserId: command.userId,
+    slackUserName: command.userName || "",
+    recipientEmail: normalizedEmail,
+    firebaseDisplayName: displayName,
+    firebaseEmail: normalizedEmail,
+    inviteCode: invite?.code || "",
+    status: "active",
+    source: invite ? "slack_import_email_invite" : "slack_import_email",
+    updatedAt: nowTimestamp(),
+    createdAt: nowTimestamp(),
+  }, { merge: true });
+
+  return {
+    firebaseUid,
+    owner: {
+      uid: firebaseUid,
+      displayName,
+      email: normalizedEmail,
+    },
+    linkId,
+    inviteCode: invite?.code || "",
+  };
+}
+
 function appBaseUrl() {
   return String(
     process.env.ROSTER_SHARE_APP_URL ||
@@ -230,6 +308,13 @@ function inviteShareText(url, channelUrl = "") {
 
 function looksLikeEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanText(value, 240));
+}
+
+function importEmailArg(commandText) {
+  const args = parseSlackArgs(commandText);
+  const action = cleanText(args[0] || "", 40).toLowerCase();
+  const startIndex = ["import", "sync", "link", "ical", "webcal"].includes(action) ? 1 : 0;
+  return cleanText(args.slice(startIndex).find((arg) => looksLikeEmail(arg)) || "", 240).toLowerCase();
 }
 
 async function dispatchIcalImportWorkflow({ calendarUrl, firebaseUid, owner }) {
@@ -622,6 +707,7 @@ function helpText() {
     "`/roster-share friend@example.com` - create an invite link with an email-compose button",
     "`/roster-share link-me` - link your Slack user to the default Firebase roster user",
     "`/roster-share import webcal://...` - import your personal iCal roster privately",
+    "`/roster-share import friend@example.com webcal://...` - link that Slack user to an email owner and import",
     "`/layover HNL` - show shared HNL crew for today + 7 days",
     "`/layover HNL 2026-07-22 14` - choose start date and days",
   ].join("\n");
@@ -657,18 +743,17 @@ async function handleRosterShare(command) {
   }
 
   const isImportAction = ["import", "sync", "link", "ical", "webcal"].includes(action);
-  const firebaseUid = await linkedFirebaseUid(command, { allowDefault: !isImportAction });
+
+  if (isImportAction) {
+    return handleRosterImport(command);
+  }
+
+  const firebaseUid = await linkedFirebaseUid(command, { allowDefault: true });
   if (!firebaseUid) {
     return {
       response_type: "ephemeral",
-      text: isImportAction
-        ? `${notLinkedText(command)}\n\nRoster iCal import requires a personal Slack-to-Firebase link so each friend's roster is saved under the correct owner.`
-        : notLinkedText(command),
+      text: notLinkedText(command),
     };
-  }
-
-  if (isImportAction) {
-    return handleRosterImport(command, firebaseUid);
   }
 
   const recipientEmail = looksLikeEmail(args[0]) ? cleanText(args[0], 240) : "";
@@ -725,21 +810,43 @@ async function handleRosterShare(command) {
   };
 }
 
-async function handleRosterImport(command, firebaseUid) {
+async function handleRosterImport(command) {
   const calendarUrl = extractRosterCalendarUrl(command.text);
   if (!calendarUrl) {
     return {
       response_type: "ephemeral",
-      text: "Usage: `/roster-share import webcal://...`",
+      text: "Usage: `/roster-share import webcal://...` or `/roster-share import friend@example.com webcal://...`",
     };
   }
 
-  const owner = await publicUser(firebaseUid);
+  const email = importEmailArg(command.text);
+  let firebaseUid = "";
+  let owner = {};
+  let autoLinked = null;
+  if (email) {
+    autoLinked = await resolveImportOwnerForEmail(command, email);
+    firebaseUid = autoLinked.firebaseUid;
+    owner = autoLinked.owner;
+  } else {
+    firebaseUid = await linkedFirebaseUid(command, { allowDefault: false });
+    if (!firebaseUid) {
+      return {
+        response_type: "ephemeral",
+        text: `${notLinkedText(command)}\n\nRoster iCal import requires a personal Slack-to-Firebase link. Or use: \`/roster-share import friend@example.com webcal://...\``,
+      };
+    }
+    owner = await publicUser(firebaseUid);
+  }
+
   const dispatch = await dispatchIcalImportWorkflow({ calendarUrl, firebaseUid, owner });
   if (dispatch.dispatched) {
     return {
       response_type: "ephemeral",
-      text: `Roster iCal import workflow queued: ${dispatch.actionsUrl}`,
+      text: [
+        `Roster iCal import workflow queued: ${dispatch.actionsUrl}`,
+        `Owner: \`${owner.displayName || owner.email || firebaseUid}\``,
+        ...(autoLinked ? [`Slack link: \`${SLACK_LINK_COLLECTION}/${autoLinked.linkId}\``] : []),
+      ].join("\n"),
     };
   }
 
