@@ -432,17 +432,19 @@ async function deleteQueryDocs(snapshot) {
   }
 }
 
-async function deleteExistingFlatSlackPerDiemRows(db, { ownerUid, pdcUserName }) {
+async function deleteExistingFlatPerDiemRows(db, { ownerUid, pdcUserName, ownerKey }) {
   const collection = db.collection(PERDIEM_COLLECTION);
   const snapshots = [];
   snapshots.push(await collection.where("owner", "==", ownerUid).get());
+  snapshots.push(await collection.where("uid", "==", ownerUid).get());
+  snapshots.push(await collection.where("perdiem_owner_key", "==", ownerKey).get());
   if (pdcUserName) snapshots.push(await collection.where("pdc_user_name", "==", pdcUserName).get());
 
   const refs = new Map();
   for (const snapshot of snapshots) {
     for (const doc of snapshot.docs) {
       const data = doc.data();
-      if (data?.source === "slack_pdc_perdiem" && data?.Date && data?.Activity) {
+      if (data?.Date && data?.Activity) {
         refs.set(doc.ref.path, doc.ref);
       }
     }
@@ -459,6 +461,8 @@ async function storePersonalPerDiemRows(db, rows, { ownerUid, displayName, pdcUs
   const ownerRef = db.collection(PERDIEM_COLLECTION).doc(ownerKey);
   const existingSnapshot = await ownerRef.collection("items").get();
   await deleteQueryDocs(existingSnapshot);
+  let deleted = existingSnapshot.size;
+
   const legacyOwnerKey = safeDocIdPart(ownerUid);
   if (legacyOwnerKey !== ownerKey) {
     const legacySnapshot = await db
@@ -467,8 +471,9 @@ async function storePersonalPerDiemRows(db, rows, { ownerUid, displayName, pdcUs
       .collection("items")
       .get();
     await deleteQueryDocs(legacySnapshot);
+    deleted += legacySnapshot.size;
   }
-  await deleteExistingFlatSlackPerDiemRows(db, { ownerUid, pdcUserName });
+  deleted += await deleteExistingFlatPerDiemRows(db, { ownerUid, pdcUserName, ownerKey });
 
   let stored = 0;
 
@@ -502,7 +507,7 @@ async function storePersonalPerDiemRows(db, rows, { ownerUid, displayName, pdcUs
     stored += 1;
   }
 
-  return stored;
+  return { stored, deleted };
 }
 
 async function storedPerDiemRowsForMonth(db, ownerKey, target) {
@@ -621,7 +626,7 @@ async function main() {
   const ownerKey = safeDocIdPart(reportName || ownerUid);
   const calculatedRows = await generateSlackPerDiemList(filePath);
   const { rows: finalRows, overrideCount } = await applyPerDiemOverrides(db, calculatedRows, ownerKey, target);
-  const storedRows = await storePersonalPerDiemRows(db, finalRows, {
+  const { stored: storedRows, deleted: deletedRows } = await storePersonalPerDiemRows(db, finalRows, {
     ownerUid,
     displayName: reportName,
     pdcUserName,
@@ -642,7 +647,7 @@ async function main() {
     `${reportName}: ${formatKoreanMonth(target)} Prediem=${totalPerdiem.toFixed(2)}/Transport fee=${totalTransportFee.toFixed(0)}`,
     "",
     `created at: ${formatKstTimestamp()} KST`,
-    `source: Firestore ${PDC_COLLECTION} -> ${PERDIEM_COLLECTION}/${ownerKey}/items, pdc_user_name=${pdcUserName || "blank"}, roster rows=${rowCount}, stored=${storedRows}, overrides=${overrideCount}, Month=${monthName}, Year=${target.year}, commit=${shortCommitSha()}`,
+    `source: Firestore ${PDC_COLLECTION} -> ${PERDIEM_COLLECTION}/${ownerKey}/items, pdc_user_name=${pdcUserName || "blank"}, roster rows=${rowCount}, deleted=${deletedRows}, stored=${storedRows}, overrides=${overrideCount}, Month=${monthName}, Year=${target.year}, commit=${shortCommitSha()}`,
   ].join("\n");
 
   await postSlack(text);
