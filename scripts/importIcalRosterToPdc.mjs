@@ -250,7 +250,9 @@ function compactTimeWithOffset(value) {
 
 function extractedTime(text, kind, zone) {
   const source = cleanText(text, 2000);
-  const pattern = new RegExp(`${kind}\\\\s*(?:\\\\(${zone}\\\\)|${zone})?[^0-9+-]{0,12}(\\\\d{1,2}:?\\\\d{2}(?:[+-]\\\\d+)?)`, "i");
+  // [버그 수정] 정규식의 '?'를 제거하여 Z(Zulu) 또는 L(Local) 구분을 필수적으로 매칭하도록 강제함
+  // 이로 인해 STDL을 찾을 때 실수로 STDZ의 시간을 덮어씌우는 현상이 해결됩니다.
+  const pattern = new RegExp(`${kind}\\\\s*(?:\\\\(${zone}\\\\)|${zone})[^0-9+-]{0,12}(\\\\d{1,2}:?\\\\d{2}(?:[+-]\\\\d+)?)`, "i");
   const match = source.match(pattern);
   return match ? compactTimeWithOffset(match[1]) : "";
 }
@@ -315,7 +317,7 @@ function monthName(month) {
   return ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][month - 1] || "";
 }
 
-// 시간 문자열을 HH:mm 형식으로 강제 변환하는 함수
+// 시간 문자열을 깔끔한 HH:mm 형식으로 강제 변환 (자정이 넘어가는 +1 표시 등을 제거)
 function formatToHHmm(value) {
   const match = String(value || "").match(/(\d{1,2}):?(\d{2})/);
   if (match) return `${match[1].padStart(2, "0")}:${match[2]}`;
@@ -354,6 +356,7 @@ function icsEventToPdcDoc(event, owner) {
     To: route.to,
     STD: start.iso || "",
     STA: end.iso || "",
+    // 최종적으로 formatToHHmm 을 거쳐서 roster 방식("HH:mm")으로만 저장되도록 반영
     STDL: formatToHHmm(stdl),
     STAL: formatToHHmm(stal),
     STDZ: formatToHHmm(startCompact),
