@@ -63,17 +63,18 @@ function crewKey(docData) {
 }
 
 function importDuplicateKey(docData) {
+  // Crew 정보는 iCal 이벤트마다 표기 순서/누락이 달라질 수 있으므로
+  // 동일 비행편 중복 판정 키에서 제외합니다.
   return [
     docData.owner,
-    docData.Activity,
-    docData.From,
-    docData.To,
-    crewKey(docData),
+    cleanText(docData.DC, 20).toUpperCase(),
+    cleanText(docData.Activity || docData.F, 80).replace(/\s+/g, "").toUpperCase(),
+    cleanText(docData.From, 10).toUpperCase(),
+    cleanText(docData.To, 10).toUpperCase(),
   ].join("|");
 }
 
 function dateNumber(value) {
-  // Firestore Date는 YYYY.MM.DD 형식으로 저장되므로 점과 하이픈을 모두 허용합니다.
   const match = cleanText(value, 20).match(/^(\d{4})[.-](\d{2})[.-](\d{2})$/);
   if (!match) return Number.NaN;
   return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) / 86400000;
@@ -96,34 +97,83 @@ function parseRosterTime(value) {
   };
 }
 
-function timeMinutes(value) {
-  const parsed = parseRosterTime(value);
-  return parsed ? parsed.minutes : Number.NaN;
+function departureTime(docData, zone = "L") {
+  if (zone === "Z") {
+    return parseRosterTime(docData.STDZ || docData["STD(Z)"] || "");
+  }
+  return parseRosterTime(docData.STDL || docData["STD(L)"] || "");
+}
+
+function circularMinuteDifference(a, b) {
+  if (!a || !b) return Number.POSITIVE_INFINITY;
+  const direct = Math.abs(a.minutes - b.minutes);
+  return Math.min(direct, 1440 - direct);
 }
 
 function looksLikeSameRosterEvent(a, b) {
   if (importDuplicateKey(a) !== importDuplicateKey(b)) return false;
-  const dayDiff = Math.abs(dateNumber(a.Date) - dateNumber(b.Date));
+
+  const aDate = dateNumber(a.Date);
+  const bDate = dateNumber(b.Date);
+  if (!Number.isFinite(aDate) || !Number.isFinite(bDate)) return false;
+
+  const dayDiff = Math.abs(aDate - bDate);
   if (dayDiff === 0) return true;
   if (dayDiff !== 1) return false;
 
-  const aTime = timeMinutes(a.STDL || a["STD(L)"] || a.STDZ || a.STD);
-  const bTime = timeMinutes(b.STDL || b["STD(L)"] || b.STDZ || b.STD);
-  if (!Number.isFinite(aTime) || !Number.isFinite(bTime)) return false;
-  return Math.max(aTime, bTime) >= 20 * 60 && Math.min(aTime, bTime) <= 4 * 60;
+  const aLocal = departureTime(a, "L");
+  const bLocal = departureTime(b, "L");
+  const aZulu = departureTime(a, "Z");
+  const bZulu = departureTime(b, "Z");
+
+  // 동일한 비행편이 현지 날짜와 UTC 날짜로 각각 생성되는 경우를 제거합니다.
+  // 2026.07.06 HNL-ICN / 2026.07.07 HNL-ICN처럼 날짜만 하루 차이나고
+  // 출발시각이 같은 이벤트는 동일 이벤트로 판단합니다.
+  const sameLocalTime = circularMinuteDifference(aLocal, bLocal) <= 15;
+  const sameZuluTime = circularMinuteDifference(aZulu, bZulu) <= 15;
+  if (sameLocalTime || sameZuluTime) return true;
+
+  // 한 이벤트는 23~24시, 다른 이벤트는 00~04시로 표현되는 자정 경계 중복도 허용합니다.
+  const times = [aLocal, bLocal, aZulu, bZulu].filter(Boolean);
+  return times.some((time) => time.minutes >= 20 * 60) &&
+    times.some((time) => time.minutes <= 4 * 60);
+}
+
+function duplicateCompletenessScore(docData) {
+  const fields = [
+    docData.STDL, docData.STAL, docData.STDZ, docData.STAZ,
+    docData.Crew, docData.RI, docData.RO, docData.sourceDescription,
+  ];
+  return fields.reduce((score, value) => score + (cleanText(value, 2000) ? 1 : 0), 0);
 }
 
 function preferredDuplicateDoc(current, candidate) {
   if (!current) return candidate;
-  const currentDateTime = `${cleanText(current.Date, 20)} ${cleanText(current.STDL || current["STD(L)"] || current.STDZ || current.STD, 40)}`;
-  const candidateDateTime = `${cleanText(candidate.Date, 20)} ${cleanText(candidate.STDL || candidate["STD(L)"] || candidate.STDZ || candidate.STD, 40)}`;
-  return candidateDateTime >= currentDateTime ? candidate : current;
+
+  const currentScore = duplicateCompletenessScore(current);
+  const candidateScore = duplicateCompletenessScore(candidate);
+  if (candidateScore !== currentScore) {
+    return candidateScore > currentScore ? candidate : current;
+  }
+
+  const currentDay = dateNumber(current.Date);
+  const candidateDay = dateNumber(candidate.Date);
+
+  // 동일 편이 현지일과 UTC일로 하루 차이 나면 더 이른 날짜를 운항일로 유지합니다.
+  // 예: HNL 7/6 출발편이 UTC 기준 7/7로 중복 생성되는 경우 7/6을 보존합니다.
+  if (Number.isFinite(currentDay) && Number.isFinite(candidateDay) && currentDay !== candidateDay) {
+    return candidateDay < currentDay ? candidate : current;
+  }
+
+  return cleanText(candidate.sourceDescription, 2000).length > cleanText(current.sourceDescription, 2000).length
+    ? candidate
+    : current;
 }
 
 function dedupeImportDocs(docs) {
   const groups = [];
   for (const docData of docs) {
-    const group = groups.find((items) => looksLikeSameRosterEvent(items[0], docData));
+    const group = groups.find((items) => items.some((item) => looksLikeSameRosterEvent(item, docData)));
     if (group) {
       group.push(docData);
     } else {
