@@ -195,128 +195,35 @@ function rowCompleteness(row) {
   return row.reduce((score, value) => score + (String(value ?? "").trim() ? 1 : 0), 0);
 }
 
-function dateUtcMs(value) {
-  const match = normalizeDate(value).match(/^(\d{4})\.(\d{2})\.(\d{2})$/);
-  if (!match) return null;
-  return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-}
-
-function daysBetween(left, right) {
-  const a = dateUtcMs(left);
-  const b = dateUtcMs(right);
-  if (a === null || b === null) return Number.POSITIVE_INFINITY;
-  return Math.abs(a - b) / 86400000;
-}
-
-function normalizeRosterTime(value) {
-  const text = String(value ?? "").trim();
-  const match = text.match(/^(\d{1,2}):?(\d{2})([+-]\d+)?$/);
-  if (!match) return "";
-  return `${match[1].padStart(2, "0")}${match[2]}${match[3] || ""}`;
-}
-
-function baseFlightKey(row, columns) {
+function perDiemDuplicateKey(row, columns) {
   return [
+    normalizeDate(getColumn(row, columns.date)),
     normalizeActivity(getColumn(row, columns.activity)),
     normalizeAirport(getColumn(row, columns.from)),
     normalizeAirport(getColumn(row, columns.destination)),
-  ].join("|");
-}
-
-function exactPerDiemDuplicateKey(row, columns) {
-  return [
-    normalizeDate(getColumn(row, columns.date)),
-    baseFlightKey(row, columns),
     normalizedTimestamp(getColumn(row, columns.ri)),
     normalizedTimestamp(getColumn(row, columns.ro)),
-    normalizeRosterTime(getColumn(row, columns.stdl)),
-    normalizeRosterTime(getColumn(row, columns.stdz)),
   ].join("|");
-}
-
-function isZeroOutboundPerDiem(row, columns) {
-  const from = normalizeAirport(getColumn(row, columns.from));
-  const destination = normalizeAirport(getColumn(row, columns.destination));
-  if (from !== "ICN" || !destination || destination === "ICN") return false;
-
-  const stayHours = String(getColumn(row, columns.stayHours)).trim();
-  const total = parseMoney(getColumn(row, columns.total));
-  return (!stayHours || stayHours === "0:00" || stayHours === "00:00") && total === 0;
-}
-
-function sameAvailableDepartureTime(left, right, columns) {
-  const candidates = [columns.stdz, columns.stdl].filter((index) => index >= 0);
-  for (const index of candidates) {
-    const a = normalizeRosterTime(getColumn(left, index));
-    const b = normalizeRosterTime(getColumn(right, index));
-    if (a && b) return a === b;
-  }
-  return null;
-}
-
-function looksLikeAdjacentOutboundDuplicate(left, right, columns) {
-  if (baseFlightKey(left, columns) !== baseFlightKey(right, columns)) return false;
-  if (!isZeroOutboundPerDiem(left, columns) || !isZeroOutboundPerDiem(right, columns)) return false;
-  if (daysBetween(getColumn(left, columns.date), getColumn(right, columns.date)) !== 1) return false;
-
-  // 시간 정보가 양쪽에 있으면 반드시 같은 시간이어야 한다.
-  // 보고서 시트에 시간 열이 없으면 ICN 출발·0원 행에 한해 하루 차이 중복으로 처리한다.
-  const sameTime = sameAvailableDepartureTime(left, right, columns);
-  return sameTime === null ? true : sameTime;
-}
-
-function preferredDuplicateRow(current, candidate, columns) {
-  if (!current) return candidate;
-  const currentScore = rowCompleteness(current);
-  const candidateScore = rowCompleteness(candidate);
-  if (candidateScore !== currentScore) return candidateScore > currentScore ? candidate : current;
-
-  // 정보량이 같으면 현지 운항일로 보는 더 이른 날짜를 유지한다.
-  return normalizeDate(getColumn(candidate, columns.date)) < normalizeDate(getColumn(current, columns.date))
-    ? candidate
-    : current;
 }
 
 function dedupePerDiemRows(rows, columns) {
-  // 1차: 날짜까지 완전히 같은 중복 제거
-  const exactSelected = new Map();
+  const selected = new Map();
+
   for (const row of rows) {
-    const key = exactPerDiemDuplicateKey(row, columns);
-    exactSelected.set(key, preferredDuplicateRow(exactSelected.get(key), row, columns));
-  }
+    const key = perDiemDuplicateKey(row, columns);
+    const current = selected.get(key);
 
-  // 2차: 동일 ICN 출발편이 현지일/UTC일로 하루 차이 나게 생성된 경우 제거
-  const grouped = new Map();
-  for (const row of exactSelected.values()) {
-    const key = baseFlightKey(row, columns);
-    const list = grouped.get(key) || [];
-    list.push(row);
-    grouped.set(key, list);
-  }
-
-  const result = [];
-  for (const list of grouped.values()) {
-    const sorted = [...list].sort((a, b) =>
-      normalizeDate(getColumn(a, columns.date)).localeCompare(normalizeDate(getColumn(b, columns.date))),
-    );
-
-    const kept = [];
-    for (const row of sorted) {
-      const previous = kept.at(-1);
-      if (previous && looksLikeAdjacentOutboundDuplicate(previous, row, columns)) {
-        kept[kept.length - 1] = preferredDuplicateRow(previous, row, columns);
-      } else {
-        kept.push(row);
-      }
+    if (!current || rowCompleteness(row) > rowCompleteness(current)) {
+      selected.set(key, row);
     }
-    result.push(...kept);
   }
 
-  return result.sort((left, right) => {
-    const dateCompare = normalizeDate(getColumn(left, columns.date)).localeCompare(
-      normalizeDate(getColumn(right, columns.date)),
-    );
+  return [...selected.values()].sort((left, right) => {
+    const leftDate = normalizeDate(getColumn(left, columns.date));
+    const rightDate = normalizeDate(getColumn(right, columns.date));
+    const dateCompare = leftDate.localeCompare(rightDate);
     if (dateCompare !== 0) return dateCompare;
+
     return normalizeActivity(getColumn(left, columns.activity)).localeCompare(
       normalizeActivity(getColumn(right, columns.activity)),
     );
@@ -394,9 +301,6 @@ async function main() {
     year: findColumn(index, ["Year"]),
     total: findColumn(index, ["Total"]),
     transportFee: findColumn(index, ["TransportFee", "Transport Fee"]),
-    stayHours: findColumn(index, ["StayHours", "Stay Hours"]),
-    stdl: findColumn(index, ["STDL", "STD(L)"]),
-    stdz: findColumn(index, ["STDZ", "STD(Z)"]),
     owner: findColumn(index, ["owner", "Owner"]),
     uid: findColumn(index, ["uid", "UID"]),
     userId: findColumn(index, ["userId", "User ID", "firebaseUid"]),
@@ -503,3 +407,4 @@ main().catch((error) => {
   console.error(error);
   process.exit(1);
 });
+
