@@ -315,6 +315,13 @@ function monthName(month) {
   return ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][month - 1] || "";
 }
 
+// 시간 문자열을 HH:mm 형식으로 강제 변환하는 함수
+function formatToHHmm(value) {
+  const match = String(value || "").match(/(\d{1,2}):?(\d{2})/);
+  if (match) return `${match[1].padStart(2, "0")}:${match[2]}`;
+  return String(value || "");
+}
+
 function icsEventToPdcDoc(event, owner) {
   const summary = cleanText(event.SUMMARY?.value || "", 200);
   const description = cleanText(event.DESCRIPTION?.value || "", 1000);
@@ -347,14 +354,14 @@ function icsEventToPdcDoc(event, owner) {
     To: route.to,
     STD: start.iso || "",
     STA: end.iso || "",
-    STDL: stdl,
-    STAL: stal,
-    STDZ: startCompact,
-    STAZ: endCompact,
-    "STD(L)": stdl,
-    "STA(L)": stal,
-    "STD(Z)": startCompact,
-    "STA(Z)": endCompact,
+    STDL: formatToHHmm(stdl),
+    STAL: formatToHHmm(stal),
+    STDZ: formatToHHmm(startCompact),
+    STAZ: formatToHHmm(endCompact),
+    "STD(L)": formatToHHmm(stdl),
+    "STA(L)": formatToHHmm(stal),
+    "STD(Z)": formatToHHmm(startCompact),
+    "STA(Z)": formatToHHmm(endCompact),
     RI: markers.RI,
     RO: markers.RO,
     CIL: "",
