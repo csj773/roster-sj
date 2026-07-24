@@ -1,4 +1,6 @@
 import fs from "fs";
+import crypto from "crypto";
+import admin from "firebase-admin";
 import { hourToTimeStr } from "../flightTimeUtils.js";
 
 export const SLACK_PERDIEM_RATE = {
@@ -29,6 +31,8 @@ const TRANSPORT_FEE_PER_FLIGHT = 7000;
 const QUICK_TURN_THRESHOLD_HOURS = 12;
 const QUICK_TURN_MINIMUM_TOTAL = 33;
 const FLIGHT_ACTIVITY_RE = /^YP\d+/i;
+const PERDIEM_COLLECTION = String(process.env.PERDIEM_COLLECTION || "Perdiem").trim();
+const DUPLICATE_TIME_TOLERANCE_MINUTES = Number(process.env.PERDIEM_DEDUPE_TOLERANCE_MINUTES || 15);
 
 function normalizeAirportCode(value) {
   return String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -65,7 +69,7 @@ function convertDate(input) {
 
 function parseHHMMOffset(str, baseDateStr) {
   if (!str) return null;
-  const match = String(str).trim().match(/^(\d{2})(\d{2})([+-]\d+)?$/);
+  const match = String(str).trim().match(/^(\d{1,2}):?(\d{2})([+-]\d+)?$/);
   if (!match) return null;
   const [, hh, mm, offset] = match;
   const baseDateParts = String(baseDateStr || "").split(".");
@@ -252,47 +256,129 @@ function normalizeSlackPerDiemItem(item) {
   };
 }
 
-function dedupeInboundRows(rows) {
-  const groups = new Map();
-  for (const row of rows) {
-    if (row.Destination !== "ICN" || row.From === "ICN") continue;
-    const key = [row.Activity, row.From, row.Destination].join("|");
-    const list = groups.get(key) || [];
-    list.push(row);
-    groups.set(key, list);
+
+function rosterTimeInstant(row, fieldNames) {
+  for (const fieldName of fieldNames) {
+    const value = row?.[fieldName];
+    if (!value) continue;
+    const parsed = parseHHMMOffset(value, row.Date);
+    if (parsed instanceof Date && !Number.isNaN(parsed.valueOf())) return parsed;
+  }
+  return null;
+}
+
+function rowDepartureInstant(row) {
+  // UTC 시간이 있으면 우선 사용하고, 없으면 현지 시간을 사용한다.
+  // STDZ/STDL 뒤의 +1/-1은 row.Date 기준 다음 날/전날을 뜻한다.
+  return rosterTimeInstant(row, ["STDZ", "STDL"]);
+}
+
+function rowArrivalInstant(row) {
+  return rosterTimeInstant(row, ["STAZ", "STAL"]);
+}
+
+function sameFlightIdentity(left, right) {
+  return [
+    left.Activity,
+    left.From,
+    left.Destination,
+  ].join("|") === [
+    right.Activity,
+    right.From,
+    right.Destination,
+  ].join("|");
+}
+
+function minutesBetween(left, right) {
+  if (!(left instanceof Date) || Number.isNaN(left.valueOf())) return Number.POSITIVE_INFINITY;
+  if (!(right instanceof Date) || Number.isNaN(right.valueOf())) return Number.POSITIVE_INFINITY;
+  return Math.abs(left.valueOf() - right.valueOf()) / 60000;
+}
+
+function sameAbsoluteRosterEvent(left, right) {
+  if (!sameFlightIdentity(left, right)) return false;
+  if (daysBetweenDates(left.Date, right.Date) > 1) return false;
+
+  const leftDeparture = rowDepartureInstant(left);
+  const rightDeparture = rowDepartureInstant(right);
+  if (minutesBetween(leftDeparture, rightDeparture) <= DUPLICATE_TIME_TOLERANCE_MINUTES) {
+    return true;
   }
 
-  const keep = new Set(rows);
-  for (const list of groups.values()) {
-    if (list.length < 2) continue;
-    const sorted = [...list].sort((a, b) => dateSortKey(a.Date).localeCompare(dateSortKey(b.Date)));
-    let cluster = [];
-    const flushCluster = () => {
-      if (cluster.length < 2) {
-        cluster = [];
-        return;
-      }
-      const canonical = [...cluster].sort((a, b) => {
-        const hoursDiff = (hoursFromTimeString(a.StayHours) ?? Number.POSITIVE_INFINITY) -
-          (hoursFromTimeString(b.StayHours) ?? Number.POSITIVE_INFINITY);
-        if (hoursDiff !== 0) return hoursDiff;
-        return dateSortKey(a.Date).localeCompare(dateSortKey(b.Date));
-      })[0];
-      for (const duplicate of cluster) {
-        if (duplicate !== canonical) keep.delete(duplicate);
-      }
-      cluster = [];
-    };
+  const leftArrival = rowArrivalInstant(left);
+  const rightArrival = rowArrivalInstant(right);
+  if (minutesBetween(leftArrival, rightArrival) <= DUPLICATE_TIME_TOLERANCE_MINUTES) {
+    return true;
+  }
 
-    for (const row of sorted) {
-      if (cluster.length && daysBetweenDates(cluster[cluster.length - 1].Date, row.Date) > 1) {
-        flushCluster();
-      }
-      cluster.push(row);
+  // RI/RO가 이미 계산되어 같은 절대시각을 가리키면 동일 이벤트로 본다.
+  if (left.RI && right.RI && left.RI === right.RI) return true;
+  if (left.RO && right.RO && left.RO === right.RO) return true;
+
+  return false;
+}
+
+function rowCompletenessScore(row) {
+  return [
+    row.STDL,
+    row.STDZ,
+    row.STAL,
+    row.STAZ,
+    row.RI,
+    row.RO,
+    row.StayHours,
+  ].filter(Boolean).length;
+}
+
+function preferredDuplicateRow(current, candidate) {
+  if (!current) return candidate;
+
+  const currentScore = rowCompletenessScore(current);
+  const candidateScore = rowCompletenessScore(candidate);
+  if (candidateScore !== currentScore) {
+    return candidateScore > currentScore ? candidate : current;
+  }
+
+  // 두 문서의 정보 수준이 같으면 현지 운항일 기준 더 이른 날짜를 유지한다.
+  const currentDate = dateSortKey(current.Date);
+  const candidateDate = dateSortKey(candidate.Date);
+  if (candidateDate !== currentDate) {
+    return candidateDate < currentDate ? candidate : current;
+  }
+
+  return current;
+}
+
+function dedupePerDiemRows(rows) {
+  const sorted = [...rows].sort((a, b) => {
+    const identityCompare = [
+      a.Activity,
+      a.From,
+      a.Destination,
+    ].join("|").localeCompare([
+      b.Activity,
+      b.From,
+      b.Destination,
+    ].join("|"));
+    if (identityCompare !== 0) return identityCompare;
+    return dateSortKey(a.Date).localeCompare(dateSortKey(b.Date));
+  });
+
+  const result = [];
+  for (const row of sorted) {
+    const duplicateIndex = result.findIndex((saved) => sameAbsoluteRosterEvent(saved, row));
+    if (duplicateIndex < 0) {
+      result.push(row);
+      continue;
     }
-    flushCluster();
+    result[duplicateIndex] = preferredDuplicateRow(result[duplicateIndex], row);
   }
-  return rows.filter((row) => keep.has(row));
+
+  return result.sort((a, b) => {
+    const dateCompare = dateSortKey(a.Date).localeCompare(dateSortKey(b.Date));
+    if (dateCompare !== 0) return dateCompare;
+    return String(a.Activity || "").localeCompare(String(b.Activity || ""));
+  });
 }
 
 function filterUnusedOutboundRows(rows) {
@@ -311,7 +397,8 @@ function filterUnusedOutboundRows(rows) {
 }
 
 function normalizeSlackPerDiemRows(rows) {
-  return filterUnusedOutboundRows(dedupeInboundRows(rows));
+  // 출발편과 귀국편 모두 실제 출발/도착 절대시각을 기준으로 중복 제거한다.
+  return filterUnusedOutboundRows(dedupePerDiemRows(rows));
 }
 
 export async function generateSlackPerDiemList(rosterJsonPath) {
@@ -421,3 +508,116 @@ export async function generateSlackPerDiemList(rosterJsonPath) {
 
   return normalizeSlackPerDiemRows(perdiemList);
 }
+
+function cleanOwnerValue(value, maxLength = 500) {
+  return String(value || "").trim().slice(0, maxLength);
+}
+
+function perDiemDocId(owner, item) {
+  return crypto.createHash("sha256").update([
+    owner,
+    item.Date,
+    item.Activity,
+    item.From,
+    item.Destination,
+  ].join("|")).digest("hex");
+}
+
+async function commitDeleteRefs(db, refs) {
+  let deleted = 0;
+  for (let index = 0; index < refs.length; index += 400) {
+    const batch = db.batch();
+    const chunk = refs.slice(index, index + 400);
+    for (const ref of chunk) batch.delete(ref);
+    await batch.commit();
+    deleted += chunk.length;
+  }
+  return deleted;
+}
+
+async function commitPerDiemWrites(db, collectionName, docs) {
+  let written = 0;
+  for (let index = 0; index < docs.length; index += 400) {
+    const batch = db.batch();
+    const chunk = docs.slice(index, index + 400);
+    for (const { id, data } of chunk) {
+      batch.set(db.collection(collectionName).doc(id), data, { merge: false });
+    }
+    await batch.commit();
+    written += chunk.length;
+  }
+  return written;
+}
+
+/**
+ * 해당 사용자(owner)의 Perdiem 문서만 삭제한 뒤 새 목록으로 재작성한다.
+ * 다른 사용자의 문서는 건드리지 않는다.
+ */
+export async function rewriteUserPerDiem(
+  db,
+  perdiemList,
+  {
+    owner,
+    uid,
+    userId,
+    email = "",
+    displayName = "",
+    collectionName = PERDIEM_COLLECTION,
+  } = {}
+) {
+  if (!db) throw new Error("Firestore db is required");
+
+  const resolvedOwner = cleanOwnerValue(owner || uid || userId);
+  if (!resolvedOwner) {
+    throw new Error("owner, uid, or userId is required for user-specific Perdiem rewrite");
+  }
+
+  const normalizedRows = normalizeSlackPerDiemRows(perdiemList || []);
+  const existingSnapshot = await db
+    .collection(collectionName)
+    .where("owner", "==", resolvedOwner)
+    .get();
+
+  const deleted = await commitDeleteRefs(
+    db,
+    existingSnapshot.docs.map((doc) => doc.ref)
+  );
+
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  const writes = normalizedRows.map((item) => ({
+    id: perDiemDocId(resolvedOwner, item),
+    data: {
+      ...item,
+      owner: resolvedOwner,
+      uid: cleanOwnerValue(uid || resolvedOwner),
+      userId: cleanOwnerValue(userId || uid || resolvedOwner),
+      email: cleanOwnerValue(email, 240),
+      display_name: cleanOwnerValue(displayName, 200),
+      pdc_user_name: cleanOwnerValue(displayName, 200),
+      updatedAt: now,
+      importedAt: now,
+    },
+  }));
+
+  const written = await commitPerDiemWrites(db, collectionName, writes);
+  return {
+    owner: resolvedOwner,
+    collectionName,
+    deleted,
+    written,
+    skippedDuplicates: (perdiemList || []).length - normalizedRows.length,
+  };
+}
+
+/**
+ * roster JSON을 읽어 Perdiem을 생성하고, 해당 사용자 문서만 rewrite한다.
+ */
+export async function generateAndRewriteSlackPerDiem(
+  db,
+  rosterJsonPath,
+  ownerOptions = {}
+) {
+  const perdiemList = await generateSlackPerDiemList(rosterJsonPath);
+  return rewriteUserPerDiem(db, perdiemList, ownerOptions);
+}
+
