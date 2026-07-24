@@ -1,35 +1,38 @@
 import fs from "fs";
-import os from "os";
 import path from "path";
-import admin from "firebase-admin";
-import { generateSlackPerDiemList } from "./slack_perdiem.js";
+import crypto from "crypto";
+import { google } from "googleapis";
 
-const PDC_COLLECTION = "pdc";
-const PERDIEM_COLLECTION = "Perdiem";
-const PERDIEM_OVERRIDE_COLLECTION = "PerdiemOverrides";
-const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const ROSTER_HEADERS = ["Date", "D/C", "C/I(L)", "C/O(L)", "Activity", "F", "From", "STD(L)", "STD(Z)", "To", "STA(L)", "STA(Z)", "BLH", "Crew"];
+const SPREADSHEET_ID =
+  process.env.GOOGLE_SHEETS_SPREADSHEET_ID ||
+  "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
+const SHEET_NAME = process.env.PERDIEM_SHEET_NAME || "Perdiem";
+const OUTPUT_DIR = process.env.PERDIEM_REPORT_DIR || "outputs";
+const MONTH_NAMES = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 
-function requiredEnv(name) {
-  const value = String(process.env[name] || "").trim();
-  if (!value) throw new Error(`${name} is required`);
-  return value;
+function requiredJsonEnv(name) {
+  const raw = String(process.env[name] || "")
+    .trim()
+    .replace(/^\uFEFF/, "")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/-----BEGIN PRIVATE KEY[—–-]+/g, "-----BEGIN PRIVATE KEY-----")
+    .replace(/[—–-]+END PRIVATE KEY[—–-]+/g, "-----END PRIVATE KEY-----");
+
+  if (!raw) throw new Error(`${name} is required`);
+
+  const parsed = JSON.parse(raw);
+  if (parsed.private_key) {
+    parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
+  }
+  return parsed;
 }
 
 function optionalEnv(name) {
   return String(process.env[name] || "").trim();
-}
-
-function parseJsonEnv(name) {
-  const raw = requiredEnv(name)
-    .replace(/^\uFEFF/, "")
-    .replace(/[“”]/g, "\"")
-    .replace(/[‘’]/g, "'")
-    .replace(/-----BEGIN PRIVATE KEY[—–-]+/g, "-----BEGIN PRIVATE KEY-----")
-    .replace(/[—–-]+END PRIVATE KEY[—–-]+/g, "-----END PRIVATE KEY-----");
-  const parsed = JSON.parse(raw);
-  if (parsed.private_key) parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
-  return parsed;
 }
 
 function kstNow() {
@@ -41,6 +44,7 @@ function defaultTargetMonthYear() {
   let year = now.getUTCFullYear();
   let month = now.getUTCMonth() + 1;
 
+  // 매월 1일 자동 실행 시 직전 달 보고서를 작성한다.
   if (now.getUTCDate() === 1) {
     month -= 1;
     if (month === 0) {
@@ -52,615 +56,450 @@ function defaultTargetMonthYear() {
   return { year, month };
 }
 
+function isKstMonthCloseRun() {
+  return kstNow().getUTCDate() === 1;
+}
+
 function monthToNumber(value) {
-  const text = String(value ?? "").trim();
-  if (!text) return null;
-  const numeric = Number(text);
-  if (Number.isFinite(numeric) && numeric >= 1 && numeric <= 12) return numeric;
-  const index = MONTH_NAMES.findIndex((name) => name.toLowerCase() === text.toLowerCase());
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return null;
+
+  const numeric = Number(normalized);
+  if (Number.isFinite(numeric) && numeric >= 1 && numeric <= 12) {
+    return numeric;
+  }
+
+  const index = MONTH_NAMES.findIndex(
+    (name) => name.toLowerCase() === normalized.toLowerCase(),
+  );
   return index >= 0 ? index + 1 : null;
 }
 
 function parseMoney(value) {
-  const parsed = Number(String(value ?? "").replace(/,/g, "").trim());
+  const normalized = String(value ?? "")
+    .replace(/,/g, "")
+    .replace(/[^0-9.+-]/g, "")
+    .trim();
+  const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function appDisplayTotal(value) {
-  return Math.round(parseMoney(value));
+function csvEscape(value) {
+  const text = String(value ?? "");
+  if (/[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+  return text;
 }
 
-function firstText(...values) {
-  for (const value of values) {
-    const text = cleanText(value, 200);
-    if (text) return text;
+function toCsv(rows) {
+  return rows.map((row) => row.map(csvEscape).join(",")).join("\n");
+}
+
+function getColumn(row, index) {
+  return Number.isInteger(index) && index >= 0 ? row[index] ?? "" : "";
+}
+
+function normalizeHeader(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_()\-/.]/g, "");
+}
+
+function buildHeaderIndex(header) {
+  const index = {};
+  header.forEach((name, i) => {
+    index[normalizeHeader(name)] = i;
+  });
+  return index;
+}
+
+function findColumn(index, aliases) {
+  for (const alias of aliases) {
+    const found = index[normalizeHeader(alias)];
+    if (found !== undefined) return found;
   }
-  return "";
+  return -1;
 }
 
-function normalizePerDiemTime(value) {
-  const text = cleanText(value, 40);
-  if (!text) return "";
-  const match = text.match(/^(\d{1,2})(?::?(\d{2}))?([+-]\d+)?$/);
+function normalizeIdentity(value) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function reportOwner() {
+  return {
+    owner: optionalEnv("PERDIEM_OWNER") || optionalEnv("FIREBASE_UID"),
+    uid: optionalEnv("PERDIEM_UID") || optionalEnv("FIREBASE_UID"),
+    userId:
+      optionalEnv("PERDIEM_USER_ID") ||
+      optionalEnv("FIREBASE_UID") ||
+      optionalEnv("USER_ID"),
+    email:
+      optionalEnv("PERDIEM_USER_EMAIL") ||
+      optionalEnv("USER_EMAIL") ||
+      (/^[^@\s]+@[^@\s]+$/.test(optionalEnv("USER_ID"))
+        ? optionalEnv("USER_ID")
+        : ""),
+    displayName:
+      optionalEnv("PDC_USER_NAME") ||
+      optionalEnv("USER_NAME") ||
+      optionalEnv("PERDIEM_USER_NAME"),
+  };
+}
+
+function hasRequestedIdentity(owner) {
+  return Boolean(owner.owner || owner.uid || owner.userId || owner.email);
+}
+
+function rowMatchesOwner(row, columns, owner) {
+  const comparisons = [
+    [columns.owner, owner.owner],
+    [columns.uid, owner.uid],
+    [columns.userId, owner.userId],
+    [columns.email, owner.email],
+  ].filter(([columnIndex, expected]) => columnIndex >= 0 && expected);
+
+  if (!comparisons.length) return false;
+
+  // 저장 방식에 따라 owner/uid/userId/email 중 하나만 있어도 사용자 일치로 인정한다.
+  return comparisons.some(([columnIndex, expected]) => (
+    normalizeIdentity(getColumn(row, columnIndex)) === normalizeIdentity(expected)
+  ));
+}
+
+function normalizeDate(value) {
+  const text = String(value ?? "").trim();
+  const match = text.match(/^(\d{4})[-.](\d{1,2})[-.](\d{1,2})$/);
   if (!match) return text;
-  const hour = match[1].padStart(2, "0");
-  const minute = (match[2] || "00").padStart(2, "0");
-  return `${hour}${minute}${match[3] || ""}`;
+  return `${match[1]}.${match[2].padStart(2, "0")}.${match[3].padStart(2, "0")}`;
+}
+
+function normalizeAirport(value) {
+  return String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+}
+
+function normalizeActivity(value) {
+  return String(value ?? "").trim().toUpperCase().replace(/\s+/g, "");
+}
+
+function normalizedTimestamp(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  const parsed = Date.parse(text);
+  return Number.isNaN(parsed) ? text : new Date(parsed).toISOString();
+}
+
+function rowCompleteness(row) {
+  return row.reduce((score, value) => score + (String(value ?? "").trim() ? 1 : 0), 0);
 }
 
 function dateUtcMs(value) {
-  const match = String(value || "").match(/^(\d{4})[-.](\d{1,2})[-.](\d{1,2})/);
+  const match = normalizeDate(value).match(/^(\d{4})\.(\d{2})\.(\d{2})$/);
   if (!match) return null;
   return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
 }
 
-function normalizePdcTime(value, baseDate) {
-  const text = cleanText(value, 80);
-  if (!text) return "";
-  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
-  if (iso) {
-    const time = `${iso[4]}${iso[5]}`;
-    const baseMs = dateUtcMs(baseDate);
-    const isoMs = Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
-    if (baseMs === null) return time;
-    const dayOffset = Math.round((isoMs - baseMs) / 86400000);
-    return dayOffset ? `${time}${dayOffset > 0 ? "+" : ""}${dayOffset}` : time;
-  }
-  return normalizePerDiemTime(text);
+function daysBetween(left, right) {
+  const a = dateUtcMs(left);
+  const b = dateUtcMs(right);
+  if (a === null || b === null) return Number.POSITIVE_INFINITY;
+  return Math.abs(a - b) / 86400000;
 }
 
-function compareHHMM(left, right) {
-  const leftMatch = normalizePerDiemTime(left).match(/^(\d{2})(\d{2})/);
-  const rightMatch = normalizePerDiemTime(right).match(/^(\d{2})(\d{2})/);
-  if (!leftMatch || !rightMatch) return null;
-  return (Number(leftMatch[1]) * 60 + Number(leftMatch[2])) -
-    (Number(rightMatch[1]) * 60 + Number(rightMatch[2]));
+function normalizeRosterTime(value) {
+  const text = String(value ?? "").trim();
+  const match = text.match(/^(\d{1,2}):?(\d{2})([+-]\d+)?$/);
+  if (!match) return "";
+  return `${match[1].padStart(2, "0")}${match[2]}${match[3] || ""}`;
 }
 
-function endTimeWithOvernightOffset(startTime, endTime) {
-  const end = normalizePerDiemTime(endTime);
-  if (!end || /[+-]\d+$/.test(end)) return end;
-  const comparison = compareHHMM(end, startTime);
-  return comparison !== null && comparison <= 0 ? `${end}+1` : end;
-}
-
-function sameRosterDate(left, right) {
-  return dateSortKey(left) === dateSortKey(right);
-}
-
-function returnDepartureTimeWithOffset({ currentRow, previousRow }) {
-  const departure = normalizePerDiemTime(currentRow[8]);
-  if (!departure || /[+-]\d+$/.test(departure)) return departure;
-  if (!previousRow) return departure;
-
-  const from = currentRow[6];
-  const to = currentRow[9];
-  const previousTo = previousRow[9];
-  const previousArrival = previousRow[11];
-  if (to !== "ICN" || from !== previousTo || !sameRosterDate(currentRow[0], previousRow[0])) {
-    return departure;
-  }
-
-  const comparison = compareHHMM(departure, previousArrival);
-  return comparison !== null && comparison <= 0 ? `${departure}+1` : departure;
-}
-
-function cleanText(value, maxLength = 200) {
-  return String(value ?? "").trim().slice(0, maxLength);
-}
-
-function dateSortKey(value) {
-  const match = String(value || "").match(/^(\d{4})[-.](\d{1,2})[-.](\d{1,2})$/);
-  if (!match) return cleanText(value, 20);
-  return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
-}
-
-function parseTimeMs(date, time) {
-  const normalizedDate = dateSortKey(date);
-  const dateMatch = normalizedDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  const timeMatch = normalizePerDiemTime(time).match(/^(\d{2})(\d{2})([+-]\d+)?$/);
-  if (!dateMatch || !timeMatch) return null;
-  const dayOffset = timeMatch[3] ? Number(timeMatch[3]) : 0;
-  return Date.UTC(
-    Number(dateMatch[1]),
-    Number(dateMatch[2]) - 1,
-    Number(dateMatch[3]) + dayOffset,
-    Number(timeMatch[1]),
-    Number(timeMatch[2])
-  );
-}
-
-function addTimeOffset(time, offsetDays) {
-  const normalized = normalizePerDiemTime(time);
-  if (!normalized || /[+-]\d+$/.test(normalized) || !offsetDays) return normalized;
-  return `${normalized}${offsetDays > 0 ? "+" : ""}${offsetDays}`;
-}
-
-function daysBetweenDates(left, right) {
-  const leftMs = dateUtcMs(left);
-  const rightMs = dateUtcMs(right);
-  if (leftMs === null || rightMs === null) return Number.POSITIVE_INFINITY;
-  return Math.abs(leftMs - rightMs) / 86400000;
-}
-
-function canonicalizeDuplicateFlightRows(rows) {
-  const groups = new Map();
-  for (const row of rows) {
-    const key = [row[4], row[6], row[9]].join("|");
-    const list = groups.get(key) || [];
-    list.push(row);
-    groups.set(key, list);
-  }
-
-  const canonicalRows = [];
-  for (const list of groups.values()) {
-    const sorted = [...list].sort((a, b) => {
-      const aDate = dateSortKey(a[0]);
-      const bDate = dateSortKey(b[0]);
-      if (aDate !== bDate) return aDate.localeCompare(bDate);
-      return normalizePerDiemTime(a[8]).localeCompare(normalizePerDiemTime(b[8]));
-    });
-
-    let cluster = [];
-    const flushCluster = () => {
-      if (!cluster.length) return;
-      canonicalRows.push(chooseCanonicalFlightRow(cluster));
-      cluster = [];
-    };
-
-    for (const row of sorted) {
-      if (cluster.length && daysBetweenDates(cluster[cluster.length - 1][0], row[0]) > 1) {
-        flushCluster();
-      }
-      cluster.push(row);
-    }
-    flushCluster();
-  }
-
-  return canonicalRows.sort((a, b) => {
-    const left = `${dateSortKey(a[0])}_${normalizePerDiemTime(a[8])}_${a[4]}_${a[6]}_${a[9]}`;
-    const right = `${dateSortKey(b[0])}_${normalizePerDiemTime(b[8])}_${b[4]}_${b[6]}_${b[9]}`;
-    return left.localeCompare(right);
-  });
-}
-
-function chooseCanonicalFlightRow(rows) {
-  if (rows.length === 1) return rows[0];
-  const from = cleanText(rows[0][6], 10).toUpperCase();
-  const to = cleanText(rows[0][9], 10).toUpperCase();
-
-  if (from === "ICN" && to !== "ICN") {
-    return [...rows].sort((a, b) =>
-      (parseTimeMs(a[0], a[11]) ?? Number.POSITIVE_INFINITY) -
-      (parseTimeMs(b[0], b[11]) ?? Number.POSITIVE_INFINITY)
-    )[0];
-  }
-
-  if (to === "ICN" && from !== "ICN") {
-    const displayDate = [...rows].map((row) => row[0]).sort((a, b) => dateSortKey(a).localeCompare(dateSortKey(b)))[0];
-    const selected = [...rows].sort((a, b) =>
-      (parseTimeMs(b[0], b[8]) ?? Number.NEGATIVE_INFINITY) -
-      (parseTimeMs(a[0], a[8]) ?? Number.NEGATIVE_INFINITY)
-    )[0];
-    const adjusted = [...selected];
-    const offset = Math.round(((dateUtcMs(selected[0]) ?? 0) - (dateUtcMs(displayDate) ?? 0)) / 86400000);
-    adjusted[0] = displayDate;
-    adjusted[8] = addTimeOffset(selected[8], offset);
-    return adjusted;
-  }
-
-  return rows[0];
-}
-
-function safeDocIdPart(value) {
-  const text = String(value ?? "")
-    .trim()
-    .replace(/[\/\\?#\[\]\x00-\x1F\x7F]+/g, "-")
-    .replace(/\s+/g, " ")
-    .slice(0, 200)
-    .trim();
-  return text && text !== "." && text !== ".." ? text : "blank";
-}
-
-function perDiemDocId(item, ownerKey) {
+function baseFlightKey(row, columns) {
   return [
-    ownerKey,
-    item.Year,
-    item.Month,
-    item.Date,
-    item.Activity,
-    item.From,
-    item.Destination,
-  ].map(safeDocIdPart).join("_");
-}
-
-function perDiemRowKey(item) {
-  return [
-    dateSortKey(item.Date),
-    cleanText(item.Activity, 40).toUpperCase(),
-    cleanText(item.From, 10).toUpperCase(),
-    cleanText(item.Destination, 10).toUpperCase(),
+    normalizeActivity(getColumn(row, columns.activity)),
+    normalizeAirport(getColumn(row, columns.from)),
+    normalizeAirport(getColumn(row, columns.destination)),
   ].join("|");
 }
 
-function targetMonthYear() {
-  const fallback = defaultTargetMonthYear();
-  const month = Number(optionalEnv("PERDIEM_TARGET_MONTH") || fallback.month);
-  const year = Number(optionalEnv("PERDIEM_TARGET_YEAR") || fallback.year);
-  if (!Number.isFinite(month) || month < 1 || month > 12) throw new Error(`Invalid target month: ${month}`);
-  if (!Number.isFinite(year) || year < 2000) throw new Error(`Invalid target year: ${year}`);
-  return { month, year };
-}
-
-function pdcRosterRow(doc) {
-  const date = firstText(doc.DateRaw, doc.Date);
-  const from = firstText(doc.From);
-  const to = firstText(doc.To, doc.Destination);
-  const stdl = normalizePdcTime(firstText(doc.STDL, doc["STD(L)"], doc.STD), date);
-  const stal = normalizePdcTime(firstText(doc.STAL, doc["STA(L)"], doc.STA), date);
-  const stdz = normalizePdcTime(firstText(doc.STDZ, doc["STD(Z)"], doc.STD), date) || stdl;
-  const staz = normalizePdcTime(firstText(doc.STAZ, doc["STA(Z)"], doc.STA), date) ||
-    endTimeWithOvernightOffset(stdz, stal);
+function exactPerDiemDuplicateKey(row, columns) {
   return [
-    date,
-    firstText(doc.DC, doc["D/C"]),
-    firstText(doc.CIL, doc["C/I(L)"]),
-    firstText(doc.COL, doc["C/O(L)"]),
-    firstText(doc.Activity),
-    firstText(doc.F, doc.Activity),
-    from,
-    stdl,
-    stdz,
-    to,
-    endTimeWithOvernightOffset(stdl, stal),
-    staz,
-    firstText(doc.BLH),
-    firstText(doc.Crew),
-  ];
+    normalizeDate(getColumn(row, columns.date)),
+    baseFlightKey(row, columns),
+    normalizedTimestamp(getColumn(row, columns.ri)),
+    normalizedTimestamp(getColumn(row, columns.ro)),
+    normalizeRosterTime(getColumn(row, columns.stdl)),
+    normalizeRosterTime(getColumn(row, columns.stdz)),
+  ].join("|");
 }
 
-async function overrideRowsForMonth(db, ownerKey, target) {
-  const snapshot = await db
-    .collection(PERDIEM_OVERRIDE_COLLECTION)
-    .doc(ownerKey)
-    .collection("items")
-    .get();
+function isZeroOutboundPerDiem(row, columns) {
+  const from = normalizeAirport(getColumn(row, columns.from));
+  const destination = normalizeAirport(getColumn(row, columns.destination));
+  if (from !== "ICN" || !destination || destination === "ICN") return false;
 
-  return snapshot.docs
-    .map((doc) => doc.data())
-    .filter((row) => monthToNumber(row.Month) === target.month)
-    .filter((row) => String(row.Year || "").trim() === String(target.year))
-    .filter((row) => cleanText(row.Activity, 40))
-    .map((row) => ({
-      Date: cleanText(row.Date, 20),
-      Activity: cleanText(row.Activity, 40),
-      From: cleanText(row.From, 10),
-      Destination: cleanText(row.Destination, 10),
-      RI: cleanText(row.RI, 40),
-      RO: cleanText(row.RO, 40),
-      StayHours: cleanText(row.StayHours, 20),
-      Rate: parseMoney(row.Rate),
-      Total: parseMoney(row.Total),
-      TransportFee: parseMoney(row.TransportFee),
-      Month: cleanText(row.Month, 20),
-      Year: cleanText(row.Year, 10),
-      source: "manual_perdiem_override",
-    }));
+  const stayHours = String(getColumn(row, columns.stayHours)).trim();
+  const total = parseMoney(getColumn(row, columns.total));
+  return (!stayHours || stayHours === "0:00" || stayHours === "00:00") && total === 0;
 }
 
-async function applyPerDiemOverrides(db, rows, ownerKey, target) {
-  const overrides = await overrideRowsForMonth(db, ownerKey, target);
-  if (!overrides.length) return { rows, overrideCount: 0 };
+function sameAvailableDepartureTime(left, right, columns) {
+  const candidates = [columns.stdz, columns.stdl].filter((index) => index >= 0);
+  for (const index of candidates) {
+    const a = normalizeRosterTime(getColumn(left, index));
+    const b = normalizeRosterTime(getColumn(right, index));
+    if (a && b) return a === b;
+  }
+  return null;
+}
 
-  const byKey = new Map(overrides.map((row) => [perDiemRowKey(row), row]));
-  const merged = rows.map((row) => {
-    const override = byKey.get(perDiemRowKey(row));
-    return override ? { ...row, ...override, overrideApplied: true } : row;
-  });
-  const existingKeys = new Set(merged.map(perDiemRowKey));
-  for (const override of overrides) {
-    if (!existingKeys.has(perDiemRowKey(override))) merged.push({ ...override, overrideApplied: true });
+function looksLikeAdjacentOutboundDuplicate(left, right, columns) {
+  if (baseFlightKey(left, columns) !== baseFlightKey(right, columns)) return false;
+  if (!isZeroOutboundPerDiem(left, columns) || !isZeroOutboundPerDiem(right, columns)) return false;
+  if (daysBetween(getColumn(left, columns.date), getColumn(right, columns.date)) !== 1) return false;
+
+  // 시간 정보가 양쪽에 있으면 반드시 같은 시간이어야 한다.
+  // 보고서 시트에 시간 열이 없으면 ICN 출발·0원 행에 한해 하루 차이 중복으로 처리한다.
+  const sameTime = sameAvailableDepartureTime(left, right, columns);
+  return sameTime === null ? true : sameTime;
+}
+
+function preferredDuplicateRow(current, candidate, columns) {
+  if (!current) return candidate;
+  const currentScore = rowCompleteness(current);
+  const candidateScore = rowCompleteness(candidate);
+  if (candidateScore !== currentScore) return candidateScore > currentScore ? candidate : current;
+
+  // 정보량이 같으면 현지 운항일로 보는 더 이른 날짜를 유지한다.
+  return normalizeDate(getColumn(candidate, columns.date)) < normalizeDate(getColumn(current, columns.date))
+    ? candidate
+    : current;
+}
+
+function dedupePerDiemRows(rows, columns) {
+  // 1차: 날짜까지 완전히 같은 중복 제거
+  const exactSelected = new Map();
+  for (const row of rows) {
+    const key = exactPerDiemDuplicateKey(row, columns);
+    exactSelected.set(key, preferredDuplicateRow(exactSelected.get(key), row, columns));
   }
 
-  merged.sort((a, b) => `${dateSortKey(a.Date)}_${a.Activity}_${a.From}_${a.Destination}`.localeCompare(
-    `${dateSortKey(b.Date)}_${b.Activity}_${b.From}_${b.Destination}`
-  ));
-  return { rows: merged, overrideCount: overrides.length };
-}
-
-function withReturnDepartureOffsets(rows) {
-  return rows.map((row, index) => {
-    const adjusted = [...row];
-    adjusted[8] = returnDepartureTimeWithOffset({
-      currentRow: adjusted,
-      previousRow: index > 0 ? rows[index - 1] : null,
-    });
-    return adjusted;
-  });
-}
-
-function dedupeRosterRows(rows) {
-  const seen = new Set();
-  return rows.filter((row) => {
-    const key = [
-      dateSortKey(row[0]),
-      row[1],
-      row[4],
-      row[6],
-      row[9],
-      row[7],
-      row[11],
-    ].join("|");
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-async function pdcRosterJsonPath(db, ownerUid) {
-  const ownerRef = db.collection(PDC_COLLECTION).doc(safeDocIdPart(ownerUid));
-  const profile = await ownerRef.get().catch(() => null);
-  let snapshot = await ownerRef.collection("events").get();
-  if (snapshot.empty) {
-    snapshot = await db.collection(PDC_COLLECTION).where("owner", "==", ownerUid).get();
+  // 2차: 동일 ICN 출발편이 현지일/UTC일로 하루 차이 나게 생성된 경우 제거
+  const grouped = new Map();
+  for (const row of exactSelected.values()) {
+    const key = baseFlightKey(row, columns);
+    const list = grouped.get(key) || [];
+    list.push(row);
+    grouped.set(key, list);
   }
-  const pdcDocs = snapshot.docs
-    .map((doc) => doc.data())
-    .filter((doc) => cleanText(doc.Activity, 80));
-  const pdcUserName = pdcDocs
-    .map((doc) => firstText(doc.pdc_user_name, doc.display_name, doc.ownerDisplayName, doc.userName))
-    .find(Boolean) || firstText(profile?.data()?.pdc_user_name, profile?.data()?.display_name);
 
-  const rows = pdcDocs
-    .filter((doc) => firstText(doc.From) && firstText(doc.To, doc.Destination))
-    .sort((a, b) => {
-      const left = `${dateSortKey(firstText(a.Date, a.DateRaw))}_${firstText(a.STDL, a["STD(L)"])}_${firstText(a.Activity)}`;
-      const right = `${dateSortKey(firstText(b.Date, b.DateRaw))}_${firstText(b.STDL, b["STD(L)"])}_${firstText(b.Activity)}`;
-      return left.localeCompare(right);
-    })
-    .map(pdcRosterRow);
+  const result = [];
+  for (const list of grouped.values()) {
+    const sorted = [...list].sort((a, b) =>
+      normalizeDate(getColumn(a, columns.date)).localeCompare(normalizeDate(getColumn(b, columns.date))),
+    );
 
-  const values = [ROSTER_HEADERS, ...withReturnDepartureOffsets(canonicalizeDuplicateFlightRows(dedupeRosterRows(rows)))];
-  const filePath = path.join(os.tmpdir(), `pdc-roster-${ownerUid.replace(/[^A-Za-z0-9_-]/g, "_")}.json`);
-  fs.writeFileSync(filePath, JSON.stringify({ values }, null, 2), "utf-8");
-  return { filePath, pdcUserName, rowCount: values.length - 1 };
-}
-
-async function deleteQueryDocs(snapshot) {
-  for (const doc of snapshot.docs) {
-    await doc.ref.delete();
-  }
-}
-
-async function deleteExistingFlatPerDiemRows(db, { ownerUid, pdcUserName, ownerKey }) {
-  const collection = db.collection(PERDIEM_COLLECTION);
-  const snapshots = [];
-  snapshots.push(await collection.where("owner", "==", ownerUid).get());
-  snapshots.push(await collection.where("uid", "==", ownerUid).get());
-  snapshots.push(await collection.where("perdiem_owner_key", "==", ownerKey).get());
-  if (pdcUserName) snapshots.push(await collection.where("pdc_user_name", "==", pdcUserName).get());
-
-  const refs = new Map();
-  for (const snapshot of snapshots) {
-    for (const doc of snapshot.docs) {
-      const data = doc.data();
-      if (data?.Date && data?.Activity) {
-        refs.set(doc.ref.path, doc.ref);
+    const kept = [];
+    for (const row of sorted) {
+      const previous = kept.at(-1);
+      if (previous && looksLikeAdjacentOutboundDuplicate(previous, row, columns)) {
+        kept[kept.length - 1] = preferredDuplicateRow(previous, row, columns);
+      } else {
+        kept.push(row);
       }
     }
+    result.push(...kept);
   }
 
-  for (const ref of refs.values()) {
-    await ref.delete();
-  }
-
-  return refs.size;
-}
-
-async function storePersonalPerDiemRows(db, rows, { ownerUid, displayName, pdcUserName, ownerKey }) {
-  const ownerRef = db.collection(PERDIEM_COLLECTION).doc(ownerKey);
-  const existingSnapshot = await ownerRef.collection("items").get();
-  await deleteQueryDocs(existingSnapshot);
-  let deleted = existingSnapshot.size;
-
-  const legacyOwnerKey = safeDocIdPart(ownerUid);
-  if (legacyOwnerKey !== ownerKey) {
-    const legacySnapshot = await db
-      .collection(PERDIEM_COLLECTION)
-      .doc(legacyOwnerKey)
-      .collection("items")
-      .get();
-    await deleteQueryDocs(legacySnapshot);
-    deleted += legacySnapshot.size;
-  }
-  deleted += await deleteExistingFlatPerDiemRows(db, { ownerUid, pdcUserName, ownerKey });
-
-  let stored = 0;
-
-  for (const row of rows) {
-    const docId = perDiemDocId(row, ownerKey);
-    const data = {
-      ...row,
-      Total: parseMoney(row.Total),
-      TotalDisplay: appDisplayTotal(row.Total),
-      owner: ownerUid,
-      uid: ownerUid,
-      display_name: displayName,
-      pdc_user_name: pdcUserName,
-      perdiem_owner_key: ownerKey,
-      source: "slack_pdc_perdiem",
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    };
-    const batch = db.batch();
-    batch.set(ownerRef, {
-      owner: ownerUid,
-      uid: ownerUid,
-      display_name: displayName,
-      pdc_user_name: pdcUserName,
-      perdiem_owner_key: ownerKey,
-      source: "slack_pdc_perdiem",
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-    batch.set(ownerRef.collection("items").doc(docId), data, { merge: true });
-    batch.set(db.collection(PERDIEM_COLLECTION).doc(docId), data, { merge: true });
-    await batch.commit();
-    stored += 1;
-  }
-
-  return { stored, deleted };
-}
-
-async function storedPerDiemRowsForMonth(db, ownerKey, target) {
-  const snapshot = await db
-    .collection(PERDIEM_COLLECTION)
-    .doc(ownerKey)
-    .collection("items")
-    .get();
-
-  return snapshot.docs
-    .map((doc) => doc.data())
-    .filter((row) => monthToNumber(row.Month) === target.month)
-    .filter((row) => String(row.Year || "").trim() === String(target.year))
-    .filter((row) => !["RI", "RO"].includes(cleanText(row.Activity, 20).toUpperCase()))
-    .map((row) => ({
-      Date: cleanText(row.Date, 20),
-      Activity: cleanText(row.Activity, 40),
-      From: cleanText(row.From, 10),
-      Destination: cleanText(row.Destination, 20),
-      StayHours: cleanText(row.StayHours, 20),
-      Rate: parseMoney(row.Rate),
-      Total: parseMoney(row.Total),
-      TotalDisplay: appDisplayTotal(row.Total),
-      TransportFee: parseMoney(row.TransportFee),
-    }))
-    .sort((a, b) => `${dateSortKey(a.Date)}_${a.Activity}_${a.From}_${a.Destination}`.localeCompare(
-      `${dateSortKey(b.Date)}_${b.Activity}_${b.From}_${b.Destination}`
-    ));
-}
-
-function tableCell(value, width) {
-  const text = cleanText(value, 80);
-  return text.length > width ? text.slice(0, width - 1) : text.padEnd(width, " ");
-}
-
-function reportTable(rows) {
-  const header = ["Date", "Activity", "From", "Destination", "StayHours", "Rate", "Total", "TransportFee"];
-  const widths = [10, 8, 4, 11, 9, 5, 8, 12];
-  const formatRow = (values) => values.map((value, index) => tableCell(value, widths[index])).join("  ");
-  const body = rows.map((row) => formatRow([
-    row.Date,
-    row.Activity,
-    row.From,
-    row.Destination,
-    row.StayHours,
-    Number(row.Rate || 0).toFixed(2),
-    Number(row.Total || 0).toFixed(2),
-    String(Math.round(Number(row.TransportFee || 0))),
-  ]));
-  return [formatRow(header), ...body].join("\n");
-}
-
-function formatKoreanMonth({ year, month }) {
-  return `${year}년 ${month}월`;
-}
-
-function formatKstTimestamp(date = new Date()) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Seoul",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).format(date).replace(",", "");
-}
-
-function shortCommitSha() {
-  return cleanText(process.env.GITHUB_SHA || "", 40).slice(0, 7) || "local";
-}
-
-async function postSlack(text) {
-  const responseUrl = optionalEnv("SLACK_RESPONSE_URL");
-  if (!responseUrl) {
-    console.log(text);
-    return;
-  }
-
-  const response = await fetch(responseUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      response_type: "ephemeral",
-      text,
-    }),
+  return result.sort((left, right) => {
+    const dateCompare = normalizeDate(getColumn(left, columns.date)).localeCompare(
+      normalizeDate(getColumn(right, columns.date)),
+    );
+    if (dateCompare !== 0) return dateCompare;
+    return normalizeActivity(getColumn(left, columns.activity)).localeCompare(
+      normalizeActivity(getColumn(right, columns.activity)),
+    );
   });
-  if (!response.ok) {
-    throw new Error(`Slack response_url failed (${response.status}): ${await response.text()}`);
-  }
+}
+
+function sanitizeFilePart(value, fallback = "user") {
+  const normalized = String(value || fallback)
+    .normalize("NFKD")
+    .replace(/[^a-zA-Z0-9가-힣._-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return normalized || fallback;
+}
+
+function ownerReportKey(owner) {
+  const visible = owner.displayName || owner.email || owner.owner || owner.uid || owner.userId;
+  if (visible) return sanitizeFilePart(visible);
+
+  const hash = crypto.createHash("sha256").update(JSON.stringify(owner)).digest("hex").slice(0, 10);
+  return `user_${hash}`;
 }
 
 async function main() {
-  const ownerUid = requiredEnv("FIREBASE_UID");
-  const displayName = optionalEnv("PERDIEM_USER_NAME") || ownerUid;
-  const target = targetMonthYear();
-  const monthName = MONTH_NAMES[target.month - 1];
+  const force =
+    process.env.FORCE_PERDIEM_REPORT === "true" ||
+    process.env.GITHUB_EVENT_NAME === "workflow_dispatch";
 
-  admin.initializeApp({
-    credential: admin.credential.cert(parseJsonEnv("FIREBASE_SERVICE_ACCOUNT")),
-  });
-
-  const snapshot = await admin.firestore()
-    .collection(PDC_COLLECTION)
-    .where("owner", "==", ownerUid)
-    .limit(1)
-    .get();
-  if (snapshot.empty) {
-    throw new Error(`No pdc roster rows found for owner ${ownerUid}`);
+  if (!force && !isKstMonthCloseRun()) {
+    console.log("Not KST month-close day; skipping report.");
+    return;
   }
 
-  const db = admin.firestore();
-  const { filePath, pdcUserName, rowCount } = await pdcRosterJsonPath(db, ownerUid);
-  const reportName = pdcUserName || displayName;
-  const ownerKey = safeDocIdPart(reportName || ownerUid);
-  const calculatedRows = await generateSlackPerDiemList(filePath);
-  const { rows: finalRows, overrideCount } = await applyPerDiemOverrides(db, calculatedRows, ownerKey, target);
-  const { stored: storedRows, deleted: deletedRows } = await storePersonalPerDiemRows(db, finalRows, {
-    ownerUid,
-    displayName: reportName,
-    pdcUserName,
-    ownerKey,
+  const target = defaultTargetMonthYear();
+  const targetYear = Number(process.env.PERDIEM_TARGET_YEAR || target.year);
+  const targetMonth = Number(process.env.PERDIEM_TARGET_MONTH || target.month);
+  const monthName = MONTH_NAMES[targetMonth - 1];
+
+  if (!monthName || !Number.isInteger(targetYear) || targetYear < 2000) {
+    throw new Error(`Invalid target month/year: ${targetMonth}/${targetYear}`);
+  }
+
+  const owner = reportOwner();
+  if (!hasRequestedIdentity(owner)) {
+    throw new Error(
+      "User identity is required. Set PERDIEM_OWNER, FIREBASE_UID, PERDIEM_USER_ID, or PERDIEM_USER_EMAIL.",
+    );
+  }
+
+  const credentials = requiredJsonEnv("GOOGLE_SHEETS_CREDENTIALS");
+  const auth = new google.auth.GoogleAuth({
+    credentials,
+    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
   });
-  const rows = await storedPerDiemRowsForMonth(db, ownerKey, target);
+  const sheets = google.sheets({ version: "v4", auth });
 
-  const totalPerdiem = rows.reduce((sum, row) => sum + appDisplayTotal(row.Total), 0);
-  const totalTransportFee = rows.reduce((sum, row) => sum + row.TransportFee, 0);
-  const table = rows.length ? reportTable(rows) : "No PerDiem rows found.";
-  const truncatedTable = table.length > 2500 ? `${table.slice(0, 2500)}\n...truncated` : table;
-  const text = [
-    `*${reportName}*`,
-    `*${formatKoreanMonth(target)} PerDiem Report*`,
-    "```",
-    truncatedTable,
-    "```",
-    `${reportName}: ${formatKoreanMonth(target)} Prediem=${totalPerdiem.toFixed(2)}/Transport fee=${totalTransportFee.toFixed(0)}`,
-    "",
-    `created at: ${formatKstTimestamp()} KST`,
-    `source: Firestore ${PDC_COLLECTION} -> ${PERDIEM_COLLECTION}/${ownerKey}/items, pdc_user_name=${pdcUserName || "blank"}, roster rows=${rowCount}, deleted=${deletedRows}, stored=${storedRows}, overrides=${overrideCount}, Month=${monthName}, Year=${target.year}, commit=${shortCommitSha()}`,
-  ].join("\n");
+  // 사용자 식별 컬럼이 M열 이후에 있을 수 있으므로 전체 사용 범위를 읽는다.
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${SHEET_NAME}!A:Z`,
+  });
 
-  await postSlack(text);
-  console.log(`Posted Slack PerDiem report for ${ownerUid} (${reportName}): ${rows.length} row(s).`);
+  const values = response.data.values || [];
+  if (values.length === 0) throw new Error(`${SHEET_NAME} sheet is empty`);
+
+  const header = values[0];
+  const index = buildHeaderIndex(header);
+  const columns = {
+    date: findColumn(index, ["Date"]),
+    activity: findColumn(index, ["Activity", "FLT", "Flight"]),
+    from: findColumn(index, ["From"]),
+    destination: findColumn(index, ["Destination", "To"]),
+    ri: findColumn(index, ["RI"]),
+    ro: findColumn(index, ["RO"]),
+    month: findColumn(index, ["Month"]),
+    year: findColumn(index, ["Year"]),
+    total: findColumn(index, ["Total"]),
+    transportFee: findColumn(index, ["TransportFee", "Transport Fee"]),
+    stayHours: findColumn(index, ["StayHours", "Stay Hours"]),
+    stdl: findColumn(index, ["STDL", "STD(L)"]),
+    stdz: findColumn(index, ["STDZ", "STD(Z)"]),
+    owner: findColumn(index, ["owner", "Owner"]),
+    uid: findColumn(index, ["uid", "UID"]),
+    userId: findColumn(index, ["userId", "User ID", "firebaseUid"]),
+    email: findColumn(index, ["email", "Email"]),
+  };
+
+  for (const name of ["month", "year", "total", "transportFee"]) {
+    if (columns[name] < 0) {
+      throw new Error(`Missing ${name} column in ${SHEET_NAME}`);
+    }
+  }
+
+  const hasUserColumn = [columns.owner, columns.uid, columns.userId, columns.email]
+    .some((columnIndex) => columnIndex >= 0);
+
+  if (!hasUserColumn) {
+    throw new Error(
+      `${SHEET_NAME} must contain at least one user column: owner, uid, userId, or email.`,
+    );
+  }
+
+  const monthUserRows = values.slice(1).filter((row) => (
+    monthToNumber(getColumn(row, columns.month)) === targetMonth &&
+    String(getColumn(row, columns.year)).trim() === String(targetYear) &&
+    rowMatchesOwner(row, columns, owner)
+  ));
+
+  const filteredRows = dedupePerDiemRows(monthUserRows, columns);
+
+  const totalPerdiem = filteredRows.reduce(
+    (sum, row) => sum + parseMoney(getColumn(row, columns.total)),
+    0,
+  );
+  const totalTransportFee = filteredRows.reduce(
+    (sum, row) => sum + parseMoney(getColumn(row, columns.transportFee)),
+    0,
+  );
+  const grandTotal = totalPerdiem + totalTransportFee;
+
+  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+  const userKey = ownerReportKey(owner);
+  const baseName = `Perdiem_${userKey}_${monthName}_${targetYear}`;
+  const csvPath = path.join(OUTPUT_DIR, `${baseName}.csv`);
+  const summaryPath = path.join(OUTPUT_DIR, `${baseName}.json`);
+
+  const summaryRows = [
+    [],
+    ["Summary"],
+    ["User", owner.displayName || owner.email || owner.owner || owner.uid || owner.userId],
+    ["Month", monthName],
+    ["Year", targetYear],
+    ["Rows Before Dedupe", monthUserRows.length],
+    ["Rows", filteredRows.length],
+    ["Duplicates Removed", monthUserRows.length - filteredRows.length],
+    ["Total Perdiem", totalPerdiem.toFixed(2)],
+    ["Transport Fee Total", totalTransportFee.toFixed(2)],
+    ["Grand Total", grandTotal.toFixed(2)],
+  ];
+
+  fs.writeFileSync(
+    csvPath,
+    `${toCsv([header, ...filteredRows, ...summaryRows])}\n`,
+    "utf-8",
+  );
+
+  fs.writeFileSync(
+    summaryPath,
+    JSON.stringify({
+      owner: {
+        owner: owner.owner,
+        uid: owner.uid,
+        userId: owner.userId,
+        email: owner.email,
+        displayName: owner.displayName,
+      },
+      month: monthName,
+      monthNumber: targetMonth,
+      year: targetYear,
+      rowsBeforeDedupe: monthUserRows.length,
+      rows: filteredRows.length,
+      duplicatesRemoved: monthUserRows.length - filteredRows.length,
+      totalPerdiem,
+      totalTransportFee,
+      grandTotal,
+      csvPath,
+      fileBaseName: baseName,
+    }, null, 2),
+    "utf-8",
+  );
+
+  console.log(`PERDIEM_REPORT_CSV=${csvPath}`);
+  console.log(`PERDIEM_REPORT_SUMMARY=${summaryPath}`);
+  console.log(`PERDIEM_REPORT_FILE_BASE=${baseName}`);
+  console.log(`PERDIEM_REPORT_OWNER=${owner.owner || owner.uid || owner.userId || owner.email}`);
+  console.log(`PERDIEM_REPORT_ROWS_BEFORE_DEDUPE=${monthUserRows.length}`);
+  console.log(`PERDIEM_REPORT_ROWS=${filteredRows.length}`);
+  console.log(`PERDIEM_DUPLICATES_REMOVED=${monthUserRows.length - filteredRows.length}`);
+  console.log(`PERDIEM_TOTAL=${totalPerdiem.toFixed(2)}`);
+  console.log(`TRANSPORT_FEE_TOTAL=${totalTransportFee.toFixed(2)}`);
+  console.log(`GRAND_TOTAL=${grandTotal.toFixed(2)}`);
 }
 
-main().catch(async (error) => {
-  const text = `Monthly PerDiem Slack report failed: ${error.message}`;
-  try {
-    await postSlack(text);
-  } catch {
-    // Keep the original failure visible in GitHub Actions.
-  }
+main().catch((error) => {
   console.error(error);
   process.exit(1);
 });
