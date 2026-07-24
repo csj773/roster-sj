@@ -79,10 +79,26 @@ function dateNumber(value) {
   return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) / 86400000;
 }
 
+function parseRosterTime(value) {
+  const text = cleanText(value, 40).replace(/\s+/g, "");
+  const match = text.match(/^(\d{1,2}):?(\d{2})([+-]\d+)?$/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const dayOffset = Number(match[3] || 0);
+  if (hour > 23 || minute > 59) return null;
+  return {
+    hour,
+    minute,
+    dayOffset,
+    minutes: hour * 60 + minute,
+    normalized: `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}${dayOffset ? `${dayOffset > 0 ? "+" : ""}${dayOffset}` : ""}`,
+  };
+}
+
 function timeMinutes(value) {
-  const match = cleanText(value, 40).match(/(\d{1,2}):?(\d{2})/);
-  if (!match) return Number.NaN;
-  return Number(match[1]) * 60 + Number(match[2]);
+  const parsed = parseRosterTime(value);
+  return parsed ? parsed.minutes : Number.NaN;
 }
 
 function looksLikeSameRosterEvent(a, b) {
@@ -117,28 +133,31 @@ function dedupeImportDocs(docs) {
   return groups.map((items) => items.reduce(preferredDuplicateDoc, null));
 }
 
-async function deleteExistingOwnerPdcDocs(db, docs) {
-  const owner = cleanText(docs[0]?.owner, 500);
-  if (!owner) return 0;
+async function commitInChunks(db, operations, chunkSize = 400) {
+  for (let i = 0; i < operations.length; i += chunkSize) {
+    const batch = db.batch();
+    for (const operation of operations.slice(i, i + chunkSize)) operation(batch);
+    await batch.commit();
+  }
+}
+
+async function deleteExistingOwnerPdcDocs(db, ownerUid) {
+  const owner = cleanText(ownerUid, 500);
+  if (!owner) throw new Error("owner uid is required for per-diem rewrite");
 
   const refs = new Map();
+
+  // 평면 pdc 문서 중 현재 사용자(owner) 자료만 삭제합니다.
   const flatSnapshot = await db.collection(PDC_COLLECTION).where("owner", "==", owner).get();
-  for (const doc of flatSnapshot.docs) {
-    refs.set(doc.ref.path, doc.ref);
-  }
+  for (const doc of flatSnapshot.docs) refs.set(doc.ref.path, doc.ref);
 
-  const eventsSnapshot = await db
-    .collection(PDC_COLLECTION)
-    .doc(ownerPdcDocId(owner))
-    .collection("events")
-    .get();
-  for (const doc of eventsSnapshot.docs) {
-    refs.set(doc.ref.path, doc.ref);
-  }
+  // 사용자 문서 아래 events도 현재 사용자 것만 삭제합니다.
+  const ownerRef = db.collection(PDC_COLLECTION).doc(ownerPdcDocId(owner));
+  const eventsSnapshot = await ownerRef.collection("events").get();
+  for (const doc of eventsSnapshot.docs) refs.set(doc.ref.path, doc.ref);
 
-  for (const ref of refs.values()) {
-    await ref.delete();
-  }
+  // 다른 사용자의 pdc 자료는 건드리지 않습니다.
+  await commitInChunks(db, [...refs.values()].map((ref) => (batch) => batch.delete(ref)));
   return refs.size;
 }
 
@@ -244,9 +263,14 @@ function timeWithDateOffset(start, end) {
 }
 
 function compactTimeWithOffset(value) {
-  const match = cleanText(value, 40).match(/^(\d{1,2}):(\d{2})([+-]\d+)?$/);
-  if (!match) return cleanText(value, 40);
-  return `${match[1].padStart(2, "0")}${match[2]}${match[3] || ""}`;
+  const parsed = parseRosterTime(value);
+  if (!parsed) return cleanText(value, 40);
+  return `${String(parsed.hour).padStart(2, "0")}${String(parsed.minute).padStart(2, "0")}${parsed.dayOffset ? `${parsed.dayOffset > 0 ? "+" : ""}${parsed.dayOffset}` : ""}`;
+}
+
+function formatRosterTime(value) {
+  const parsed = parseRosterTime(value);
+  return parsed ? parsed.normalized : cleanText(value, 40);
 }
 
 function extractedTime(text, kind, zone) {
@@ -272,28 +296,34 @@ function arrivalWithOffset(std, sta) {
   return comparison !== null && comparison <= 0 ? `${arrival}+1` : arrival;
 }
 
-function rosterDateTimeValue(docData, kind) {
-  // RI/RO는 기존 roster 로직과 동일하게 ISO 문자열로 저장합니다.
-  // STD/STA가 있으면 이를 우선 사용하고, 없을 경우 Date + Zulu 시간을 조합합니다.
-  const directValue = kind === "STD" ? docData.STD : docData.STA;
-  if (directValue && Number.isFinite(Date.parse(directValue))) return directValue;
-
+function rosterDateTimeValue(docData, kind, zone = "Z") {
+  // Date는 운항 기준일이며, 각 시간 필드의 +1/-1을 실제 하루 후/전으로 적용합니다.
+  // 예: Date=2026.07.24, STAZ=02:30+1 -> 2026-07-25T02:30:00.000Z
   const dateMatch = cleanText(docData.Date, 20).match(/^(\d{4})[.-](\d{2})[.-](\d{2})$/);
-  const timeValue = kind === "STD" ? docData.STDZ : docData.STAZ;
-  const timeMatch = cleanText(timeValue, 40).match(/^(\d{1,2}):?(\d{2})([+-]\d+)?$/);
-  if (!dateMatch || !timeMatch) return "";
+  if (!dateMatch) return "";
 
-  const base = Date.UTC(
-    Number(dateMatch[1]),
-    Number(dateMatch[2]) - 1,
-    Number(dateMatch[3]),
-    Number(timeMatch[1]),
-    Number(timeMatch[2]),
-    0,
-    0,
-  );
-  const dayOffset = Number(timeMatch[3] || 0);
-  return new Date(base + dayOffset * 86400000).toISOString();
+  const isStd = kind === "STD";
+  const primaryField = zone === "L"
+    ? (isStd ? (docData.STDL || docData["STD(L)"]) : (docData.STAL || docData["STA(L)"]))
+    : (isStd ? (docData.STDZ || docData["STD(Z)"]) : (docData.STAZ || docData["STA(Z)"]));
+  const parsedTime = parseRosterTime(primaryField);
+
+  if (parsedTime) {
+    const base = Date.UTC(
+      Number(dateMatch[1]),
+      Number(dateMatch[2]) - 1,
+      Number(dateMatch[3]),
+      parsedTime.hour,
+      parsedTime.minute,
+      0,
+      0,
+    );
+    return new Date(base + parsedTime.dayOffset * 86400000).toISOString();
+  }
+
+  // 시간 필드가 없을 때만 ICS 원본 ISO 값을 보조값으로 사용합니다.
+  const directValue = isStd ? docData.STD : docData.STA;
+  return directValue && Number.isFinite(Date.parse(directValue)) ? directValue : "";
 }
 
 function applyPerDiemMarkers(docs) {
@@ -392,11 +422,9 @@ function monthName(month) {
   return ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][month - 1] || "";
 }
 
-// 시간 문자열을 깔끔한 HH:mm 형식으로 강제 변환 (자정이 넘어가는 +1 표시 등을 제거)
+// HH:mm 형식은 유지하되 +1/-1 날짜 오프셋을 절대 제거하지 않습니다.
 function formatToHHmm(value) {
-  const match = String(value || "").match(/(\d{1,2}):?(\d{2})/);
-  if (match) return `${match[1].padStart(2, "0")}:${match[2]}`;
-  return String(value || "");
+  return formatRosterTime(value);
 }
 
 function icsEventToPdcDoc(event, owner) {
@@ -482,30 +510,43 @@ async function fetchIcsCalendar(calendarUrl) {
   return text;
 }
 
-async function uploadPdcDocs(db, docs) {
+async function uploadPdcDocs(db, owner, docs) {
+  const ownerUid = cleanText(owner.uid, 500);
+  if (!ownerUid) throw new Error("FIREBASE_UID is required for user-specific rewrite");
+
   const uniqueDocs = applyPerDiemMarkers(dedupeImportDocs(docs));
-  let deleted = await deleteExistingOwnerPdcDocs(db, uniqueDocs);
-  let imported = 0;
+
+  // 사용자별 rewrite: 해당 owner의 기존 Per Diem/PDC 자료만 먼저 삭제합니다.
+  const deleted = await deleteExistingOwnerPdcDocs(db, ownerUid);
+  const ownerRef = db.collection(PDC_COLLECTION).doc(ownerPdcDocId(ownerUid));
+
+  const operations = [];
+  operations.push((batch) => batch.set(ownerRef, {
+    owner: ownerUid,
+    uid: ownerUid,
+    display_name: owner.displayName || "",
+    pdc_user_name: owner.displayName || "",
+    email: owner.email || "",
+    source: SLACK_ICAL_SOURCE,
+    rewrittenAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true }));
 
   for (const docData of uniqueDocs) {
-    const batch = db.batch();
-    const ownerRef = db.collection(PDC_COLLECTION).doc(ownerPdcDocId(docData.owner));
-    const eventRef = ownerRef.collection("events").doc(pdcEventDocId(docData));
-    batch.set(ownerRef, {
-      owner: docData.owner,
-      uid: docData.uid,
-      display_name: docData.display_name || docData.pdc_user_name || "",
-      pdc_user_name: docData.pdc_user_name || "",
-      email: docData.email || "",
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-    batch.set(eventRef, docData, { merge: true });
-    batch.set(db.collection(PDC_COLLECTION).doc(), docData);
-    await batch.commit();
-    imported += 1;
+    const eventId = pdcEventDocId(docData);
+    const eventRef = ownerRef.collection("events").doc(eventId);
+    // 평면 collection도 deterministic ID를 사용하여 사용자별 rewrite 결과가 명확해집니다.
+    const flatRef = db.collection(PDC_COLLECTION).doc(`event_${eventId}`);
+    operations.push((batch) => batch.set(eventRef, docData, { merge: false }));
+    operations.push((batch) => batch.set(flatRef, docData, { merge: false }));
   }
 
-  return { deleted, imported, skippedDuplicates: docs.length - uniqueDocs.length };
+  await commitInChunks(db, operations);
+  return {
+    deleted,
+    imported: uniqueDocs.length,
+    skippedDuplicates: docs.length - uniqueDocs.length,
+  };
 }
 
 async function main() {
@@ -531,7 +572,7 @@ async function main() {
     .filter(Boolean);
   if (!docs.length) throw new Error("iCal calendar was fetched, but no roster events were found");
 
-  const result = await uploadPdcDocs(db, docs);
+  const result = await uploadPdcDocs(db, owner, docs);
   console.log(`Rewrote ${PDC_COLLECTION} for this owner; saved ${result.imported} event(s); removed ${result.deleted} previous owner event(s); skipped ${result.skippedDuplicates} duplicate event(s).`);
 }
 
