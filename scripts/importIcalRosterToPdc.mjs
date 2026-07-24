@@ -73,7 +73,8 @@ function importDuplicateKey(docData) {
 }
 
 function dateNumber(value) {
-  const match = cleanText(value, 20).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  // Firestore Date는 YYYY.MM.DD 형식으로 저장되므로 점과 하이픈을 모두 허용합니다.
+  const match = cleanText(value, 20).match(/^(\d{4})[.-](\d{2})[.-](\d{2})$/);
   if (!match) return Number.NaN;
   return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) / 86400000;
 }
@@ -271,14 +272,88 @@ function arrivalWithOffset(std, sta) {
   return comparison !== null && comparison <= 0 ? `${arrival}+1` : arrival;
 }
 
-function perDiemMarkers(route, end) {
-  const from = cleanText(route.from, 10).toUpperCase();
-  const to = cleanText(route.to, 10).toUpperCase();
-  const arrivalIso = end.iso || "";
-  return {
-    RI: from === "ICN" && to && to !== "ICN" ? arrivalIso : "",
-    RO: to === "ICN" && from && from !== "ICN" ? arrivalIso : "",
-  };
+function rosterDateTimeValue(docData, kind) {
+  // RI/RO는 기존 roster 로직과 동일하게 ISO 문자열로 저장합니다.
+  // STD/STA가 있으면 이를 우선 사용하고, 없을 경우 Date + Zulu 시간을 조합합니다.
+  const directValue = kind === "STD" ? docData.STD : docData.STA;
+  if (directValue && Number.isFinite(Date.parse(directValue))) return directValue;
+
+  const dateMatch = cleanText(docData.Date, 20).match(/^(\d{4})[.-](\d{2})[.-](\d{2})$/);
+  const timeValue = kind === "STD" ? docData.STDZ : docData.STAZ;
+  const timeMatch = cleanText(timeValue, 40).match(/^(\d{1,2}):?(\d{2})([+-]\d+)?$/);
+  if (!dateMatch || !timeMatch) return "";
+
+  const base = Date.UTC(
+    Number(dateMatch[1]),
+    Number(dateMatch[2]) - 1,
+    Number(dateMatch[3]),
+    Number(timeMatch[1]),
+    Number(timeMatch[2]),
+    0,
+    0,
+  );
+  const dayOffset = Number(timeMatch[3] || 0);
+  return new Date(base + dayOffset * 86400000).toISOString();
+}
+
+function applyPerDiemMarkers(docs) {
+  const sorted = [...docs].sort((a, b) => {
+    const aTime = Date.parse(a.STD || "");
+    const bTime = Date.parse(b.STD || "");
+    if (Number.isFinite(aTime) && Number.isFinite(bTime) && aTime !== bTime) {
+      return aTime - bTime;
+    }
+
+    const aFallback = `${cleanText(a.Date, 20)} ${cleanText(a.STDZ || a.STDL, 20)}`;
+    const bFallback = `${cleanText(b.Date, 20)} ${cleanText(b.STDZ || b.STDL, 20)}`;
+    return aFallback.localeCompare(bFallback);
+  });
+
+  for (let i = 0; i < sorted.length; i += 1) {
+    const docData = sorted[i];
+    const from = cleanText(docData.From, 10).toUpperCase();
+    const to = cleanText(docData.To, 10).toUpperCase();
+
+    let ri = "";
+    let ro = "";
+    let quickTurn = false;
+
+    // ===== 출발편: ICN → 해외 =====
+    if (from === "ICN" && to && to !== "ICN") {
+      ri = rosterDateTimeValue(docData, "STA");
+    }
+    // ===== 귀국편: 해외 → ICN =====
+    else if (to === "ICN" && from && from !== "ICN") {
+      // 귀국편의 RO는 도착시각이 아니라 현재 편의 출발시각입니다.
+      ro = rosterDateTimeValue(docData, "STD");
+
+      // 기존 flightRows[i - 1] 로직과 동일하게 바로 앞 편만 확인합니다.
+      if (i > 0) {
+        const previous = sorted[i - 1];
+        const previousFrom = cleanText(previous.From, 10).toUpperCase();
+        const previousTo = cleanText(previous.To, 10).toUpperCase();
+
+        if (previousFrom === "ICN" && previousTo === from) {
+          const previousArrival = rosterDateTimeValue(previous, "STA");
+          if (previousArrival) {
+            ri = previousArrival;
+            quickTurn = true;
+          }
+        }
+      }
+    }
+    // ===== 해외 → 해외 =====
+    else if (from && to && from !== "ICN" && to !== "ICN") {
+      ri = rosterDateTimeValue(docData, "STA");
+      ro = rosterDateTimeValue(docData, "STD");
+    }
+
+    docData.RI = ri;
+    docData.RO = ro;
+    docData.QuickTurn = quickTurn;
+  }
+
+  return sorted;
 }
 
 function firstRoute(text) {
@@ -344,7 +419,6 @@ function icsEventToPdcDoc(event, owner) {
   const year = start.date.slice(0, 4);
   const month = Number.parseInt(start.date.slice(5, 7), 10);
   const { crew, crewArray } = crewFromIcsDescription(description);
-  const markers = perDiemMarkers(route, end);
 
   return {
     owner: owner.uid,
@@ -365,8 +439,10 @@ function icsEventToPdcDoc(event, owner) {
     "STA(L)": formatToHHmm(stal),
     "STD(Z)": formatToHHmm(startCompact),
     "STA(Z)": formatToHHmm(endCompact),
-    RI: markers.RI,
-    RO: markers.RO,
+    // 전체 이벤트를 시간순으로 정렬한 뒤 applyPerDiemMarkers()에서 계산합니다.
+    RI: "",
+    RO: "",
+    QuickTurn: false,
     CIL: "",
     COL: "",
     DC: "",
@@ -407,7 +483,7 @@ async function fetchIcsCalendar(calendarUrl) {
 }
 
 async function uploadPdcDocs(db, docs) {
-  const uniqueDocs = dedupeImportDocs(docs);
+  const uniqueDocs = applyPerDiemMarkers(dedupeImportDocs(docs));
   let deleted = await deleteExistingOwnerPdcDocs(db, uniqueDocs);
   let imported = 0;
 
