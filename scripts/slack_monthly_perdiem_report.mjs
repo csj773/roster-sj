@@ -3,7 +3,7 @@ import path from "path";
 import crypto from "crypto";
 import { google } from "googleapis";
 
-//const SPREADSHEET_ID =
+const SPREADSHEET_ID =
   process.env.GOOGLE_SHEETS_SPREADSHEET_ID ||
   "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
 const SHEET_NAME = process.env.PERDIEM_SHEET_NAME || "Perdiem";
