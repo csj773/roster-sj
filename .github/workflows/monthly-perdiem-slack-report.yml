@@ -7,30 +7,21 @@ on:
         description: "Firebase Authentication UID for the Slack user"
         required: true
         type: string
-
-      current_user_email:
-        description: "Email address for the PerDiem owner"
-        required: false
-        type: string
-
       current_user_name:
         description: "Display name for the Slack report"
         required: false
         type: string
-
       target_month:
-        description: "Target month: Jul, July, 7, or 07"
+        description: "Target month number, 1-12. Defaults to current/previous KST month."
         required: false
         type: string
-
       target_year:
-        description: "Target year, for example 2026"
+        description: "Target year. Defaults to KST target year."
         required: false
         type: string
-
       slack_response_url:
         description: "Slack delayed response_url"
-        required: false
+        required: true
         type: string
 
 permissions:
@@ -42,10 +33,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "24"
           cache: "npm"
@@ -54,34 +45,21 @@ jobs:
         run: npm install
 
       - name: Mask Slack response URL
-        if: ${{ inputs.slack_response_url != '' }}
         run: echo "::add-mask::${{ inputs.slack_response_url }}"
 
       - name: Post monthly PerDiem report to Slack
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-
-          # 1순위: 입력받은 Firebase UID
-          REPORT_OWNER_UID: ${{ inputs.current_user_uid }}
-
-          # UID 대신 이메일로 조회할 때 사용
-          REPORT_OWNER_EMAIL: ${{ inputs.current_user_email }}
-
-          # UID와 이메일이 모두 없을 때 fallback
-          FIRESTORE_ADMIN_UID: ${{ secrets.FIRESTORE_ADMIN_UID }}
-
-          REPORT_MONTH: ${{ inputs.target_month }}
-          REPORT_YEAR: ${{ inputs.target_year }}
-
+          PERDIEM_OWNER: ${{ secrets.FIRESTORE_ADMIN_UID }}
+          FIREBASE_UID: ${{ inputs.current_user_uid }}
+          PERDIEM_USER_ID: ${{ inputs.current_user_uid }}
+          PERDIEM_USER_NAME: ${{ inputs.current_user_name }}
+          PERDIEM_TARGET_MONTH: ${{ inputs.target_month }}
+          PERDIEM_TARGET_YEAR: ${{ inputs.target_year }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
-
           SLACK_RESPONSE_URL: ${{ inputs.slack_response_url }}
-
-          PERDIEM_COLLECTION: "Perdiem"
-          USER_COLLECTION: "users"
-          OUTPUT_DIR: "outputs"
-
+          FORCE_PERDIEM_REPORT: "true"
         run: node scripts/slack_monthly_perdiem_report.mjs
 
       - name: Upload generated report artifact
