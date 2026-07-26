@@ -3,15 +3,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import admin from "firebase-admin";
 import { WebClient } from "@slack/web-api";
-import * as XLSX from "xlsx";
 
 /**
- * Slack Monthly PerDiem Report
+ * Slack Monthly PerDiem Report (CSV version)
  *
  * Slack command example:
  *   /perdiem-report sjchoi787@gmail.com jul
  *
- * Expected GitHub Actions environment variables:
+ * Expected environment variables:
  *   FIREBASE_SERVICE_ACCOUNT
  *   SLACK_BOT_TOKEN
  *   SLACK_CHANNEL_ID
@@ -19,13 +18,13 @@ import * as XLSX from "xlsx";
  * Slash-command / workflow inputs:
  *   REPORT_OWNER_EMAIL=sjchoi787@gmail.com
  *   REPORT_MONTH=jul
- *   REPORT_YEAR=2026                (optional; current KST year if omitted)
+ *   REPORT_YEAR=2026              (optional)
  *
  * Optional fallback:
  *   REPORT_OWNER_UID
  *   FIRESTORE_ADMIN_UID
- *   PERDIEM_COLLECTION=Perdiem
  *   USER_COLLECTION=users
+ *   PERDIEM_COLLECTION=Perdiem
  *   OUTPUT_DIR=output
  */
 
@@ -35,9 +34,11 @@ function cleanString(value) {
 
 function requiredEnv(name) {
   const value = cleanString(process.env[name]);
+
   if (!value) {
     throw new Error(`${name} is required`);
   }
+
   return value;
 }
 
@@ -113,13 +114,15 @@ function getCurrentKstYearMonth() {
     month: "short",
   }).formatToParts(new Date());
 
+  const year =
+    parts.find((part) => part.type === "year")?.value || "";
+
+  const month =
+    parts.find((part) => part.type === "month")?.value || "";
+
   return {
-    year: cleanString(
-      parts.find((part) => part.type === "year")?.value
-    ),
-    month: normalizeMonth(
-      parts.find((part) => part.type === "month")?.value
-    ),
+    year: cleanString(year),
+    month: normalizeMonth(month),
   };
 }
 
@@ -130,15 +133,9 @@ function parseServiceAccount() {
     const credentials = JSON.parse(raw);
 
     if (credentials.private_key) {
-      credentials.private_key = credentials.private_key.replace(
-        /\\n/g,
-        "\n"
-      );
+      credentials.private_key =
+        credentials.private_key.replace(/\\n/g, "\n");
     }
-
-    console.log(
-      "Using Firebase credentials from FIREBASE_SERVICE_ACCOUNT"
-    );
 
     return credentials;
   } catch (error) {
@@ -148,14 +145,14 @@ function parseServiceAccount() {
   }
 }
 
-function initializeFirebase() {
-  if (admin.apps.length > 0) {
-    return admin.firestore();
+function initializeFirestore() {
+  if (!admin.apps.length) {
+    admin.initializeApp({
+      credential: admin.credential.cert(
+        parseServiceAccount()
+      ),
+    });
   }
-
-  admin.initializeApp({
-    credential: admin.credential.cert(parseServiceAccount()),
-  });
 
   return admin.firestore();
 }
@@ -173,18 +170,19 @@ function resolveOwnerUidFromUserDocument(userDoc) {
 }
 
 async function findOwnerUidByEmail(db, email) {
-  const normalizedEmail = cleanString(email).toLowerCase();
-  const userCollection =
-    cleanString(process.env.USER_COLLECTION) || "users";
+  const normalizedEmail =
+    cleanString(email).toLowerCase();
 
   if (!normalizedEmail) {
     throw new Error("REPORT_OWNER_EMAIL is empty");
   }
 
+  const userCollection =
+    cleanString(process.env.USER_COLLECTION) || "users";
+
   console.log(`REPORT_OWNER_EMAIL=${normalizedEmail}`);
   console.log(`USER_COLLECTION=${userCollection}`);
 
-  // 우선 소문자 email 정확 일치 쿼리
   const exactSnapshot = await db
     .collection(userCollection)
     .where("email", "==", normalizedEmail)
@@ -192,9 +190,10 @@ async function findOwnerUidByEmail(db, email) {
     .get();
 
   if (!exactSnapshot.empty) {
-    const ownerUid = resolveOwnerUidFromUserDocument(
-      exactSnapshot.docs[0]
-    );
+    const ownerUid =
+      resolveOwnerUidFromUserDocument(
+        exactSnapshot.docs[0]
+      );
 
     if (!ownerUid) {
       throw new Error(
@@ -205,15 +204,17 @@ async function findOwnerUidByEmail(db, email) {
     return ownerUid;
   }
 
-  // 기존 데이터의 email 대소문자 혼용 대응
+  // 기존 데이터에 이메일 대소문자가 섞인 경우를 위한 fallback
   const fallbackSnapshot = await db
     .collection(userCollection)
     .get();
 
   const matchedDoc = fallbackSnapshot.docs.find((doc) => {
     const data = doc.data() || {};
+
     return (
-      cleanString(data.email).toLowerCase() === normalizedEmail
+      cleanString(data.email).toLowerCase() ===
+      normalizedEmail
     );
   });
 
@@ -223,7 +224,8 @@ async function findOwnerUidByEmail(db, email) {
     );
   }
 
-  const ownerUid = resolveOwnerUidFromUserDocument(matchedDoc);
+  const ownerUid =
+    resolveOwnerUidFromUserDocument(matchedDoc);
 
   if (!ownerUid) {
     throw new Error(
@@ -235,31 +237,35 @@ async function findOwnerUidByEmail(db, email) {
 }
 
 async function resolveReportOwnerUid(db) {
-  const explicitOwnerUid = cleanString(
+  const reportOwnerUid = cleanString(
     process.env.REPORT_OWNER_UID
   );
 
-  if (explicitOwnerUid) {
+  if (reportOwnerUid) {
     console.log("OWNER_SOURCE=REPORT_OWNER_UID");
-    return explicitOwnerUid;
+    return reportOwnerUid;
   }
 
-  const ownerEmail = cleanString(
+  const reportOwnerEmail = cleanString(
     process.env.REPORT_OWNER_EMAIL
   );
 
-  if (ownerEmail) {
+  if (reportOwnerEmail) {
     console.log("OWNER_SOURCE=REPORT_OWNER_EMAIL");
-    return findOwnerUidByEmail(db, ownerEmail);
+
+    return findOwnerUidByEmail(
+      db,
+      reportOwnerEmail
+    );
   }
 
-  const fallbackUid = cleanString(
+  const adminUid = cleanString(
     process.env.FIRESTORE_ADMIN_UID
   );
 
-  if (fallbackUid) {
+  if (adminUid) {
     console.log("OWNER_SOURCE=FIRESTORE_ADMIN_UID");
-    return fallbackUid;
+    return adminUid;
   }
 
   throw new Error(
@@ -270,36 +276,46 @@ async function resolveReportOwnerUid(db) {
 function resolveReportPeriod() {
   const current = getCurrentKstYearMonth();
 
-  const year =
-    cleanString(process.env.REPORT_YEAR) || current.year;
+  const reportYear =
+    cleanString(process.env.REPORT_YEAR) ||
+    current.year;
 
-  const monthInput =
-    cleanString(process.env.REPORT_MONTH) || current.month;
+  const reportMonthInput =
+    cleanString(process.env.REPORT_MONTH) ||
+    current.month;
 
-  const month = normalizeMonth(monthInput);
+  const reportMonth =
+    normalizeMonth(reportMonthInput);
 
-  if (!/^\d{4}$/.test(year)) {
+  if (!/^\d{4}$/.test(reportYear)) {
     throw new Error(
-      `REPORT_YEAR must be four digits: ${year}`
+      `REPORT_YEAR must be four digits: ${reportYear}`
     );
   }
 
-  if (!month) {
+  if (!reportMonth) {
     throw new Error(
-      `Invalid REPORT_MONTH: ${monthInput}. Example: Jul, july, 7, or 07`
+      `Invalid REPORT_MONTH: ${reportMonthInput}`
     );
   }
 
-  return { year, month };
+  return {
+    reportYear,
+    reportMonth,
+  };
 }
 
 function numberValue(value) {
-  if (typeof value === "number" && Number.isFinite(value)) {
+  if (
+    typeof value === "number" &&
+    Number.isFinite(value)
+  ) {
     return value;
   }
 
-  const normalized = cleanString(value).replace(/,/g, "");
-  const parsed = Number(normalized);
+  const parsed = Number(
+    cleanString(value).replace(/,/g, "")
+  );
 
   return Number.isFinite(parsed) ? parsed : 0;
 }
@@ -315,58 +331,74 @@ function normalizePerDiemRow(doc) {
     Destination: cleanString(
       data.Destination || data.To
     ),
-    To: cleanString(data.To || data.Destination),
+    To: cleanString(
+      data.To || data.Destination
+    ),
     RI: cleanString(data.RI),
     RO: cleanString(data.RO),
     StayHours: cleanString(data.StayHours),
     Rate: numberValue(data.Rate),
     Total: numberValue(data.Total),
-    TransportFee: numberValue(data.TransportFee),
+    TransportFee: numberValue(
+      data.TransportFee
+    ),
     Month: normalizeMonth(data.Month),
     Year: cleanString(data.Year),
     owner: cleanString(data.owner),
   };
 }
 
-async function loadMonthlyPerDiemRows(
+async function loadMonthlyRows(
   db,
-  ownerUid,
+  reportOwnerUid,
   reportYear,
   reportMonth
 ) {
   const collectionName =
-    cleanString(process.env.PERDIEM_COLLECTION) ||
-    "Perdiem";
+    cleanString(
+      process.env.PERDIEM_COLLECTION
+    ) || "Perdiem";
 
-  console.log(`PERDIEM_COLLECTION=${collectionName}`);
-  console.log(`PERDIEM_QUERY_OWNER=${ownerUid}`);
-  console.log(`REPORT_YEAR=${reportYear}`);
-  console.log(`REPORT_MONTH=${reportMonth}`);
+  console.log(
+    `PERDIEM_COLLECTION=${collectionName}`
+  );
+  console.log(
+    `PERDIEM_QUERY_OWNER=${reportOwnerUid}`
+  );
 
-  // owner 조건은 Firestore에서 직접 수행한다.
-  // Year/Month는 기존 데이터 타입 차이를 허용하기 위해 JS에서 정규화한다.
   const snapshot = await db
     .collection(collectionName)
-    .where("owner", "==", ownerUid)
+    .where("owner", "==", reportOwnerUid)
     .get();
 
-  console.log(`PERDIEM_OWNER_ROWS=${snapshot.size}`);
+  const ownerRows = snapshot.docs.map(
+    normalizePerDiemRow
+  );
 
-  const ownerRows = snapshot.docs.map(normalizePerDiemRow);
+  console.log(
+    `PERDIEM_OWNER_ROWS=${ownerRows.length}`
+  );
 
   const monthlyRows = ownerRows
     .filter((row) => {
       return (
-        row.Year === String(reportYear) &&
-        row.Month === reportMonth
+        String(row.Year || "").trim() ===
+          String(reportYear) &&
+        normalizeMonth(row.Month) ===
+          normalizeMonth(reportMonth)
       );
     })
     .sort((a, b) => {
-      const dateCompare = a.Date.localeCompare(b.Date);
+      const dateCompare =
+        a.Date.localeCompare(b.Date);
+
       if (dateCompare !== 0) {
         return dateCompare;
       }
-      return a.Activity.localeCompare(b.Activity);
+
+      return a.Activity.localeCompare(
+        b.Activity
+      );
     });
 
   console.log(
@@ -376,8 +408,23 @@ async function loadMonthlyPerDiemRows(
   return monthlyRows;
 }
 
-function createExcelBuffer(rows, metadata) {
-  const columns = [
+function escapeCsvValue(value) {
+  const text = String(value ?? "");
+
+  if (
+    text.includes(",") ||
+    text.includes('"') ||
+    text.includes("\n") ||
+    text.includes("\r")
+  ) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+
+  return text;
+}
+
+function createCsv(rows) {
+  const headers = [
     "Date",
     "Activity",
     "From",
@@ -393,103 +440,50 @@ function createExcelBuffer(rows, metadata) {
     "Year",
   ];
 
-  const reportRows = rows.map((row) => ({
-    Date: row.Date,
-    Activity: row.Activity,
-    From: row.From,
-    Destination: row.Destination,
-    To: row.To,
-    RI: row.RI,
-    RO: row.RO,
-    StayHours: row.StayHours,
-    Rate: row.Rate,
-    Total: row.Total,
-    TransportFee: row.TransportFee,
-    Month: row.Month,
-    Year: row.Year,
-  }));
-
-  const totalPerDiem = reportRows.reduce(
-    (sum, row) => sum + numberValue(row.Total),
-    0
-  );
-
-  const totalTransportFee = reportRows.reduce(
-    (sum, row) => sum + numberValue(row.TransportFee),
-    0
-  );
-
-  const workbook = XLSX.utils.book_new();
-
-  const worksheet = XLSX.utils.json_to_sheet(reportRows, {
-    header: columns,
-  });
-
-  worksheet["!cols"] = [
-    { wch: 12 },
-    { wch: 14 },
-    { wch: 10 },
-    { wch: 14 },
-    { wch: 10 },
-    { wch: 12 },
-    { wch: 12 },
-    { wch: 12 },
-    { wch: 10 },
-    { wch: 14 },
-    { wch: 16 },
-    { wch: 10 },
-    { wch: 8 },
+  const lines = [
+    headers.join(","),
+    ...rows.map((row) =>
+      [
+        row.Date,
+        row.Activity,
+        row.From,
+        row.Destination,
+        row.To,
+        row.RI,
+        row.RO,
+        row.StayHours,
+        row.Rate,
+        row.Total,
+        row.TransportFee,
+        row.Month,
+        row.Year,
+      ]
+        .map(escapeCsvValue)
+        .join(",")
+    ),
   ];
 
-  const summaryRows = [
-    ["Report owner email", metadata.ownerEmail || ""],
-    ["Report owner UID", metadata.ownerUid],
-    ["Year", metadata.year],
-    ["Month", metadata.month],
-    ["Rows", reportRows.length],
-    ["PerDiem total", totalPerDiem],
-    ["Transport total", totalTransportFee],
-    ["Grand total", totalPerDiem + totalTransportFee],
-  ];
-
-  const summarySheet =
-    XLSX.utils.aoa_to_sheet(summaryRows);
-
-  summarySheet["!cols"] = [
-    { wch: 22 },
-    { wch: 36 },
-  ];
-
-  XLSX.utils.book_append_sheet(
-    workbook,
-    worksheet,
-    "PerDiem"
-  );
-
-  XLSX.utils.book_append_sheet(
-    workbook,
-    summarySheet,
-    "Summary"
-  );
-
-  return {
-    buffer: XLSX.write(workbook, {
-      type: "buffer",
-      bookType: "xlsx",
-    }),
-    totalPerDiem,
-    totalTransportFee,
-  };
+  // Excel에서 한글 및 UTF-8 인식을 안정적으로 하기 위한 BOM
+  return `\uFEFF${lines.join("\r\n")}\r\n`;
 }
 
-async function saveReportFile(buffer, filename) {
+async function saveCsv(csvText, filename) {
   const outputDir =
-    cleanString(process.env.OUTPUT_DIR) || "output";
+    cleanString(process.env.OUTPUT_DIR) ||
+    "output";
 
-  await fs.mkdir(outputDir, { recursive: true });
+  await fs.mkdir(outputDir, {
+    recursive: true,
+  });
 
-  const outputPath = path.join(outputDir, filename);
-  await fs.writeFile(outputPath, buffer);
+  const outputPath =
+    path.join(outputDir, filename);
+
+  await fs.writeFile(
+    outputPath,
+    csvText,
+    "utf8"
+  );
 
   console.log(`REPORT_FILE=${outputPath}`);
 
@@ -502,27 +496,30 @@ async function ensureSlackChannelMembership(
 ) {
   const auth = await slack.auth.test();
 
-  console.log(`SLACK_WORKSPACE=${auth.team || "(unknown)"}`);
-  console.log(`SLACK_TEAM_ID=${auth.team_id || "(unknown)"}`);
   console.log(
-    `SLACK_BOT_USER_ID=${auth.user_id || "(unknown)"}`
+    `SLACK_TEAM_ID=${auth.team_id || ""}`
   );
-  console.log(`SLACK_CHANNEL_ID=${channelId}`);
+  console.log(
+    `SLACK_BOT_USER_ID=${auth.user_id || ""}`
+  );
+  console.log(
+    `SLACK_CHANNEL_ID=${channelId}`
+  );
 
-  const info = await slack.conversations.info({
-    channel: channelId,
-  });
+  const info =
+    await slack.conversations.info({
+      channel: channelId,
+    });
 
   const channel = info.channel;
 
   console.log(
-    `SLACK_CHANNEL_NAME=${channel?.name || "(unknown)"}`
+    `SLACK_CHANNEL_NAME=${channel?.name || ""}`
   );
   console.log(
-    `SLACK_CHANNEL_PRIVATE=${Boolean(channel?.is_private)}`
-  );
-  console.log(
-    `SLACK_BOT_IS_MEMBER=${Boolean(channel?.is_member)}`
+    `SLACK_BOT_IS_MEMBER=${Boolean(
+      channel?.is_member
+    )}`
   );
 
   if (channel?.is_member) {
@@ -531,8 +528,7 @@ async function ensureSlackChannelMembership(
 
   if (channel?.is_private) {
     throw new Error(
-      `Slack Bot is not a member of private channel ${channelId}. ` +
-        "Add the Roster Share app to that channel manually."
+      `Slack bot is not a member of private channel ${channelId}`
     );
   }
 
@@ -541,108 +537,140 @@ async function ensureSlackChannelMembership(
       channel: channelId,
     });
 
-    console.log(`SLACK_CHANNEL_JOINED=${channelId}`);
+    console.log(
+      `SLACK_CHANNEL_JOINED=${channelId}`
+    );
   } catch (error) {
-    const slackError = error?.data?.error;
-
-    if (slackError !== "already_in_channel") {
+    if (
+      error?.data?.error !==
+      "already_in_channel"
+    ) {
       throw error;
     }
   }
 }
 
-async function sendSlackReport({
-  excelBuffer,
+async function uploadCsvToSlack({
+  csvText,
   filename,
   ownerEmail,
-  year,
-  month,
-  rowCount,
-  totalPerDiem,
-  totalTransportFee,
+  reportYear,
+  reportMonth,
+  rows,
 }) {
-  const token = requiredEnv("SLACK_BOT_TOKEN");
-  const channelId = requiredEnv("SLACK_CHANNEL_ID");
+  const slackToken =
+    requiredEnv("SLACK_BOT_TOKEN");
 
-  const slack = new WebClient(token);
+  const channelId =
+    requiredEnv("SLACK_CHANNEL_ID");
 
-  await ensureSlackChannelMembership(slack, channelId);
+  const slack =
+    new WebClient(slackToken);
 
-  const ownerLabel = ownerEmail || "UID owner";
-  const grandTotal =
-    totalPerDiem + totalTransportFee;
+  await ensureSlackChannelMembership(
+    slack,
+    channelId
+  );
+
+  const totalPerDiem = rows.reduce(
+    (sum, row) =>
+      sum + numberValue(row.Total),
+    0
+  );
+
+  const totalTransportFee = rows.reduce(
+    (sum, row) =>
+      sum +
+      numberValue(row.TransportFee),
+    0
+  );
+
+  const ownerLabel =
+    ownerEmail || "UID owner";
 
   const initialComment = [
-    `*${year} ${month} PerDiem Report*`,
+    `*${reportYear} ${reportMonth} PerDiem Report*`,
     `Owner: ${ownerLabel}`,
-    `Rows: ${rowCount}`,
+    `Rows: ${rows.length}`,
     `PerDiem: ${totalPerDiem.toLocaleString("ko-KR")}`,
     `Transport: ${totalTransportFee.toLocaleString("ko-KR")}원`,
-    `Grand total: ${grandTotal.toLocaleString("ko-KR")}원`,
   ].join("\n");
 
   await slack.filesUploadV2({
     channel_id: channelId,
-    file: excelBuffer,
+    file: Buffer.from(csvText, "utf8"),
     filename,
-    title: `${year} ${month} Monthly PerDiem Report`,
+    title:
+      `${reportYear} ${reportMonth} Monthly PerDiem Report`,
     initial_comment: initialComment,
   });
 
-  console.log(`SLACK_UPLOAD_COMPLETED=${filename}`);
+  console.log(
+    `SLACK_UPLOAD_COMPLETED=${filename}`
+  );
 }
 
 async function main() {
-  const db = initializeFirebase();
+  const db = initializeFirestore();
+
   const ownerEmail = cleanString(
     process.env.REPORT_OWNER_EMAIL
   ).toLowerCase();
 
-  const ownerUid = await resolveReportOwnerUid(db);
-  const { year, month } = resolveReportPeriod();
+  const reportOwnerUid =
+    await resolveReportOwnerUid(db);
 
-  const rows = await loadMonthlyPerDiemRows(
-    db,
-    ownerUid,
-    year,
-    month
+  const {
+    reportYear,
+    reportMonth,
+  } = resolveReportPeriod();
+
+  console.log(
+    `REPORT_OWNER_UID=${reportOwnerUid}`
+  );
+  console.log(
+    `REPORT_YEAR=${reportYear}`
+  );
+  console.log(
+    `REPORT_MONTH=${reportMonth}`
   );
 
-  if (rows.length === 0) {
+  const monthlyRows =
+    await loadMonthlyRows(
+      db,
+      reportOwnerUid,
+      reportYear,
+      reportMonth
+    );
+
+  if (monthlyRows.length === 0) {
     throw new Error(
-      `No PerDiem data found for owner=${ownerUid}, year=${year}, month=${month}`
+      `No PerDiem rows found: owner=${reportOwnerUid}, year=${reportYear}, month=${reportMonth}`
     );
   }
 
-  const safeOwner = ownerEmail
-    ? ownerEmail.replace(/[^a-z0-9._-]+/gi, "_")
-    : ownerUid.replace(/[^a-z0-9._-]+/gi, "_");
+  const safeOwner = (
+    ownerEmail || reportOwnerUid
+  ).replace(
+    /[^a-z0-9._-]+/gi,
+    "_"
+  );
 
   const filename =
-    `perdiem-${safeOwner}-${year}-${month}.xlsx`;
+    `perdiem-${safeOwner}-${reportYear}-${reportMonth}.csv`;
 
-  const {
-    buffer,
-    totalPerDiem,
-    totalTransportFee,
-  } = createExcelBuffer(rows, {
-    ownerEmail,
-    ownerUid,
-    year,
-    month,
-  });
+  const csvText =
+    createCsv(monthlyRows);
 
-  await saveReportFile(buffer, filename);
+  await saveCsv(csvText, filename);
 
-  await sendSlackReport({
-    excelBuffer: buffer,
+  await uploadCsvToSlack({
+    csvText,
     filename,
     ownerEmail,
-    year,
-    month,
-    rowCount: rows.length,
-    totalPerDiem,
-    totalTransportFee,
+    reportYear,
+    reportMonth,
+    rows: monthlyRows,
   });
 }
 
@@ -651,6 +679,7 @@ main().catch((error) => {
     "Monthly PerDiem report failed:",
     error
   );
+
   process.exitCode = 1;
 });
 
