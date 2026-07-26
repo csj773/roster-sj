@@ -50,16 +50,23 @@ jobs:
       - name: Post monthly PerDiem report to Slack
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          PERDIEM_OWNER: ${{ secrets.FIRESTORE_ADMIN_UID }}
+
+          # 보고서 대상 owner
+          PERDIEM_OWNER: ${{ inputs.current_user_uid }}
+          REPORT_OWNER_UID: ${{ inputs.current_user_uid }}
           FIREBASE_UID: ${{ inputs.current_user_uid }}
           PERDIEM_USER_ID: ${{ inputs.current_user_uid }}
+
           PERDIEM_USER_NAME: ${{ inputs.current_user_name }}
           PERDIEM_TARGET_MONTH: ${{ inputs.target_month }}
           PERDIEM_TARGET_YEAR: ${{ inputs.target_year }}
+
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
           SLACK_RESPONSE_URL: ${{ inputs.slack_response_url }}
+
           FORCE_PERDIEM_REPORT: "true"
+
         run: node scripts/slack_monthly_perdiem_report.mjs
 
       - name: Upload generated report artifact
