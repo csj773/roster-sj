@@ -46,6 +46,7 @@ jobs:
 
       - name: Post monthly PerDiem report to Slack
         env:
+          PERDIEM_OWNER: ${{ secrets.FIRESTORE_ADMIN_UID }}
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_UID: ${{ inputs.current_user_uid }}
