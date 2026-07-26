@@ -33,6 +33,7 @@ jobs:
 
       - name: Build monthly PerDiem report
         env:
+          PERDIEM_OWNER: ${{ secrets.FIRESTORE_ADMIN_UID }}
           PERDIEM_USER_ID: ${{ secrets.PERDIEM_USER_ID }}
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
           GOOGLE_SHEETS_SPREADSHEET_ID: 1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc
