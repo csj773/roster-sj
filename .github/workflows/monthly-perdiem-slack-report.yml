@@ -32,26 +32,43 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v6
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
         with:
           node-version: "24"
           cache: "npm"
 
-      - run: npm install
+      - name: Install dependencies
+        run: npm install
 
       - name: Mask Slack response URL
         run: echo "::add-mask::${{ inputs.slack_response_url }}"
 
       - name: Post monthly PerDiem report to Slack
         env:
-          PERDIEM_OWNER: ${{ secrets.FIRESTORE_ADMIN_UID }}
-          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          PERDIEM_OWNER: ${{ secrets.FIRESTORE_ADMIN_UID }}
           FIREBASE_UID: ${{ inputs.current_user_uid }}
+          PERDIEM_USER_ID: ${{ inputs.current_user_uid }}
           PERDIEM_USER_NAME: ${{ inputs.current_user_name }}
           PERDIEM_TARGET_MONTH: ${{ inputs.target_month }}
           PERDIEM_TARGET_YEAR: ${{ inputs.target_year }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
           SLACK_RESPONSE_URL: ${{ inputs.slack_response_url }}
+          FORCE_PERDIEM_REPORT: "true"
         run: node scripts/slack_monthly_perdiem_report.mjs
+
+      - name: Upload generated report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: monthly-perdiem-report
+          path: |
+            outputs/*.csv
+            outputs/*.json
+          if-no-files-found: warn
+          retention-days: 30
