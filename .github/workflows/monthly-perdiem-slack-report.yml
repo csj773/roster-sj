@@ -4,30 +4,21 @@ on:
   workflow_dispatch:
     inputs:
       current_user_uid:
-        description: "Firebase Authentication UID if already known"
-        required: false
-        type: string
-
-      current_user_email:
-        description: "User email; Firebase Auth user is created automatically if missing"
+        description: "Firebase Authentication UID for the Slack user"
         required: true
         type: string
-
       current_user_name:
-        description: "Display name for Firebase Auth and Slack report"
+        description: "Display name for the Slack report"
         required: false
         type: string
-
       target_month:
-        description: "Target month number, 1-12. Defaults to previous KST month."
+        description: "Target month number, 1-12. Defaults to current/previous KST month."
         required: false
         type: string
-
       target_year:
-        description: "Target year. Defaults to previous KST month year."
+        description: "Target year. Defaults to KST target year."
         required: false
         type: string
-
       slack_response_url:
         description: "Slack delayed response_url"
         required: true
@@ -53,21 +44,6 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Validate report inputs
-        env:
-          USER_EMAIL: ${{ inputs.current_user_email }}
-          SLACK_RESPONSE_URL: ${{ inputs.slack_response_url }}
-        run: |
-          if [ -z "$USER_EMAIL" ]; then
-            echo "current_user_email is required."
-            exit 1
-          fi
-
-          if [ -z "$SLACK_RESPONSE_URL" ]; then
-            echo "slack_response_url is required."
-            exit 1
-          fi
-
       - name: Mask Slack response URL
         run: echo "::add-mask::${{ inputs.slack_response_url }}"
 
@@ -75,23 +51,15 @@ jobs:
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
-          # UID는 선택사항입니다.
-          # 전달되면 Firebase Auth에서 UID와 이메일의 일치 여부를 검증합니다.
-          # 비어 있으면 이메일로 사용자를 조회하고, 없으면 자동 생성합니다.
-          REPORT_OWNER_UID: ${{ inputs.current_user_uid }}
+          # 보고서 대상 owner
           PERDIEM_OWNER: ${{ inputs.current_user_uid }}
+          REPORT_OWNER_UID: ${{ inputs.current_user_uid }}
           FIREBASE_UID: ${{ inputs.current_user_uid }}
           PERDIEM_USER_ID: ${{ inputs.current_user_uid }}
 
-          # 이메일은 사용자 조회 및 자동 생성의 기준입니다.
-          REPORT_OWNER_EMAIL: ${{ inputs.current_user_email }}
-          PERDIEM_USER_EMAIL: ${{ inputs.current_user_email }}
-
           PERDIEM_USER_NAME: ${{ inputs.current_user_name }}
-
           PERDIEM_TARGET_MONTH: ${{ inputs.target_month }}
           PERDIEM_TARGET_YEAR: ${{ inputs.target_year }}
-          PERDIEM_COLLECTION: "Perdiem"
 
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
