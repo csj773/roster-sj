@@ -1,3 +1,5 @@
+import-ical-roster-to-pdc.yml
+
 
 name: Import iCal Roster to PDC
 
@@ -29,14 +31,16 @@ permissions:
 
 jobs:
   import-ical-roster:
+    name: Import iCal roster to PDC
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: "24"
           cache: "npm"
@@ -44,36 +48,42 @@ jobs:
       - name: Install dependencies
         env:
           PUPPETEER_SKIP_DOWNLOAD: "true"
-        run: npm install
+        run: npm ci
 
-      - name: Resolve and mask iCal URL
+      - name: Validate and mask inputs
+        shell: bash
         env:
-          INPUT_URL: ${{ inputs.ical_roster_url || secrets.ICAL_ROSTER_URL || secrets.WEB_ROSTER_URL }}
+          INPUT_ICAL_ROSTER_URL: ${{ inputs.ical_roster_url || secrets.ICAL_ROSTER_URL || secrets.WEB_ROSTER_URL }}
+          CURRENT_USER_EMAIL: ${{ inputs.current_user_email }}
         run: |
-          if [ -z "$INPUT_URL" ]; then
-            echo "ICAL roster URL is required."
+          set -euo pipefail
+
+          if [[ -z "$INPUT_ICAL_ROSTER_URL" ]]; then
+            echo "::error::An iCal roster URL is required. Provide ical_roster_url or configure ICAL_ROSTER_URL/WEB_ROSTER_URL."
             exit 1
           fi
 
-          echo "::add-mask::$INPUT_URL"
+          if [[ -z "$CURRENT_USER_EMAIL" ]]; then
+            echo "::error::current_user_email is required."
+            exit 1
+          fi
+
+          echo "::add-mask::$INPUT_ICAL_ROSTER_URL"
+          echo "Input validation completed."
 
       - name: Import iCal roster to PDC
         env:
           INPUT_ICAL_ROSTER_URL: ${{ inputs.ical_roster_url || secrets.ICAL_ROSTER_URL || secrets.WEB_ROSTER_URL }}
-
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
-          # 선택사항:
-          # 이미 실제 Firebase UID를 알고 있을 때만 입력합니다.
-          # 입력하지 않으면 이메일로 기존 사용자를 조회하고,
-          # 없으면 Firebase Authentication 사용자를 자동 생성합니다.
+          # Optional. When empty, the script resolves the user by email and
+          # creates a Firebase Authentication user if none exists.
           FIREBASE_UID: ${{ inputs.current_user_uid }}
 
-          # 필수:
-          # Firebase Authentication 조회 및 자동 생성 기준입니다.
+          # Required for Firebase Authentication lookup/automatic creation.
           USER_ID: ${{ inputs.current_user_email }}
+          USER_EMAIL: ${{ inputs.current_user_email }}
 
-          PDC_USER_NAME: ${{ inputs.pdc_user_name || secrets.PDC_USER_NAME }}
-
+          PDC_USER_NAME: ${{ inputs.pdc_user_name }}
+          USER_NAME: ${{ inputs.pdc_user_name }}
         run: node scripts/importIcalRosterToPdc.mjs
-```
