@@ -599,20 +599,148 @@ async function uploadPdcDocs(db, owner, docs) {
   };
 }
 
+
+async function resolveOrCreateFirebaseOwner(auth, requestedOwner) {
+  const requestedUid = cleanText(requestedOwner.uid, 500);
+  const email = cleanText(requestedOwner.email, 240).toLowerCase();
+  const requestedDisplayName = cleanText(requestedOwner.displayName, 200);
+
+  if (!email) {
+    throw new Error(
+      "USER_ID or USER_EMAIL is required because Firebase Auth users are resolved or created by email"
+    );
+  }
+
+  let userRecord = null;
+
+  // 1) 실제 UID가 전달된 경우 먼저 UID로 확인합니다.
+  if (
+    requestedUid &&
+    !requestedUid.includes("@") &&
+    !requestedUid.startsWith("guest_email_")
+  ) {
+    try {
+      userRecord = await auth.getUser(requestedUid);
+    } catch (error) {
+      if (error.code !== "auth/user-not-found") {
+        throw new Error(
+          `Firebase Authentication UID lookup failed: ${requestedUid} (${error.code || error.message})`
+        );
+      }
+    }
+
+    if (userRecord) {
+      const authEmail = cleanText(userRecord.email, 240).toLowerCase();
+
+      if (authEmail && authEmail !== email) {
+        throw new Error(
+          `Firebase UID/email mismatch: ${requestedUid} belongs to ${authEmail}, not ${email}`
+        );
+      }
+
+      const updatePayload = {};
+      if (!authEmail) updatePayload.email = email;
+      if (requestedDisplayName && requestedDisplayName !== userRecord.displayName) {
+        updatePayload.displayName = requestedDisplayName;
+      }
+
+      if (Object.keys(updatePayload).length) {
+        userRecord = await auth.updateUser(userRecord.uid, updatePayload);
+      }
+
+      return {
+        uid: userRecord.uid,
+        email: cleanText(userRecord.email || email, 240).toLowerCase(),
+        displayName:
+          cleanText(userRecord.displayName, 200) ||
+          requestedDisplayName ||
+          displayNameForEmail(email),
+        created: false,
+        resolvedBy: "uid",
+      };
+    }
+  }
+
+  // 2) UID가 없거나 찾지 못한 경우 이메일로 기존 사용자를 조회합니다.
+  try {
+    userRecord = await auth.getUserByEmail(email);
+  } catch (error) {
+    if (error.code !== "auth/user-not-found") {
+      throw new Error(
+        `Firebase Authentication email lookup failed: ${email} (${error.code || error.message})`
+      );
+    }
+  }
+
+  if (userRecord) {
+    if (requestedDisplayName && requestedDisplayName !== userRecord.displayName) {
+      userRecord = await auth.updateUser(userRecord.uid, {
+        displayName: requestedDisplayName,
+      });
+    }
+
+    return {
+      uid: userRecord.uid,
+      email: cleanText(userRecord.email || email, 240).toLowerCase(),
+      displayName:
+        cleanText(userRecord.displayName, 200) ||
+        requestedDisplayName ||
+        displayNameForEmail(email),
+      created: false,
+      resolvedBy: "email",
+    };
+  }
+
+  // 3) Firebase Auth 사용자가 없으면 자동 생성합니다.
+  userRecord = await auth.createUser({
+    email,
+    emailVerified: false,
+    disabled: false,
+    ...(requestedDisplayName ? { displayName: requestedDisplayName } : {}),
+  });
+
+  return {
+    uid: userRecord.uid,
+    email: cleanText(userRecord.email || email, 240).toLowerCase(),
+    displayName:
+      cleanText(userRecord.displayName, 200) ||
+      requestedDisplayName ||
+      displayNameForEmail(email),
+    created: true,
+    resolvedBy: "created",
+  };
+}
+
 async function main() {
   const calendarUrl = optionalEnv("INPUT_ICAL_ROSTER_URL") || optionalEnv("ICAL_ROSTER_URL") || optionalEnv("WEB_ROSTER_URL");
   if (!calendarUrl) throw new Error("INPUT_ICAL_ROSTER_URL or ICAL_ROSTER_URL is required");
 
-  const owner = {
-    uid: requiredEnv("FIREBASE_UID"),
+  const requestedOwner = {
+    uid: optionalEnv("FIREBASE_UID"),
     email: optionalEnv("USER_ID") || optionalEnv("USER_EMAIL"),
+    displayName:
+      optionalEnv("PDC_USER_NAME") ||
+      optionalEnv("USER_NAME"),
   };
-  owner.displayName = optionalEnv("PDC_USER_NAME") || optionalEnv("USER_NAME") || displayNameForEmail(owner.email);
 
-  admin.initializeApp({
-    credential: admin.credential.cert(parseJsonEnv("FIREBASE_SERVICE_ACCOUNT")),
-  });
+  if (!admin.apps.length) {
+    admin.initializeApp({
+      credential: admin.credential.cert(parseJsonEnv("FIREBASE_SERVICE_ACCOUNT")),
+    });
+  }
+
   const db = admin.firestore();
+  const owner = await resolveOrCreateFirebaseOwner(
+    admin.auth(),
+    requestedOwner,
+  );
+
+  console.log(`OWNER_MODE=FIREBASE_AUTH_AUTO_CREATE`);
+  console.log(`OWNER_RESOLUTION=${owner.resolvedBy}`);
+  console.log(`FIREBASE_USER_CREATED=${owner.created}`);
+  console.log(`RESOLVED_FIREBASE_UID=${owner.uid}`);
+  console.log(`RESOLVED_USER_EMAIL=${owner.email}`);
+  console.log(`RESOLVED_DISPLAY_NAME=${owner.displayName}`);
 
   const ics = await fetchIcsCalendar(calendarUrl);
   const events = parseIcsEvents(ics);
