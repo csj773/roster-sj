@@ -65,18 +65,11 @@ function safeFilePart(value) {
 }
 
 function getTargetPeriod() {
-  const inputMonth = Number(optionalEnv("PERDIEM_TARGET_MONTH"));
-  const inputYear = Number(optionalEnv("PERDIEM_TARGET_YEAR"));
+  const monthText = optionalEnv("PERDIEM_TARGET_MONTH");
+  const yearText = optionalEnv("PERDIEM_TARGET_YEAR");
 
-  if (inputMonth || inputYear) {
-    if (!inputMonth || inputMonth < 1 || inputMonth > 12) {
-      throw new Error(`Invalid PERDIEM_TARGET_MONTH: ${optionalEnv("PERDIEM_TARGET_MONTH")}`);
-    }
-    if (!inputYear || inputYear < 2000 || inputYear > 2200) {
-      throw new Error(`Invalid PERDIEM_TARGET_YEAR: ${optionalEnv("PERDIEM_TARGET_YEAR")}`);
-    }
-    return { month: inputMonth, year: inputYear };
-  }
+  const inputMonth = monthText ? Number(monthText) : 0;
+  const inputYear = yearText ? Number(yearText) : 0;
 
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "Asia/Seoul",
@@ -84,13 +77,42 @@ function getTargetPeriod() {
     month: "numeric",
   }).formatToParts(new Date());
 
-  const currentYear = Number(parts.find((part) => part.type === "year")?.value);
-  const currentMonth = Number(parts.find((part) => part.type === "month")?.value);
-  const target = new Date(Date.UTC(currentYear, currentMonth - 2, 1));
+  const currentYear = Number(
+    parts.find((part) => part.type === "year")?.value
+  );
+  const currentMonth = Number(
+    parts.find((part) => part.type === "month")?.value
+  );
+
+  if (inputMonth || inputYear) {
+    const resolvedMonth = inputMonth || currentMonth;
+    const resolvedYear = inputYear || currentYear;
+
+    if (resolvedMonth < 1 || resolvedMonth > 12) {
+      throw new Error(
+        `Invalid PERDIEM_TARGET_MONTH: ${monthText}`
+      );
+    }
+
+    if (resolvedYear < 2000 || resolvedYear > 2200) {
+      throw new Error(
+        `Invalid PERDIEM_TARGET_YEAR: ${yearText}`
+      );
+    }
+
+    return {
+      month: resolvedMonth,
+      year: resolvedYear,
+    };
+  }
+
+  const target = new Date(
+    Date.UTC(currentYear, currentMonth - 2, 1)
+  );
 
   return {
-    year: target.getUTCFullYear(),
     month: target.getUTCMonth() + 1,
+    year: target.getUTCFullYear(),
   };
 }
 
