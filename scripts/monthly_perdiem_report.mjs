@@ -121,6 +121,19 @@ function findColumn(index, aliases) {
   return -1;
 }
 
+function columnNumberToLetter(columnNumber) {
+  let number = columnNumber + 1;
+  let result = "";
+
+  while (number > 0) {
+    const remainder = (number - 1) % 26;
+    result = String.fromCharCode(65 + remainder) + result;
+    number = Math.floor((number - 1) / 26);
+  }
+
+  return result;
+}
+
 function normalizeIdentity(value) {
   return String(value ?? "").trim().toLowerCase();
 }
@@ -164,6 +177,69 @@ function rowMatchesOwner(row, columns, owner) {
   return comparisons.some(([columnIndex, expected]) => (
     normalizeIdentity(getColumn(row, columnIndex)) === normalizeIdentity(expected)
   ));
+}
+
+async function fillMissingOwners({
+  sheets,
+  spreadsheetId,
+  sheetName,
+  values,
+  columns,
+  targetMonth,
+  targetYear,
+  ownerValue,
+}) {
+  if (columns.owner < 0) {
+    throw new Error(`${sheetName} sheet does not contain an Owner column.`);
+  }
+
+  if (!ownerValue) {
+    throw new Error(
+      "PERDIEM_OWNER, FIREBASE_UID, or PERDIEM_USER_ID is required to fill missing Owner values.",
+    );
+  }
+
+  const ownerColumnLetter = columnNumberToLetter(columns.owner);
+  const updates = [];
+
+  values.slice(1).forEach((row, index) => {
+    const sheetRowNumber = index + 2;
+    const rowMonth = monthToNumber(getColumn(row, columns.month));
+    const rowYear = String(getColumn(row, columns.year)).trim();
+    const currentOwner = String(getColumn(row, columns.owner)).trim();
+
+    const isTargetPeriod =
+      rowMonth === targetMonth &&
+      rowYear === String(targetYear);
+
+    if (isTargetPeriod && !currentOwner) {
+      updates.push({
+        range: `${sheetName}!${ownerColumnLetter}${sheetRowNumber}`,
+        values: [[ownerValue]],
+      });
+
+      while (row.length <= columns.owner) {
+        row.push("");
+      }
+      row[columns.owner] = ownerValue;
+    }
+  });
+
+  if (updates.length === 0) {
+    console.log("PERDIEM_OWNER_BACKFILLED_ROWS=0");
+    return 0;
+  }
+
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      valueInputOption: "RAW",
+      data: updates,
+    },
+  });
+
+  console.log(`PERDIEM_OWNER_BACKFILLED_ROWS=${updates.length}`);
+  return updates.length;
 }
 
 function normalizeDate(value) {
@@ -275,7 +351,7 @@ async function main() {
   const credentials = requiredJsonEnv("GOOGLE_SHEETS_CREDENTIALS");
   const auth = new google.auth.GoogleAuth({
     credentials,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
   const sheets = google.sheets({ version: "v4", auth });
 
@@ -321,6 +397,22 @@ async function main() {
       `${SHEET_NAME} must contain at least one user column: owner, uid, userId, or email.`,
     );
   }
+
+  const ownerValue =
+    owner.owner ||
+    owner.uid ||
+    owner.userId;
+
+  await fillMissingOwners({
+    sheets,
+    spreadsheetId: SPREADSHEET_ID,
+    sheetName: SHEET_NAME,
+    values,
+    columns,
+    targetMonth,
+    targetYear,
+    ownerValue,
+  });
 
   const monthUserRows = values.slice(1).filter((row) => (
     monthToNumber(getColumn(row, columns.month)) === targetMonth &&
