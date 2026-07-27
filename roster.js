@@ -659,7 +659,7 @@ function sleep(ms) {
   const flightPerDiemList = perdiemList.filter(p => p.Destination && (p.RI || p.RO || p.TransportFee));
   savePerDiemCSV(flightPerDiemList, path.join(publicDir,"perdiem.csv"));
   await uploadPerDiemFirestore(flightPerDiemList, flutterflowUid);
-  await appendPerDiemGoogleSheet(flightPerDiemList, sheetsApi, spreadsheetId, "Perdiem");
+  await appendPerDiemGoogleSheet(flightPerDiemList, sheetsApi, spreadsheetId, "Perdiem", flutterflowUid);
   console.log("✅ PerDiem 처리 완료");
 
   // ------------------- Roster Firestore 업로드 -------------------
