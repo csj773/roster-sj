@@ -527,6 +527,7 @@ async function dispatchPerDiemSlackWorkflow({ command, firebaseUid, owner, targe
     body: JSON.stringify({
       ref,
       inputs: {
+        current_user_email: owner.email || "",
         current_user_uid: firebaseUid,
         current_user_name: owner.displayName || owner.email || command.userName || "",
         target_month: targetMonth || "",
