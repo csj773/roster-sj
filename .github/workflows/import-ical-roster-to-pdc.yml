@@ -1,6 +1,3 @@
-import-ical-roster-to-pdc.yml
-
-
 name: Import iCal Roster to PDC
 
 on:
@@ -10,17 +7,14 @@ on:
         description: "Private webcal:// or https:// iCal roster URL"
         required: false
         type: string
-
       current_user_uid:
-        description: "Firebase Authentication UID if already known"
+        description: "Firebase Authentication UID for roster owner"
         required: false
         type: string
-
       current_user_email:
-        description: "User email; Firebase Auth user is created automatically if missing"
-        required: true
+        description: "Firebase Authentication email for roster email"
+        required: false
         type: string
-
       pdc_user_name:
         description: "Display name stored in pdc_user_name"
         required: false
@@ -31,59 +25,29 @@ permissions:
 
 jobs:
   import-ical-roster:
-    name: Import iCal roster to PDC
     runs-on: ubuntu-latest
-    timeout-minutes: 15
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "24"
-          cache: "npm"
 
       - name: Install dependencies
         env:
           PUPPETEER_SKIP_DOWNLOAD: "true"
-        run: npm ci
+        run: npm install
 
-      - name: Validate and mask inputs
-        shell: bash
+      - name: Mask private iCal URL
+        if: ${{ github.event.inputs.ical_roster_url != '' }}
+        run: echo "::add-mask::${{ github.event.inputs.ical_roster_url }}"
+
+      - name: Import iCal roster to pdc
         env:
-          INPUT_ICAL_ROSTER_URL: ${{ inputs.ical_roster_url || secrets.ICAL_ROSTER_URL || secrets.WEB_ROSTER_URL }}
-          CURRENT_USER_EMAIL: ${{ inputs.current_user_email }}
-        run: |
-          set -euo pipefail
-
-          if [[ -z "$INPUT_ICAL_ROSTER_URL" ]]; then
-            echo "::error::An iCal roster URL is required. Provide ical_roster_url or configure ICAL_ROSTER_URL/WEB_ROSTER_URL."
-            exit 1
-          fi
-
-          if [[ -z "$CURRENT_USER_EMAIL" ]]; then
-            echo "::error::current_user_email is required."
-            exit 1
-          fi
-
-          echo "::add-mask::$INPUT_ICAL_ROSTER_URL"
-          echo "Input validation completed."
-
-      - name: Import iCal roster to PDC
-        env:
-          INPUT_ICAL_ROSTER_URL: ${{ inputs.ical_roster_url || secrets.ICAL_ROSTER_URL || secrets.WEB_ROSTER_URL }}
+          INPUT_ICAL_ROSTER_URL: ${{ github.event.inputs.ical_roster_url || secrets.ICAL_ROSTER_URL || secrets.WEB_ROSTER_URL }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-
-          # Optional. When empty, the script resolves the user by email and
-          # creates a Firebase Authentication user if none exists.
-          FIREBASE_UID: ${{ inputs.current_user_uid }}
-
-          # Required for Firebase Authentication lookup/automatic creation.
-          USER_ID: ${{ inputs.current_user_email }}
-          USER_EMAIL: ${{ inputs.current_user_email }}
-
-          PDC_USER_NAME: ${{ inputs.pdc_user_name }}
-          USER_NAME: ${{ inputs.pdc_user_name }}
+          FIREBASE_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
+          USER_ID: ${{ github.event.inputs.current_user_email || secrets.USER_ID }}
+          PDC_USER_NAME: ${{ github.event.inputs.pdc_user_name || secrets.PDC_USER_NAME }}
         run: node scripts/importIcalRosterToPdc.mjs
