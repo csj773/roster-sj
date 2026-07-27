@@ -218,9 +218,7 @@ async function fillMissingOwners({
         values: [[ownerValue]],
       });
 
-      while (row.length <= columns.owner) {
-        row.push("");
-      }
+      while (row.length <= columns.owner) row.push("");
       row[columns.owner] = ownerValue;
     }
   });
