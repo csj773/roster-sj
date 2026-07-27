@@ -2,35 +2,33 @@ name: Update Roster & Google Calendar
 
 on:
   schedule:
-    - cron: "0 0,6,12,18 * * *"
-
-  workflow_dispatch:
+    #- cron: "0 0 * * *"       # 매일 KST 09:00 = UTC 00:00
+    #- cron: "0 * * * *"       # 매 시간 정각 실행
+    - cron: "0 0,6,12,18 * * *" # 00:00, 06:00, 12:00, 18:00 UTC 실행
+  workflow_dispatch:           # 수동 실행 허용
     inputs:
       username:
         description: "CrewConnex username"
         required: false
         type: string
-
       password:
         description: "CrewConnex password"
         required: false
         type: string
-
       current_user_uid:
         description: "Firebase Authentication UID for roster owner"
         required: false
         type: string
-
       current_user_email:
         description: "Firebase Authentication email for roster email"
         required: false
         type: string
 
 permissions:
-  contents: read
+  contents: write              # 커밋/푸시 권한
 
 env:
-  FIRESTORE_ADMIN_UID: ${{ secrets.FIRESTORE_ADMIN_UID }}
+  # firestoreAdminUid secrets 자동 주입
   firestoreAdminUid: ${{ secrets.FIRESTORE_ADMIN_UID }}
 
 jobs:
@@ -38,57 +36,55 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
+      # 1. 코드 체크아웃
+      - uses: actions/checkout@v6
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
+      # 2. Node.js 설치
+      - uses: actions/setup-node@v6
         with:
           node-version: "24"
-          cache: npm
 
-      - name: Install dependencies
-        run: npm ci
+      # 3. 의존성 설치
+      - run: npm install
 
       - name: Mask workflow input password
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.password != '' }}
         run: echo "::add-mask::${{ github.event.inputs.password }}"
 
-      - name: Run roster and PerDiem processing
+      # 4. roster.js 실행 (로스터 JSON 생성)
+      - name: Run roster.js
         env:
           CHROME_PATH: "/usr/bin/chromium-browser"
-
           INPUT_PDC_USERNAME: ${{ github.event.inputs.username || secrets.PDC_USERNAME }}
           INPUT_PDC_PASSWORD: ${{ github.event.inputs.password || secrets.PDC_PASSWORD }}
-
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
+          INPUT_FIREBASE_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
+          INPUT_ADMIN_FIREBASE_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
+          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+          USER_ID: ${{ github.event.inputs.current_user_email || secrets.USER_ID }}
+        run: node -r dotenv/config roster.js
 
+      # 5. PerDiem 계산 및 CSV 저장 + Firestore 업로드
+      - name: Generate PerDiem & Upload to Firestore
+        run: node -r dotenv/config perdiem.js
+        env:
           FIREBASE_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
           INPUT_FIREBASE_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
           INPUT_ADMIN_FIREBASE_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
           FIRESTORE_ADMIN_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
           firestoreAdminUid: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
 
-          PERDIEM_OWNER: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
-          PERDIEM_USER_ID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
-
-          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
-          GOOGLE_SPREADSHEET_ID: ${{ secrets.GOOGLE_SPREADSHEET_ID }}
-
-          USER_ID: ${{ github.event.inputs.current_user_email || secrets.USER_ID }}
-
-        run: node -r dotenv/config roster.js
-
-      - name: Verify generated roster and PerDiem files
+      # 6. Do not commit generated roster data. These files contain personal schedule data.
+      - name: Keep generated roster files local to this run
         run: |
           test -s public/roster.json
           test -s public/roster.csv
-          test -s public/perdiem.csv
-          echo "Generated files are available only inside this workflow run."
+          echo "Generated roster files are available only inside this workflow run."
 
-      - name: Run Google Calendar update
+      # 7. gcal.js 실행 (Google Calendar 업데이트)
+      - name: Run gcal.js
         env:
           GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
           GOOGLE_CALENDAR_CREDENTIALS: ${{ secrets.GOOGLE_CALENDAR_CREDENTIALS }}
-
         run: node -r dotenv/config gcal.js
