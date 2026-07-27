@@ -25,7 +25,7 @@ const TRANSPORT_FEE_PER_FLIGHT = 7000;
 const QUICK_TURN_THRESHOLD_HOURS = 12;
 const QUICK_TURN_MINIMUM_TOTAL = 33;
 const FLIGHT_ACTIVITY_RE = /^YP\d+/i;
-const PERDIEM_SHEET_HEADER = ["ID", "Date", "Activity", "From", "Destination", "RI", "RO", "StayHours", "Rate", "Total", "TransportFee", "Month", "Year"];
+const PERDIEM_SHEET_HEADER = ["ID", "Date", "Activity", "From", "Destination", "RI", "RO", "StayHours", "Rate", "Total", "TransportFee", "Month", "Year", "Taxi", "Car", "Owner"];
 
 function normalizeAirportCode(value) {
   return String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -174,6 +174,20 @@ function monthForSheet(month) {
   if (typeof month === "number") return month;
   const monthNum = MONTH_NAME_TO_NUMBER[String(month || "").toLowerCase()];
   return monthNum || month || "";
+}
+
+function resolvePerDiemOwner(ownerOverride = "") {
+  return String(
+    ownerOverride ||
+    process.env.PERDIEM_OWNER ||
+    process.env.INPUT_FIREBASE_UID ||
+    process.env.FIREBASE_UID ||
+    process.env.PERDIEM_USER_ID ||
+    process.env.INPUT_ADMIN_FIREBASE_UID ||
+    process.env.FIRESTORE_ADMIN_UID ||
+    process.env.firestoreAdminUid ||
+    ""
+  ).trim();
 }
 
 // ------------------- PerDiem 계산 -------------------
@@ -361,7 +375,9 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
       Total,
       TransportFee,
       Month: assigned.Month,
-      Year: assigned.Year
+      Year: assigned.Year,
+      owner: resolvePerDiemOwner(owner),
+      uid: resolvePerDiemOwner(owner)
     }));
   }
 
@@ -372,9 +388,9 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
 export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
   if (!Array.isArray(perdiemList)) return;
 
-  const header = "Date,Activity,From,Destination,RI,RO,StayHours,Rate,Total,TransportFee,Month,Year\n";
+  const header = "Date,Activity,From,Destination,RI,RO,StayHours,Rate,Total,TransportFee,Month,Year,Owner\n";
   const rows = perdiemList.map(item => normalizePerDiemItem(item)).map(e =>
-    `${e.Date},${e.Activity},${e.From},${e.Destination},${e.RI},${e.RO},${e.StayHours},${e.Rate},${e.Total},${e.TransportFee},${e.Month},${e.Year}`
+    `${e.Date},${e.Activity},${e.From},${e.Destination},${e.RI},${e.RO},${e.StayHours},${e.Rate},${e.Total},${e.TransportFee},${e.Month},${e.Year},${e.owner || e.Owner || ""}`
   );
 
   try {
@@ -428,7 +444,14 @@ function buildPerDiemDocId(item, owner = "") {
   ].map(safeDocIdPart).join("_");
 }
 
-function buildPerDiemSheetRow(item, id) {
+function buildPerDiemSheetRow(item, id, ownerOverride = "") {
+  const owner = resolvePerDiemOwner(
+    item.Owner ||
+    item.owner ||
+    item.uid ||
+    ownerOverride
+  );
+
   return [
     id,
     item.Date,
@@ -443,16 +466,19 @@ function buildPerDiemSheetRow(item, id) {
     item.TransportFee,
     monthForSheet(item.Month),
     item.Year,
+    item.Taxi ?? "",
+    item.Car ?? "",
+    owner,
   ];
 }
 
 // ------------------- Google Sheets sync -------------------
-export async function appendPerDiemGoogleSheet(perdiemList, sheetsApi, spreadsheetId, sheetName = "Perdiem") {
+export async function appendPerDiemGoogleSheet(perdiemList, sheetsApi, spreadsheetId, sheetName = "Perdiem", ownerOverride = "") {
   if (!Array.isArray(perdiemList) || !sheetsApi || !spreadsheetId) return;
 
   const existing = await sheetsApi.spreadsheets.values.get({
     spreadsheetId,
-    range: `${sheetName}!A:M`,
+    range: `${sheetName}!A:P`,
   }).catch(err => {
     if (err.code === 400) console.warn(`⚠️ Google Sheets ${sheetName} 읽기 실패, append만 시도:`, err.message);
     else throw err;
@@ -483,12 +509,12 @@ export async function appendPerDiemGoogleSheet(perdiemList, sheetsApi, spreadshe
     const key = buildPerDiemSheetKey(item);
     if (seenKeys.has(key)) continue;
     seenKeys.add(key);
-    syncedRows.push(buildPerDiemSheetRow(item, existingIdByKey.get(key) || uniqueSheetId(usedIds)));
+    syncedRows.push(buildPerDiemSheetRow(item, existingIdByKey.get(key) || uniqueSheetId(usedIds), ownerOverride));
   }
 
   await sheetsApi.spreadsheets.values.clear({
     spreadsheetId,
-    range: `${sheetName}!A:M`,
+    range: `${sheetName}!A:P`,
   });
 
   await sheetsApi.spreadsheets.values.update({
@@ -502,15 +528,7 @@ export async function appendPerDiemGoogleSheet(perdiemList, sheetsApi, spreadshe
 
 // ------------------- Firestore 업로드 -------------------
 export async function uploadPerDiemFirestore(perdiemList, ownerOverride = "") {
-  const owner = String(
-    ownerOverride ||
-    process.env.INPUT_FIREBASE_UID ||
-    process.env.FIREBASE_UID ||
-    process.env.INPUT_ADMIN_FIREBASE_UID ||
-    process.env.FIRESTORE_ADMIN_UID ||
-    process.env.firestoreAdminUid ||
-    ""
-  ).trim();
+  const owner = resolvePerDiemOwner(ownerOverride);
   if (!Array.isArray(perdiemList) || !owner) return;
 
   if (!admin.apps.length)
