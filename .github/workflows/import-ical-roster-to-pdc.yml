@@ -1,3 +1,4 @@
+```yaml
 name: Import iCal Roster to PDC
 
 on:
@@ -7,14 +8,17 @@ on:
         description: "Private webcal:// or https:// iCal roster URL"
         required: false
         type: string
+
       current_user_uid:
-        description: "Firebase Authentication UID for roster owner"
+        description: "Firebase Authentication UID if already known"
         required: false
         type: string
+
       current_user_email:
-        description: "Firebase Authentication email for roster email"
-        required: false
+        description: "User email; Firebase Auth user is created automatically if missing"
+        required: true
         type: string
+
       pdc_user_name:
         description: "Display name stored in pdc_user_name"
         required: false
@@ -28,26 +32,48 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v6
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
         with:
           node-version: "24"
+          cache: "npm"
 
       - name: Install dependencies
         env:
           PUPPETEER_SKIP_DOWNLOAD: "true"
         run: npm install
 
-      - name: Mask private iCal URL
-        if: ${{ github.event.inputs.ical_roster_url != '' }}
-        run: echo "::add-mask::${{ github.event.inputs.ical_roster_url }}"
-
-      - name: Import iCal roster to pdc
+      - name: Resolve and mask iCal URL
         env:
-          INPUT_ICAL_ROSTER_URL: ${{ github.event.inputs.ical_roster_url || secrets.ICAL_ROSTER_URL || secrets.WEB_ROSTER_URL }}
+          INPUT_URL: ${{ inputs.ical_roster_url || secrets.ICAL_ROSTER_URL || secrets.WEB_ROSTER_URL }}
+        run: |
+          if [ -z "$INPUT_URL" ]; then
+            echo "ICAL roster URL is required."
+            exit 1
+          fi
+
+          echo "::add-mask::$INPUT_URL"
+
+      - name: Import iCal roster to PDC
+        env:
+          INPUT_ICAL_ROSTER_URL: ${{ inputs.ical_roster_url || secrets.ICAL_ROSTER_URL || secrets.WEB_ROSTER_URL }}
+
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          FIREBASE_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
-          USER_ID: ${{ github.event.inputs.current_user_email || secrets.USER_ID }}
-          PDC_USER_NAME: ${{ github.event.inputs.pdc_user_name || secrets.PDC_USER_NAME }}
+
+          # 선택사항:
+          # 이미 실제 Firebase UID를 알고 있을 때만 입력합니다.
+          # 입력하지 않으면 이메일로 기존 사용자를 조회하고,
+          # 없으면 Firebase Authentication 사용자를 자동 생성합니다.
+          FIREBASE_UID: ${{ inputs.current_user_uid }}
+
+          # 필수:
+          # Firebase Authentication 조회 및 자동 생성 기준입니다.
+          USER_ID: ${{ inputs.current_user_email }}
+
+          PDC_USER_NAME: ${{ inputs.pdc_user_name || secrets.PDC_USER_NAME }}
+
         run: node scripts/importIcalRosterToPdc.mjs
+```
