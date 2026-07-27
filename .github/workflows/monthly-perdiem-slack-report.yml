@@ -7,6 +7,13 @@ on:
         description: "Firebase Authentication UID for the Slack user"
         required: true
         type: string
+
+      # 추가
+      current_user_email:
+        description: "Firebase Authentication email for the Slack user"
+        required: true
+        type: string
+
       current_user_name:
         description: "Display name for the Slack report"
         required: false
@@ -56,6 +63,11 @@ jobs:
           REPORT_OWNER_UID: ${{ inputs.current_user_uid }}
           FIREBASE_UID: ${{ inputs.current_user_uid }}
           PERDIEM_USER_ID: ${{ inputs.current_user_uid }}
+
+          # 추가
+          REPORT_OWNER_EMAIL: ${{ inputs.current_user_email }}
+          PERDIEM_USER_EMAIL: ${{ inputs.current_user_email }}
+          USER_ID: ${{ inputs.current_user_email }}
 
           PERDIEM_USER_NAME: ${{ inputs.current_user_name }}
           PERDIEM_TARGET_MONTH: ${{ inputs.target_month }}
