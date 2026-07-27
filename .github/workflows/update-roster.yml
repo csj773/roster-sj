@@ -1,22 +1,27 @@
+```yaml
 name: Update Roster & Google Calendar
 
- Calendar on:
+on:
   schedule:
     - cron: "0 0,6,12,18 * * *"
+
   workflow_dispatch:
     inputs:
       username:
         description: "CrewConnex username"
         required: false
         type: string
+
       password:
         description: "CrewConnex password"
         required: false
         type: string
+
       current_user_uid:
         description: "Firebase Authentication UID for roster owner"
         required: false
         type: string
+
       current_user_email:
         description: "Firebase Authentication email for roster email"
         required: false
@@ -64,6 +69,7 @@ jobs:
           INPUT_ADMIN_FIREBASE_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
           FIRESTORE_ADMIN_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
           firestoreAdminUid: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
+
           PERDIEM_OWNER: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
           PERDIEM_USER_ID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
 
@@ -85,4 +91,5 @@ jobs:
         env:
           GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
           GOOGLE_CALENDAR_CREDENTIALS: ${{ secrets.GOOGLE_CALENDAR_CREDENTIALS }}
+
         run: node -r dotenv/config gcal.js
