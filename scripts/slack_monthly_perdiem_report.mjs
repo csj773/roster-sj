@@ -84,35 +84,30 @@ function getTargetPeriod() {
     parts.find((part) => part.type === "month")?.value
   );
 
-  if (inputMonth || inputYear) {
-    const resolvedMonth = inputMonth || currentMonth;
-    const resolvedYear = inputYear || currentYear;
+  // 월이나 연도를 직접 입력한 경우
+  if (monthText || yearText) {
+    const month = inputMonth || currentMonth;
+    const year = inputYear || currentYear;
 
-    if (resolvedMonth < 1 || resolvedMonth > 12) {
-      throw new Error(
-        `Invalid PERDIEM_TARGET_MONTH: ${monthText}`
-      );
+    if (!Number.isInteger(month) || month < 1 || month > 12) {
+      throw new Error(`Invalid PERDIEM_TARGET_MONTH: ${monthText}`);
     }
 
-    if (resolvedYear < 2000 || resolvedYear > 2200) {
-      throw new Error(
-        `Invalid PERDIEM_TARGET_YEAR: ${yearText}`
-      );
+    if (!Number.isInteger(year) || year < 2000 || year > 2200) {
+      throw new Error(`Invalid PERDIEM_TARGET_YEAR: ${yearText}`);
     }
 
-    return {
-      month: resolvedMonth,
-      year: resolvedYear,
-    };
+    return { month, year };
   }
 
+  // 아무것도 입력하지 않으면 KST 기준 이전 달
   const target = new Date(
     Date.UTC(currentYear, currentMonth - 2, 1)
   );
 
   return {
-    month: target.getUTCMonth() + 1,
     year: target.getUTCFullYear(),
+    month: target.getUTCMonth() + 1,
   };
 }
 
