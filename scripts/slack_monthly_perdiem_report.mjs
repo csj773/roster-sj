@@ -143,6 +143,7 @@ async function resolveOrCreateOwner(auth) {
       if (error.code !== "auth/user-not-found") {
         throw error;
       }
+      console.warn(`Firebase UID not found for PerDiem report: ${requestedUid}`);
     }
 
     if (userRecord) {
@@ -160,6 +161,12 @@ async function resolveOrCreateOwner(auth) {
         resolvedBy: "uid",
       };
     }
+  }
+
+  if (!email) {
+    throw new Error(
+      `No valid email was provided and Firebase UID was not found: ${requestedUid || "blank"}`
+    );
   }
 
   try {
@@ -443,4 +450,3 @@ main().catch(async (error) => {
   } catch {}
   process.exit(1);
 });
-
