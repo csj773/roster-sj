@@ -302,23 +302,97 @@ async function firebaseOwnerByEmail(email, requestedDisplayName = "") {
   const normalizedEmail = cleanText(email, 240).toLowerCase();
   if (!normalizedEmail) throw new Error("Email is required");
 
+  // 1. Try Firebase Authentication only when an Admin app is available.
   try {
-    const userRecord = await admin.auth().getUserByEmail(normalizedEmail);
-    return {
-      uid: userRecord.uid,
-      email: cleanText(userRecord.email || normalizedEmail, 240).toLowerCase(),
-      displayName:
-        cleanText(userRecord.displayName || "", 200) ||
-        cleanText(requestedDisplayName, 200) ||
-        displayNameForEmail(normalizedEmail) ||
-        normalizedEmail,
-      source: "firebase_auth_email",
-    };
+    if (admin.apps?.length) {
+      const userRecord = await admin.auth().getUserByEmail(normalizedEmail);
+      return {
+        uid: userRecord.uid,
+        email: cleanText(userRecord.email || normalizedEmail, 240).toLowerCase(),
+        displayName:
+          cleanText(userRecord.displayName || "", 200) ||
+          cleanText(requestedDisplayName, 200) ||
+          displayNameForEmail(normalizedEmail) ||
+          normalizedEmail,
+        source: "firebase_auth_email",
+      };
+    }
+
+    console.warn("FIREBASE_AUTH_LOOKUP_SKIPPED", {
+      email: normalizedEmail,
+      reason: "admin_app_not_initialized",
+    });
   } catch (error) {
-    if (error.code !== "auth/user-not-found") {
-      throw new Error(
-        `Firebase Auth email lookup failed for ${normalizedEmail}: ${error.code || error.message}`
-      );
+    if (
+      error.code !== "auth/user-not-found" &&
+      error.code !== "app/no-app"
+    ) {
+      console.warn("FIREBASE_AUTH_EMAIL_LOOKUP_FAILED", {
+        email: normalizedEmail,
+        code: error.code || "",
+        message: error.message || "",
+      });
+    }
+  }
+
+  // 2. Look for the owner document in the migrated PDC structure.
+  const pdcOwnerSnapshot = await db()
+    .collection(PDC_COLLECTION)
+    .where("email", "==", normalizedEmail)
+    .limit(1)
+    .get();
+
+  if (!pdcOwnerSnapshot.empty) {
+    const doc = pdcOwnerSnapshot.docs[0];
+    const data = doc.data() || {};
+    const uid = cleanText(
+      data.owner || data.uid || doc.id || "",
+      160
+    );
+
+    if (uid && !uid.startsWith("guest_")) {
+      return {
+        uid,
+        email: normalizedEmail,
+        displayName:
+          cleanText(
+            data.display_name ||
+            data.pdc_user_name ||
+            requestedDisplayName ||
+            normalizedEmail,
+            200
+          ),
+        source: "pdc_owner_email",
+      };
+    }
+  }
+
+  // 3. Look for a matching public users document.
+  const usersSnapshot = await db()
+    .collection("users")
+    .where("email", "==", normalizedEmail)
+    .limit(1)
+    .get();
+
+  if (!usersSnapshot.empty) {
+    const doc = usersSnapshot.docs[0];
+    const data = doc.data() || {};
+    const uid = cleanText(data.uid || doc.id || "", 160);
+
+    if (uid && !uid.startsWith("guest_")) {
+      return {
+        uid,
+        email: normalizedEmail,
+        displayName:
+          cleanText(
+            data.displayName ||
+            data.display_name ||
+            requestedDisplayName ||
+            normalizedEmail,
+            200
+          ),
+        source: "firestore_user_email",
+      };
     }
   }
 
@@ -1330,7 +1404,46 @@ async function emailImportOwnersForSlackTeam(command) {
 
 async function sharedOwnersFor(uid, command = {}) {
   const owners = new Map();
-  owners.set(uid, { uid, relation: "self", scope: "full", ...(await publicUser(uid)) });
+
+  function ownerKey(owner) {
+    const email = cleanText(owner?.email || "", 240).toLowerCase();
+    if (email) return `email:${email}`;
+    return `uid:${cleanText(owner?.uid || "", 160)}`;
+  }
+
+  function addOwner(owner) {
+    if (!owner?.uid || cleanText(owner.uid, 160).startsWith("guest_")) return;
+
+    const key = ownerKey(owner);
+    const existing = owners.get(key);
+
+    if (!existing) {
+      owners.set(key, owner);
+      return;
+    }
+
+    const existingName = cleanText(existing.displayName || "", 200);
+    const candidateName = cleanText(owner.displayName || "", 200);
+    const existingLooksLikeUid =
+      !existingName ||
+      existingName === existing.uid ||
+      /^[A-Za-z0-9_-]{20,}$/.test(existingName);
+    const candidateLooksLikeUid =
+      !candidateName ||
+      candidateName === owner.uid ||
+      /^[A-Za-z0-9_-]{20,}$/.test(candidateName);
+
+    if (existingLooksLikeUid && !candidateLooksLikeUid) {
+      owners.set(key, { ...existing, ...owner });
+    }
+  }
+
+  addOwner({
+    uid,
+    relation: "self",
+    scope: "full",
+    ...(await publicUser(uid)),
+  });
 
   const shares = await db()
     .collection(SHARE_COLLECTION)
@@ -1340,7 +1453,8 @@ async function sharedOwnersFor(uid, command = {}) {
   for (const doc of shares.docs) {
     const share = doc.data();
     if (share.status !== "active" || !share.ownerUid) continue;
-    owners.set(share.ownerUid, {
+
+    addOwner({
       uid: share.ownerUid,
       relation: "shared",
       scope: share.scope || "layover_only",
@@ -1350,10 +1464,23 @@ async function sharedOwnersFor(uid, command = {}) {
   }
 
   for (const owner of await emailImportOwnersForSlackTeam(command)) {
-    if (!owners.has(owner.uid)) owners.set(owner.uid, owner);
+    addOwner(owner);
   }
 
-  return [...owners.values()];
+  const result = [...owners.values()];
+  console.log("SHARED_OWNERS_FOR", {
+    requesterUid: uid,
+    teamId: command.teamId || "",
+    ownerCount: result.length,
+    owners: result.map((owner) => ({
+      uid: owner.uid,
+      relation: owner.relation,
+      displayName: owner.displayName || "",
+      email: owner.email || "",
+    })),
+  });
+
+  return result;
 }
 
 function rosterItem(doc, owner) {
@@ -1474,17 +1601,92 @@ function looksLikeSameRosterItem(a, b) {
   return Math.max(aTime, bTime) >= 20 * 60 && Math.min(aTime, bTime) <= 4 * 60;
 }
 
+function canonicalCrewSignature(item) {
+  const crew = Array.isArray(item?.crewArray) ? item.crewArray : [];
+  return crew
+    .map((name) => cleanText(name, 40))
+    .filter(Boolean)
+    .sort()
+    .join(",");
+}
+
+function rosterFlightIdentity(item) {
+  return [
+    dateSortKey(item.date),
+    cleanText(item.activity, 80).toUpperCase(),
+    upper(item.from),
+    upper(item.to),
+  ].join("|");
+}
+
+function rosterOwnerIdentity(item) {
+  return cleanText(item.ownerUid || item.crewName || "", 160).toLowerCase();
+}
+
+function preferredLayoverRosterItem(current, candidate) {
+  if (!current) return candidate;
+
+  const currentCrewCount = Array.isArray(current.crewArray) ? current.crewArray.length : 0;
+  const candidateCrewCount = Array.isArray(candidate.crewArray) ? candidate.crewArray.length : 0;
+
+  // Prefer the record with the richer crew list.
+  if (candidateCrewCount !== currentCrewCount) {
+    return candidateCrewCount > currentCrewCount ? candidate : current;
+  }
+
+  // Prefer human-readable names over raw Firebase UID display.
+  const currentLooksLikeUid =
+    !current.crewName ||
+    current.crewName === current.ownerUid ||
+    /^[A-Za-z0-9_-]{20,}$/.test(current.crewName);
+  const candidateLooksLikeUid =
+    !candidate.crewName ||
+    candidate.crewName === candidate.ownerUid ||
+    /^[A-Za-z0-9_-]{20,}$/.test(candidate.crewName);
+
+  if (currentLooksLikeUid !== candidateLooksLikeUid) {
+    return currentLooksLikeUid ? candidate : current;
+  }
+
+  // Finally prefer the record with a readable local time.
+  const currentHasColon = /:/.test(cleanText(current.stdl || current.stal, 20));
+  const candidateHasColon = /:/.test(cleanText(candidate.stdl || candidate.stal, 20));
+  if (currentHasColon !== candidateHasColon) {
+    return candidateHasColon ? candidate : current;
+  }
+
+  return preferredRosterItem(current, candidate);
+}
+
 function dedupeNearDuplicateRosterItems(items) {
-  const groups = [];
+  const byFlight = new Map();
+
   for (const item of items) {
-    const group = groups.find((existing) => looksLikeSameRosterItem(existing[0], item));
-    if (group) {
-      group.push(item);
-    } else {
-      groups.push([item]);
+    const flightKey = rosterFlightIdentity(item);
+    const current = byFlight.get(flightKey);
+
+    if (!current) {
+      byFlight.set(flightKey, item);
+      continue;
+    }
+
+    const sameOwner =
+      rosterOwnerIdentity(current) === rosterOwnerIdentity(item);
+
+    const sameCrew =
+      canonicalCrewSignature(current) === canonicalCrewSignature(item);
+
+    // Same dated flight/route from duplicate owner aliases or duplicate PDC/roster
+    // records should be shown once. Prefer the most complete, readable record.
+    if (sameOwner || sameCrew || flightKey) {
+      byFlight.set(
+        flightKey,
+        preferredLayoverRosterItem(current, item)
+      );
     }
   }
-  return groups.map((group) => group.reduce(preferredRosterItem, null));
+
+  return [...byFlight.values()];
 }
 
 function preferredRosterItem(current, candidate) {
