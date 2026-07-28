@@ -1163,19 +1163,25 @@ function rosterItem(doc, owner) {
     ? data.CrewArray.map((name) => cleanText(name, 40)).filter(Boolean)
     : [];
   return {
-    ownerUid: data.owner || owner.uid,
-    crewName: owner.displayName || data.ownerDisplayName || "",
+    ownerUid: data.owner || data.uid || owner.uid,
+    sourcePath: doc.ref.path,
+    crewName:
+      owner.displayName ||
+      data.display_name ||
+      data.pdc_user_name ||
+      data.ownerDisplayName ||
+      data.email ||
+      "",
     date: cleanText(data.Date, 20),
     activity,
     from: upper(data.From),
     to: upper(data.To),
-    stdl: cleanText(data.STDL || data["STD(L)"], 20),
-    stal: cleanText(data.STAL || data["STA(L)"], 20),
+    stdl: cleanText(data.STDL || data["STD(L)"] || data.STDZ || data["STD(Z)"], 20),
+    stal: cleanText(data.STAL || data["STA(L)"] || data.STAZ || data["STA(Z)"], 20),
     crewArray,
     type: isOffDuty(activity) ? "day_off" : "flight",
   };
 }
-
 
 async function rosterDocsForOwner(collectionName, ownerUid) {
   const docs = [];
@@ -1205,12 +1211,28 @@ async function layoverItemsFor(uid, { station, startDate, days }, command = {}) 
   const startKey = dateSortKey(startDate);
   const endKey = dateSortKey(endDate);
   const owners = await sharedOwnersFor(uid, command);
+
+  console.log("LAYOVER_OWNERS", owners.map((owner) => ({
+    uid: owner.uid,
+    relation: owner.relation,
+    displayName: owner.displayName,
+    email: owner.email,
+  })));
+
   const nested = await Promise.all(
     owners.flatMap((owner) =>
       SHARE_ROSTER_COLLECTIONS.map(async (collectionName) => {
         const docs = await rosterDocsForOwner(collectionName, owner.uid);
+
+        console.log("LAYOVER_OWNER_DOCS", {
+          ownerUid: owner.uid,
+          collectionName,
+          count: docs.length,
+        });
+
         return docs
           .map((doc) => rosterItem(doc, owner))
+          .filter((item) => item.date && item.activity)
           .filter((item) => item.type === "flight")
           .filter((item) => {
             const key = dateSortKey(item.date);
@@ -1220,9 +1242,10 @@ async function layoverItemsFor(uid, { station, startDate, days }, command = {}) 
       })
     )
   );
+
   return dedupeRosterItems(nested.flat(), { ignoreTimes: true }).sort((a, b) => {
-    const left = `${dateSortKey(a.date)}_${a.stdl}_${a.crewName}_${a.activity}`;
-    const right = `${dateSortKey(b.date)}_${b.stdl}_${b.crewName}_${b.activity}`;
+    const left = `${dateSortKey(a.date)}_${a.stdl}_${a.activity}_${a.from}_${a.to}_${a.ownerUid}`;
+    const right = `${dateSortKey(b.date)}_${b.stdl}_${b.activity}_${b.from}_${b.to}_${b.ownerUid}`;
     return left.localeCompare(right);
   });
 }
@@ -1296,8 +1319,8 @@ async function myRosterItemsFor(uid, { station, startDate, days }) {
   const endKey = dateSortKey(endDate);
   const nested = await Promise.all(
     SHARE_ROSTER_COLLECTIONS.map(async (collectionName) => {
-      const docs = await rosterDocsForOwner(collectionName, uid);
-      return docs
+      const snap = await db().collection(collectionName).where("owner", "==", uid).get();
+      return snap.docs
         .map((doc) => rosterItem(doc, owner))
         .filter((item) => item.date && item.activity)
         .filter((item) => {
