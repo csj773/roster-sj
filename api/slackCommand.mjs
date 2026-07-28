@@ -148,15 +148,51 @@ async function slackLinkData(command) {
 }
 
 async function linkedFirebaseUid(command, { allowDefault = true } = {}) {
+  const linkId = slackLinkId(command.teamId, command.userId);
   const data = await slackLinkData(command);
+
   if (data) {
-    const linkedUid = cleanText(data.firebaseUid || data.uid || "", 160);
-    if (linkedUid && data.status !== "disabled") return linkedUid;
+    const linkedUid = cleanText(
+      data.firebaseUid ||
+      data.uid ||
+      data.owner ||
+      data.userId ||
+      "",
+      160
+    );
+
+    if (
+      linkedUid &&
+      data.status !== "disabled" &&
+      !linkedUid.startsWith("guest_")
+    ) {
+      console.log("SLACK_USER_LINK_FOUND", {
+        linkId,
+        firebaseUid: linkedUid,
+        source: data.source || "",
+      });
+      return linkedUid;
+    }
+
+    console.warn("SLACK_USER_LINK_INVALID", {
+      linkId,
+      linkedUid,
+      status: data.status || "",
+    });
   }
 
   if (!allowDefault) return "";
 
-  const configuredUid = cleanText(process.env.SLACK_DEFAULT_FIREBASE_UID || "", 160);
+  const configuredUid = cleanText(
+    process.env.SLACK_DEFAULT_FIREBASE_UID || "",
+    160
+  );
+
+  console.warn("SLACK_USER_LINK_FALLBACK", {
+    linkId,
+    firebaseUid: configuredUid,
+  });
+
   return configuredUid;
 }
 
@@ -171,6 +207,7 @@ async function linkSlackUserToDefaultUid(command) {
   await db().collection(SLACK_LINK_COLLECTION).doc(linkId).set({
     firebaseUid,
     uid: firebaseUid,
+    owner: firebaseUid,
     slackTeamId: command.teamId,
     slackTeamDomain: command.teamDomain || "",
     slackUserId: command.userId,
@@ -228,52 +265,134 @@ async function acceptedInviteForEmail(email) {
   return accepted[0] || null;
 }
 
+async function firebaseOwnerByEmail(email, requestedDisplayName = "") {
+  const normalizedEmail = cleanText(email, 240).toLowerCase();
+  if (!normalizedEmail) throw new Error("Email is required");
+
+  try {
+    const userRecord = await admin.auth().getUserByEmail(normalizedEmail);
+    return {
+      uid: userRecord.uid,
+      email: cleanText(userRecord.email || normalizedEmail, 240).toLowerCase(),
+      displayName:
+        cleanText(userRecord.displayName || "", 200) ||
+        cleanText(requestedDisplayName, 200) ||
+        displayNameForEmail(normalizedEmail) ||
+        normalizedEmail,
+      source: "firebase_auth_email",
+    };
+  } catch (error) {
+    if (error.code !== "auth/user-not-found") {
+      throw new Error(
+        `Firebase Auth email lookup failed for ${normalizedEmail}: ${error.code || error.message}`
+      );
+    }
+  }
+
+  return null;
+}
+
 async function resolveImportOwnerForEmail(command, email) {
   const normalizedEmail = cleanText(email, 240).toLowerCase();
-  const invite = await acceptedInviteForEmail(normalizedEmail);
-  const firebaseUid = cleanText(invite?.acceptedByUid || "", 160) || (
-    invite ? guestInviteUid(invite.code) : guestEmailUid(normalizedEmail)
-  );
-  const displayName = displayNameForEmail(normalizedEmail) || normalizedEmail || command.userName || "Roster Share guest";
+  if (!normalizedEmail) throw new Error("Roster owner email is required");
+
+  const requestedDisplayName =
+    displayNameForEmail(normalizedEmail) ||
+    normalizedEmail ||
+    command.userName ||
+    "Roster user";
+
+  let owner = await firebaseOwnerByEmail(normalizedEmail, requestedDisplayName);
+
+  if (!owner) {
+    const invite = await acceptedInviteForEmail(normalizedEmail);
+    const acceptedUid = cleanText(invite?.acceptedByUid || "", 160);
+
+    if (acceptedUid && !acceptedUid.startsWith("guest_")) {
+      const acceptedUser = await publicUser(acceptedUid);
+      owner = {
+        uid: acceptedUid,
+        email: cleanText(
+          acceptedUser?.email || normalizedEmail,
+          240
+        ).toLowerCase(),
+        displayName:
+          cleanText(acceptedUser?.displayName || "", 200) ||
+          requestedDisplayName,
+        source: "accepted_invite",
+        inviteCode: invite?.code || "",
+      };
+    }
+  }
+
+  if (!owner) {
+    const fallbackUid = cleanText(
+      process.env.SLACK_DEFAULT_FIREBASE_UID || "",
+      160
+    );
+
+    if (!fallbackUid) {
+      throw new Error(
+        `No Firebase Authentication user found for ${normalizedEmail}, and SLACK_DEFAULT_FIREBASE_UID is not configured`
+      );
+    }
+
+    const fallbackUser = await publicUser(fallbackUid);
+    owner = {
+      uid: fallbackUid,
+      email: cleanText(
+        fallbackUser?.email || normalizedEmail,
+        240
+      ).toLowerCase(),
+      displayName:
+        cleanText(fallbackUser?.displayName || "", 200) ||
+        requestedDisplayName,
+      source: "default_firebase_uid",
+    };
+  }
+
+  if (!owner.uid || owner.uid.startsWith("guest_")) {
+    throw new Error(
+      `Invalid Firebase owner UID resolved: ${owner.uid || "(empty)"}`
+    );
+  }
+
   const linkId = slackLinkId(command.teamId, command.userId);
 
-  await db().collection("users").doc(firebaseUid).set({
-    uid: firebaseUid,
-    email: normalizedEmail,
-    display_name: displayName,
-    displayName,
-    provider: "slack_guest_import",
-    providers: ["slack_guest_import"],
-    updated_time: nowTimestamp(),
-    created_time: nowTimestamp(),
-  }, { merge: true });
-
   await db().collection(SLACK_LINK_COLLECTION).doc(linkId).set({
-    firebaseUid,
-    uid: firebaseUid,
+    firebaseUid: owner.uid,
+    uid: owner.uid,
+    owner: owner.uid,
     slackTeamId: command.teamId,
     slackTeamDomain: command.teamDomain || "",
     slackUserId: command.userId,
     slackUserName: command.userName || "",
     recipientEmail: normalizedEmail,
-    firebaseDisplayName: displayName,
-    firebaseEmail: normalizedEmail,
-    inviteCode: invite?.code || "",
+    firebaseEmail: owner.email || normalizedEmail,
+    firebaseDisplayName: owner.displayName || requestedDisplayName,
     status: "active",
-    source: invite ? "slack_import_email_invite" : "slack_import_email",
+    source: owner.source || "slack_import_email",
+    inviteCode: owner.inviteCode || "",
     updatedAt: nowTimestamp(),
     createdAt: nowTimestamp(),
   }, { merge: true });
 
+  console.log("SLACK_IMPORT_OWNER_RESOLVED", {
+    linkId,
+    email: normalizedEmail,
+    firebaseUid: owner.uid,
+    source: owner.source,
+  });
+
   return {
-    firebaseUid,
+    firebaseUid: owner.uid,
     owner: {
-      uid: firebaseUid,
-      displayName,
-      email: normalizedEmail,
+      uid: owner.uid,
+      displayName: owner.displayName || requestedDisplayName,
+      email: owner.email || normalizedEmail,
     },
     linkId,
-    inviteCode: invite?.code || "",
+    inviteCode: owner.inviteCode || "",
   };
 }
 
@@ -580,7 +699,6 @@ async function pdcOwnerForEmail(email) {
   const userUid = usersByEmail.empty ? "" : usersByEmail.docs[0].id;
   const candidates = [
     cleanText(usersByEmail.docs[0]?.data()?.uid || userUid || "", 160),
-    guestEmailUid(normalizedEmail),
     normalizedEmail,
   ].filter(Boolean);
 
@@ -1177,7 +1295,17 @@ function rosterItem(doc, owner) {
 
 async function ownerRosterDocs(ownerUid) {
   const normalizedUid = cleanText(ownerUid, 500);
-  if (!normalizedUid) return [];
+  if (!normalizedUid) {
+    console.warn("OWNER_ROSTER_DOCS_NO_UID");
+    return [];
+  }
+
+  if (normalizedUid.startsWith("guest_")) {
+    console.warn("OWNER_ROSTER_DOCS_GUEST_UID_BLOCKED", {
+      ownerUid: normalizedUid,
+    });
+    return [];
+  }
 
   const ownerDocId = ownerPdcDocId(normalizedUid);
   const [rosterSnapshot, pdcEventsSnapshot] = await Promise.all([
@@ -1557,7 +1685,7 @@ async function handleLayover(command) {
     firebaseUid: firebaseUid || "",
   });
 
-  if (!firebaseUid) {
+  if (!firebaseUid || firebaseUid.startsWith("guest_")) {
     return { response_type: "ephemeral", text: notLinkedText(command) };
   }
 
@@ -1586,7 +1714,7 @@ async function handleMyRoster(command) {
     firebaseUid: firebaseUid || "",
   });
 
-  if (!firebaseUid) {
+  if (!firebaseUid || firebaseUid.startsWith("guest_")) {
     return {
       response_type: "ephemeral",
       text: `${notLinkedText(command)}\n\nUse \`/roster-share link-me\` first, then run \`/my-roster\`.`,
