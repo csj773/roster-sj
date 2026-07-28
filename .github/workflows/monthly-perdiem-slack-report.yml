@@ -10,7 +10,7 @@ on:
 
       current_user_email:
         description: "Firebase Authentication email for the Slack user"
-        required: true
+        required: false
         type: string
 
       current_user_name:
@@ -92,4 +92,3 @@ jobs:
             outputs/*.json
           if-no-files-found: warn
           retention-days: 30
-

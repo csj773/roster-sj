@@ -124,9 +124,9 @@ async function resolveOrCreateOwner(auth) {
   );
   const displayName = cleanText(optionalEnv("PERDIEM_USER_NAME"), 200);
 
-  if (!email) {
+  if (!email && !requestedUid) {
     throw new Error(
-      "REPORT_OWNER_EMAIL or PERDIEM_USER_EMAIL is required for Firebase user resolution"
+      "REPORT_OWNER_UID/PERDIEM_OWNER/FIREBASE_UID or REPORT_OWNER_EMAIL/PERDIEM_USER_EMAIL is required for Firebase user resolution"
     );
   }
 
@@ -147,7 +147,7 @@ async function resolveOrCreateOwner(auth) {
 
     if (userRecord) {
       const authEmail = normalizeEmail(userRecord.email);
-      if (authEmail && authEmail !== email) {
+      if (email && authEmail && authEmail !== email) {
         throw new Error(
           `Firebase UID/email mismatch: ${requestedUid} belongs to ${authEmail}, not ${email}`
         );
@@ -155,7 +155,7 @@ async function resolveOrCreateOwner(auth) {
       return {
         uid: userRecord.uid,
         email: authEmail || email,
-        displayName: displayName || cleanText(userRecord.displayName, 200) || email,
+        displayName: displayName || cleanText(userRecord.displayName, 200) || authEmail || email || requestedUid,
         created: false,
         resolvedBy: "uid",
       };
@@ -443,6 +443,4 @@ main().catch(async (error) => {
   } catch {}
   process.exit(1);
 });
-
-
 

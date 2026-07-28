@@ -756,7 +756,7 @@ function perDiemMonthHint({ targetMonth, targetYear }) {
   return targetYear ? `${monthName} ${targetYear}` : monthName;
 }
 
-async function dispatchPerDiemSlackWorkflow({ command, firebaseUid, owner, targetMonth, targetYear }) {
+async function dispatchPerDiemSlackWorkflow({ command, firebaseUid, owner, reportEmail = "", targetMonth, targetYear }) {
   const token = process.env.GITHUB_TOKEN || "";
   if (!token) return { dispatched: false };
 
@@ -764,6 +764,7 @@ async function dispatchPerDiemSlackWorkflow({ command, firebaseUid, owner, targe
   const ref = process.env.GITHUB_REF || DEFAULT_GITHUB_REF;
   const workflowFile = process.env.GITHUB_PERDIEM_SLACK_WORKFLOW_FILE || PERDIEM_SLACK_WORKFLOW_FILE;
   const url = `https://api.github.com/repos/${repo}/actions/workflows/${workflowFile}/dispatches`;
+  const ownerEmail = cleanText(owner.email || reportEmail || "", 240).toLowerCase();
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -775,9 +776,9 @@ async function dispatchPerDiemSlackWorkflow({ command, firebaseUid, owner, targe
     body: JSON.stringify({
       ref,
       inputs: {
-        current_user_email: owner.email || "",
+        current_user_email: ownerEmail,
         current_user_uid: firebaseUid,
-        current_user_name: owner.displayName || owner.email || command.userName || "",
+        current_user_name: owner.displayName || ownerEmail || command.userName || "",
         target_month: targetMonth || "",
         target_year: targetYear || "",
         slack_response_url: command.responseUrl || "",
