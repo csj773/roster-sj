@@ -64,6 +64,11 @@ function ownerPdcDocId(ownerUid) {
   return cleanText(ownerUid, 500).replace(/\//g, "_") || "unknown_owner";
 }
 
+function guestEmailUid(email) {
+  return `guest_email_${cleanText(email, 240).toLowerCase()}`
+    .replace(/[^A-Za-z0-9_-]/g, "_");
+}
+
 function rosterSummary(doc, person) {
   const data = doc.data();
   const from = upper(data.From);
@@ -73,12 +78,14 @@ function rosterSummary(doc, person) {
   return {
     id: doc.id,
     sourcePath: doc.ref.path,
-    ownerUid: cleanText(data.owner || person.uid, 500),
+    ownerUid: cleanText(data.owner || data.uid || person.uid, 500),
     crewName:
       person.displayName ||
       data.display_name ||
       data.pdc_user_name ||
       data.ownerDisplayName ||
+      data.email ||
+      person.email ||
       "",
     date: cleanText(data.Date, 20),
     activity,
@@ -86,15 +93,39 @@ function rosterSummary(doc, person) {
     from,
     to,
     flightNo: activity,
-    cil: cleanText(data.CIL || data["C/I(L)"], 20),
-    col: cleanText(data.COL || data["C/O(L)"], 20),
-    stdl: cleanText(data.STDL || data["STD(L)"], 20),
-    stal: cleanText(data.STAL || data["STA(L)"], 20),
+    cil: cleanText(
+      data.CIL ||
+        data["C/I(L)"] ||
+        data.CI,
+      40
+    ),
+    col: cleanText(
+      data.COL ||
+        data["C/O(L)"] ||
+        data.CO,
+      40
+    ),
+    stdl: cleanText(
+      data.STDL ||
+        data["STD(L)"] ||
+        data.STDZ ||
+        data["STD(Z)"] ||
+        data.STD,
+      40
+    ),
+    stal: cleanText(
+      data.STAL ||
+        data["STA(L)"] ||
+        data.STAZ ||
+        data["STA(Z)"] ||
+        data.STA,
+      40
+    ),
     crew: cleanText(data.Crew, 1000),
     crewArray: Array.isArray(data.CrewArray)
-      ? data.CrewArray
+      ? data.CrewArray.map((name) => cleanText(name, 80)).filter(Boolean)
       : Array.isArray(data.crewArray)
-        ? data.crewArray
+        ? data.crewArray.map((name) => cleanText(name, 80)).filter(Boolean)
         : [],
     type: isOffDuty(activity) ? "day_off" : "flight",
   };
@@ -107,31 +138,44 @@ function stationMatches(item, station) {
 
 async function sharedOwnersFor(uid) {
   const owners = new Map();
+  const self = await publicUser(uid);
 
   owners.set(uid, {
     uid,
     relation: "self",
     scope: "full",
-    ...(await publicUser(uid)),
+    ...self,
   });
 
-  const shares = await db()
-    .collection(SHARE_COLLECTION)
-    .where("sharedWithUid", "==", uid)
-    .get();
+  const email = cleanText(self.email || "", 240).toLowerCase();
+  const sharedWithCandidates = [
+    uid,
+    email,
+    email ? guestEmailUid(email) : "",
+  ].filter(Boolean);
 
-  for (const doc of shares.docs) {
-    const share = doc.data();
+  for (const sharedWithUid of [...new Set(sharedWithCandidates)]) {
+    const shares = await db()
+      .collection(SHARE_COLLECTION)
+      .where("sharedWithUid", "==", sharedWithUid)
+      .get();
 
-    if (share.status !== "active" || !share.ownerUid) continue;
+    for (const doc of shares.docs) {
+      const share = doc.data();
 
-    owners.set(share.ownerUid, {
-      uid: share.ownerUid,
-      relation: "shared",
-      scope: share.scope || "layover_only",
-      displayName: share.ownerDisplayName || "",
-      email: share.ownerEmail || "",
-    });
+      if (share.status !== "active" || !share.ownerUid) continue;
+
+      owners.set(share.ownerUid, {
+        uid: share.ownerUid,
+        relation: "shared",
+        scope: share.scope || "layover_only",
+        displayName:
+          share.ownerDisplayName ||
+          share.ownerEmail ||
+          share.ownerUid,
+        email: share.ownerEmail || "",
+      });
+    }
   }
 
   return [...owners.values()];
@@ -139,13 +183,22 @@ async function sharedOwnersFor(uid) {
 
 async function rosterDocsForOwner(ownerUid, collectionName) {
   const docs = [];
+  const seenPaths = new Set();
 
-  const flatSnapshot = await db()
+  function appendDocs(snapshot) {
+    for (const doc of snapshot.docs) {
+      if (seenPaths.has(doc.ref.path)) continue;
+      seenPaths.add(doc.ref.path);
+      docs.push(doc);
+    }
+  }
+
+  const flatByOwner = await db()
     .collection(collectionName)
     .where("owner", "==", ownerUid)
     .get();
 
-  docs.push(...flatSnapshot.docs);
+  appendDocs(flatByOwner);
 
   if (collectionName === PDC_COLLECTION) {
     const nestedSnapshot = await db()
@@ -154,7 +207,7 @@ async function rosterDocsForOwner(ownerUid, collectionName) {
       .collection("events")
       .get();
 
-    docs.push(...nestedSnapshot.docs);
+    appendDocs(nestedSnapshot);
   }
 
   return docs;
@@ -167,8 +220,16 @@ async function rosterForOwner(
 ) {
   const docs = await rosterDocsForOwner(owner.uid, collectionName);
 
+  console.log("ROSTER_SHARE_OWNER_DOCS", {
+    ownerUid: owner.uid,
+    ownerName: owner.displayName || owner.email || "",
+    collectionName,
+    count: docs.length,
+  });
+
   return docs
     .map((doc) => rosterSummary(doc, owner))
+    .filter((item) => item.date && item.activity)
     .filter((item) => dateInRange(item.date, startDate, endDate))
     .filter((item) => stationMatches(item, station))
     .map((item) => ({
@@ -304,6 +365,17 @@ export default async function handler(req, res) {
 
     const owners = await sharedOwnersFor(user.uid);
 
+    console.log(
+      "ROSTER_SHARE_OWNERS",
+      owners.map((owner) => ({
+        uid: owner.uid,
+        relation: owner.relation,
+        scope: owner.scope,
+        displayName: owner.displayName,
+        email: owner.email,
+      }))
+    );
+
     const nested = await Promise.all(
       owners.flatMap((owner) =>
         SHARE_ROSTER_COLLECTIONS.map((collectionName) =>
@@ -334,11 +406,12 @@ export default async function handler(req, res) {
       endDate,
       station,
       owners: owners.map(
-        ({ uid, relation, scope, displayName }) => ({
+        ({ uid, relation, scope, displayName, email }) => ({
           uid,
           relation,
           scope,
           displayName,
+          email,
         })
       ),
       items,
@@ -346,6 +419,7 @@ export default async function handler(req, res) {
         mode === "layover" || station ? groupLayovers(items) : [],
     });
   } catch (error) {
+    console.error("Roster Share API failed:", error);
     json(res, error.statusCode || 500, {
       error: error.message,
     });
