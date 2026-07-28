@@ -1085,7 +1085,6 @@ async function uploadImportedRosterToPdc(docs) {
       updatedAt: nowTimestamp(),
     }, { merge: true });
     batch.set(eventRef, docData, { merge: true });
-    batch.set(db().collection(PDC_COLLECTION).doc(), docData);
     await batch.commit();
     imported += 1;
   }
@@ -1099,42 +1098,27 @@ function isOffDuty(activity) {
 
 async function emailImportOwnersForSlackTeam(command) {
   if (!command.teamId) return [];
-
   const snap = await db()
     .collection(SLACK_LINK_COLLECTION)
     .where("slackTeamId", "==", command.teamId)
     .get();
 
   const owners = new Map();
-
   for (const doc of snap.docs) {
     const link = doc.data();
     if (link.status === "disabled") continue;
-
-    const email = cleanText(
-      link.recipientEmail || link.firebaseEmail || "",
-      240
-    ).toLowerCase();
-
-    const linkedUid = cleanText(link.firebaseUid || link.uid || "", 160);
-
+    const email = cleanText(link.recipientEmail || link.firebaseEmail || "", 240).toLowerCase();
     const uidCandidates = [
-      linkedUid,
+      cleanText(link.firebaseUid || link.uid || "", 160),
       email,
-      email ? guestEmailUid(email) : "",
     ].filter(Boolean);
-
+    if (!email || !uidCandidates.length) continue;
     for (const ownerUid of uidCandidates) {
       owners.set(ownerUid, {
         uid: ownerUid,
         relation: "slack_email_import",
         scope: "layover_only",
-        displayName:
-          link.firebaseDisplayName ||
-          displayNameForEmail(email) ||
-          email ||
-          link.slackUserName ||
-          ownerUid,
+        displayName: link.firebaseDisplayName || email,
         email,
       });
     }
@@ -1145,49 +1129,23 @@ async function emailImportOwnersForSlackTeam(command) {
 
 async function sharedOwnersFor(uid, command = {}) {
   const owners = new Map();
-  const self = await publicUser(uid);
+  owners.set(uid, { uid, relation: "self", scope: "full", ...(await publicUser(uid)) });
 
-  owners.set(uid, {
-    uid,
-    relation: "self",
-    scope: "full",
-    ...self,
-  });
+  const shares = await db()
+    .collection(SHARE_COLLECTION)
+    .where("sharedWithUid", "==", uid)
+    .get();
 
-  const link = await slackLinkData(command);
-  const linkedEmail = cleanText(
-    link?.recipientEmail || link?.firebaseEmail || self.email || "",
-    240
-  ).toLowerCase();
-
-  const recipientCandidates = [
-    uid,
-    linkedEmail,
-    linkedEmail ? guestEmailUid(linkedEmail) : "",
-  ].filter(Boolean);
-
-  for (const sharedWithUid of [...new Set(recipientCandidates)]) {
-    const shares = await db()
-      .collection(SHARE_COLLECTION)
-      .where("sharedWithUid", "==", sharedWithUid)
-      .get();
-
-    for (const doc of shares.docs) {
-      const share = doc.data();
-      if (share.status !== "active" || !share.ownerUid) continue;
-
-      owners.set(share.ownerUid, {
-        uid: share.ownerUid,
-        relation: "shared",
-        scope: share.scope || "layover_only",
-        displayName:
-          share.ownerDisplayName ||
-          displayNameForEmail(share.ownerEmail) ||
-          share.ownerEmail ||
-          share.ownerUid,
-        email: share.ownerEmail || "",
-      });
-    }
+  for (const doc of shares.docs) {
+    const share = doc.data();
+    if (share.status !== "active" || !share.ownerUid) continue;
+    owners.set(share.ownerUid, {
+      uid: share.ownerUid,
+      relation: "shared",
+      scope: share.scope || "layover_only",
+      displayName: share.ownerDisplayName || "",
+      email: share.ownerEmail || "",
+    });
   }
 
   for (const owner of await emailImportOwnersForSlackTeam(command)) {
@@ -1203,73 +1161,30 @@ function rosterItem(doc, owner) {
   const crewArray = Array.isArray(data.CrewArray)
     ? data.CrewArray.map((name) => cleanText(name, 40)).filter(Boolean)
     : [];
-
   return {
-    ownerUid: data.owner || data.uid || owner.uid,
-    sourcePath: doc.ref.path,
-    crewName:
-      owner.displayName ||
-      data.display_name ||
-      data.pdc_user_name ||
-      data.ownerDisplayName ||
-      data.email ||
-      owner.email ||
-      "",
+    ownerUid: data.owner || owner.uid,
+    crewName: owner.displayName || data.ownerDisplayName || "",
     date: cleanText(data.Date, 20),
     activity,
     from: upper(data.From),
     to: upper(data.To),
-    stdl: cleanText(
-      data.STDL ||
-        data["STD(L)"] ||
-        data.STDZ ||
-        data["STD(Z)"] ||
-        data.STD,
-      40
-    ),
-    stal: cleanText(
-      data.STAL ||
-        data["STA(L)"] ||
-        data.STAZ ||
-        data["STA(Z)"] ||
-        data.STA,
-      40
-    ),
+    stdl: cleanText(data.STDL || data["STD(L)"], 20),
+    stal: cleanText(data.STAL || data["STA(L)"], 20),
     crewArray,
     type: isOffDuty(activity) ? "day_off" : "flight",
   };
 }
 
-async function rosterDocsForOwner(collectionName, ownerUid) {
-  const docs = [];
-  const seenPaths = new Set();
-
-  async function addSnapshot(snapshot) {
-    for (const doc of snapshot.docs) {
-      if (seenPaths.has(doc.ref.path)) continue;
-      seenPaths.add(doc.ref.path);
-      docs.push(doc);
-    }
-  }
-
-  await addSnapshot(
-    await db()
-      .collection(collectionName)
-      .where("owner", "==", ownerUid)
-      .get()
-  );
-
-  if (collectionName === PDC_COLLECTION) {
-    await addSnapshot(
-      await db()
-        .collection(PDC_COLLECTION)
-        .doc(ownerPdcDocId(ownerUid))
-        .collection("events")
-        .get()
-    );
-  }
-
-  return docs;
+async function ownerRosterDocs(ownerUid) {
+  const [rosterSnapshot, pdcEventsSnapshot] = await Promise.all([
+    db().collection(ROSTER_COLLECTION).where("owner", "==", ownerUid).get(),
+    db()
+      .collection(PDC_COLLECTION)
+      .doc(ownerPdcDocId(ownerUid))
+      .collection("events")
+      .get(),
+  ]);
+  return [...rosterSnapshot.docs, ...pdcEventsSnapshot.docs];
 }
 
 async function layoverItemsFor(uid, { station, startDate, days }, command = {}) {
@@ -1277,57 +1192,22 @@ async function layoverItemsFor(uid, { station, startDate, days }, command = {}) 
   const startKey = dateSortKey(startDate);
   const endKey = dateSortKey(endDate);
   const owners = await sharedOwnersFor(uid, command);
-
-  console.log(
-    "LAYOVER_OWNERS",
-    owners.map((owner) => ({
-      uid: owner.uid,
-      relation: owner.relation,
-      scope: owner.scope,
-      displayName: owner.displayName,
-      email: owner.email,
-    }))
-  );
-
   const nested = await Promise.all(
-    owners.flatMap((owner) =>
-      SHARE_ROSTER_COLLECTIONS.map(async (collectionName) => {
-        const docs = await rosterDocsForOwner(collectionName, owner.uid);
-
-        console.log("LAYOVER_OWNER_DOCS", {
-          ownerUid: owner.uid,
-          ownerName: owner.displayName || owner.email || "",
-          collectionName,
-          count: docs.length,
-        });
-
-        return docs
-          .map((doc) => rosterItem(doc, owner))
-          .filter((item) => item.date && item.activity)
-          .filter((item) => item.type === "flight")
-          .filter((item) => {
-            const key = dateSortKey(item.date);
-            return key >= startKey && key <= endKey;
-          })
-          .filter(
-            (item) =>
-              !station ||
-              item.from === station ||
-              item.to === station
-          );
-      })
-    )
+    owners.map(async (owner) => {
+      const docs = await ownerRosterDocs(owner.uid);
+      return docs
+        .map((doc) => rosterItem(doc, owner))
+        .filter((item) => item.type === "flight")
+        .filter((item) => {
+          const key = dateSortKey(item.date);
+          return key >= startKey && key <= endKey;
+        })
+        .filter((item) => !station || item.from === station || item.to === station);
+    })
   );
-
   return dedupeRosterItems(nested.flat(), { ignoreTimes: true }).sort((a, b) => {
-    const left =
-      `${dateSortKey(a.date)}_${a.stdl}_${a.activity}_` +
-      `${a.from}_${a.to}_${a.ownerUid}`;
-
-    const right =
-      `${dateSortKey(b.date)}_${b.stdl}_${b.activity}_` +
-      `${b.from}_${b.to}_${b.ownerUid}`;
-
+    const left = `${dateSortKey(a.date)}_${a.stdl}_${a.crewName}_${a.activity}`;
+    const right = `${dateSortKey(b.date)}_${b.stdl}_${b.crewName}_${b.activity}`;
     return left.localeCompare(right);
   });
 }
@@ -1395,48 +1275,22 @@ function preferredRosterItem(current, candidate) {
 }
 
 async function myRosterItemsFor(uid, { station, startDate, days }) {
-  const owner = {
-    uid,
-    relation: "self",
-    scope: "full",
-    ...(await publicUser(uid)),
-  };
-
+  const owner = { uid, relation: "self", scope: "full", ...(await publicUser(uid)) };
   const endDate = addDays(startDate, days - 1);
   const startKey = dateSortKey(startDate);
   const endKey = dateSortKey(endDate);
-
-  const nested = await Promise.all(
-    SHARE_ROSTER_COLLECTIONS.map(async (collectionName) => {
-      const docs = await rosterDocsForOwner(collectionName, uid);
-
-      console.log("MY_ROSTER_OWNER_DOCS", {
-        ownerUid: uid,
-        collectionName,
-        count: docs.length,
-      });
-
-      return docs
-        .map((doc) => rosterItem(doc, owner))
-        .filter((item) => item.date && item.activity)
-        .filter((item) => {
-          const key = dateSortKey(item.date);
-          return key >= startKey && key <= endKey;
-        })
-        .filter(
-          (item) =>
-            !station ||
-            item.from === station ||
-            item.to === station
-        );
+  const docs = await ownerRosterDocs(uid);
+  const items = docs
+    .map((doc) => rosterItem(doc, owner))
+    .filter((item) => item.date && item.activity)
+    .filter((item) => {
+      const key = dateSortKey(item.date);
+      return key >= startKey && key <= endKey;
     })
-  );
-
-  return dedupeRosterItems(nested.flat(), { ignoreTimes: true }).sort((a, b) => {
-    const left =
-      `${dateSortKey(a.date)}_${a.stdl}_${a.activity}_${a.from}_${a.to}`;
-    const right =
-      `${dateSortKey(b.date)}_${b.stdl}_${b.activity}_${b.from}_${b.to}`;
+    .filter((item) => !station || item.from === station || item.to === station);
+  return dedupeRosterItems(items, { ignoreTimes: true }).sort((a, b) => {
+    const left = `${dateSortKey(a.date)}_${a.stdl}_${a.activity}_${a.from}_${a.to}`;
+    const right = `${dateSortKey(b.date)}_${b.stdl}_${b.activity}_${b.from}_${b.to}`;
     return left.localeCompare(right);
   });
 }
