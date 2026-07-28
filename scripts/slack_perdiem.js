@@ -565,8 +565,8 @@ async function deleteFlatPerDiemRowsForOwner(db, collectionName, owner) {
 }
 
 /**
- * Perdiem/{owner}/event 문서만 삭제한 뒤 새 목록으로 재작성한다.
- * 다른 owner 문서와 event는 건드리지 않는다.
+ * Perdiem/{owner}/events 문서만 삭제한 뒤 새 목록으로 재작성한다.
+ * 다른 owner 문서와 events는 건드리지 않는다.
  */
 export async function rewriteUserPerDiem(
   db,
@@ -590,18 +590,18 @@ export async function rewriteUserPerDiem(
   const normalizedRows = normalizeSlackPerDiemRows(perdiemList || []);
 
   // 최종 저장 구조:
-  // Perdiem/{owner}/event/{eventId}
+  // Perdiem/{owner}/events/{eventId}
   const ownerRef = db.collection(collectionName).doc(resolvedOwner);
-  const eventsRef = ownerRef.collection("event");
+  const eventsRef = ownerRef.collection("events");
 
   const existingSnapshot = await eventsRef.get();
-  const legacyEventsSnapshot = await ownerRef.collection("events").get();
+  const legacyEventSnapshot = await ownerRef.collection("event").get();
 
   const deleted = await commitDeleteRefs(
     db,
     [
       ...existingSnapshot.docs,
-      ...legacyEventsSnapshot.docs,
+      ...legacyEventSnapshot.docs,
     ].map((doc) => doc.ref)
   );
   const deletedFlat = await deleteFlatPerDiemRowsForOwner(db, collectionName, resolvedOwner);
@@ -643,7 +643,7 @@ export async function rewriteUserPerDiem(
     eventCount: written,
     lastImportSourceRows: (perdiemList || []).length,
     skippedDuplicates: (perdiemList || []).length - normalizedRows.length,
-    storagePath: `${collectionName}/${resolvedOwner}/event`,
+    storagePath: `${collectionName}/${resolvedOwner}/events`,
     flatMirror: true,
     updatedAt: now,
   }, { merge: true });
@@ -651,7 +651,7 @@ export async function rewriteUserPerDiem(
   return {
     owner: resolvedOwner,
     collectionName,
-    storagePath: `${collectionName}/${resolvedOwner}/event`,
+    storagePath: `${collectionName}/${resolvedOwner}/events`,
     flatStoragePath: collectionName,
     deleted,
     deletedFlat,

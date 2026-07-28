@@ -557,7 +557,7 @@ async function uploadPerDiemDocs(db, owner, rosterDocs) {
   if (!ownerUid) throw new Error("FIREBASE_UID is required for PerDiem storage");
 
   const ownerRef = db.collection(PERDIEM_COLLECTION).doc(ownerPdcDocId(ownerUid));
-  const eventsRef = ownerRef.collection("event");
+  const eventsRef = ownerRef.collection("events");
 
   await ownerRef.set({
     owner: ownerUid,
@@ -974,9 +974,9 @@ async function main() {
   console.log(`PDC_REMOVED_PREVIOUS=${pdcResult.deleted}`);
   console.log(`PDC_SKIPPED_DUPLICATES=${pdcResult.skippedDuplicates}`);
 
-  // 2) 같은 Roster를 Perdiem/{uid}/event에 owner 단위로 rewrite합니다.
+  // 2) 같은 Roster를 Perdiem/{uid}/events에 owner 단위로 rewrite합니다.
   const perDiemResult = await rewriteImportedPerDiem(db, finalRosterDocs, owner);
-  console.log(`PERDIEM_STORAGE_PATH=${PERDIEM_COLLECTION}/${owner.uid}/event`);
+  console.log(`PERDIEM_STORAGE_PATH=${PERDIEM_COLLECTION}/${owner.uid}/events`);
   console.log(`Rewrote Perdiem for this owner; source rows ${perDiemResult.rowCount}; saved ${perDiemResult.written} event(s); removed ${perDiemResult.deleted} previous event(s); skipped ${perDiemResult.skippedDuplicates} duplicate event(s).`);
 }
 
