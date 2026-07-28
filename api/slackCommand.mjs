@@ -264,6 +264,12 @@ function guestEmailUid(email) {
   return `guest_email_${cleanText(email, 240).toLowerCase()}`.replace(/[^A-Za-z0-9_-]/g, "_");
 }
 
+function emailRosterOwnerUid(email) {
+  const normalizedEmail = cleanText(email, 240).toLowerCase();
+  if (!normalizedEmail) return "";
+  return `email_owner_${hashText(normalizedEmail).slice(0, 28)}`;
+}
+
 function guestInviteUid(inviteCodeValue) {
   return `guest_${cleanText(inviteCodeValue, 80)}`.replace(/[^A-Za-z0-9_-]/g, "_");
 }
@@ -433,29 +439,33 @@ async function resolveImportOwnerForEmail(command, email) {
   }
 
   if (!owner) {
-    const fallbackUid = cleanText(
+    const defaultUid = cleanText(
       process.env.SLACK_DEFAULT_FIREBASE_UID || "",
       160
     );
+    const defaultUser = defaultUid ? await publicUser(defaultUid) : {};
+    const defaultEmail = cleanText(defaultUser?.email || "", 240).toLowerCase();
 
-    if (!fallbackUid) {
-      throw new Error(
-        `No Firebase Authentication user found for ${normalizedEmail}, and SLACK_DEFAULT_FIREBASE_UID is not configured`
-      );
+    // Use the configured Firebase UID only for the matching account.
+    // Other imported emails receive a stable per-email roster owner UID so
+    // multiple users do not collapse into one owner.
+    if (defaultUid && defaultEmail && defaultEmail === normalizedEmail) {
+      owner = {
+        uid: defaultUid,
+        email: normalizedEmail,
+        displayName:
+          cleanText(defaultUser?.displayName || "", 200) ||
+          requestedDisplayName,
+        source: "default_firebase_uid_matching_email",
+      };
+    } else {
+      owner = {
+        uid: emailRosterOwnerUid(normalizedEmail),
+        email: normalizedEmail,
+        displayName: requestedDisplayName,
+        source: "stable_email_roster_owner",
+      };
     }
-
-    const fallbackUser = await publicUser(fallbackUid);
-    owner = {
-      uid: fallbackUid,
-      email: cleanText(
-        fallbackUser?.email || normalizedEmail,
-        240
-      ).toLowerCase(),
-      displayName:
-        cleanText(fallbackUser?.displayName || "", 200) ||
-        requestedDisplayName,
-      source: "default_firebase_uid",
-    };
   }
 
   if (!owner.uid || owner.uid.startsWith("guest_")) {
@@ -495,6 +505,7 @@ async function resolveImportOwnerForEmail(command, email) {
     email: normalizedEmail,
     firebaseUid: owner.uid,
     source: owner.source,
+    pdcPath: `${PDC_COLLECTION}/${ownerPdcDocId(owner.uid)}/events`,
   });
 
   return {
