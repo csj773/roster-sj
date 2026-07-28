@@ -7,14 +7,17 @@ on:
         description: "Private webcal:// or https:// iCal roster URL"
         required: false
         type: string
+
       current_user_uid:
         description: "Firebase Authentication UID for roster owner"
         required: false
         type: string
+
       current_user_email:
-        description: "Firebase Authentication email for roster email"
+        description: "Firebase Authentication email for roster owner"
         required: false
         type: string
+
       pdc_user_name:
         description: "Display name stored in pdc_user_name"
         required: false
@@ -28,11 +31,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v6
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
         with:
           node-version: "24"
+          cache: npm
 
       - name: Install dependencies
         env:
@@ -40,17 +46,38 @@ jobs:
         run: npm install
 
       - name: Mask private iCal URL
-        if: ${{ github.event.inputs.ical_roster_url != '' }}
-        run: echo "::add-mask::${{ github.event.inputs.ical_roster_url }}"
+        shell: bash
+        env:
+          INPUT_ICAL_URL: ${{ github.event.inputs.ical_roster_url }}
+          SECRET_ICAL_URL: ${{ secrets.ICAL_ROSTER_URL }}
+          SECRET_WEB_URL: ${{ secrets.WEB_ROSTER_URL }}
+        run: |
+          if [ -n "$INPUT_ICAL_URL" ]; then
+            echo "::add-mask::$INPUT_ICAL_URL"
+          fi
+
+          if [ -n "$SECRET_ICAL_URL" ]; then
+            echo "::add-mask::$SECRET_ICAL_URL"
+          fi
+
+          if [ -n "$SECRET_WEB_URL" ]; then
+            echo "::add-mask::$SECRET_WEB_URL"
+          fi
 
       - name: Import iCal roster to pdc
         env:
           INPUT_ICAL_ROSTER_URL: ${{ github.event.inputs.ical_roster_url || secrets.ICAL_ROSTER_URL || secrets.WEB_ROSTER_URL }}
           ICAL_ROSTER_URL: ${{ github.event.inputs.ical_roster_url || secrets.ICAL_ROSTER_URL || secrets.WEB_ROSTER_URL }}
+          WEB_ROSTER_URL: ${{ secrets.WEB_ROSTER_URL }}
 
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
           FIREBASE_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
+
           USER_ID: ${{ github.event.inputs.current_user_email || secrets.USER_ID }}
+          USER_EMAIL: ${{ github.event.inputs.current_user_email || secrets.USER_ID }}
+
           PDC_USER_NAME: ${{ github.event.inputs.pdc_user_name || secrets.PDC_USER_NAME }}
+          USER_NAME: ${{ github.event.inputs.pdc_user_name || secrets.PDC_USER_NAME }}
 
         run: node scripts/importIcalRosterToPdc.mjs
