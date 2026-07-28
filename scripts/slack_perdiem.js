@@ -537,7 +537,6 @@ async function commitDeleteRefs(db, refs) {
 
 async function commitPerDiemWrites(eventsRef, docs) {
   const db = eventsRef.firestore;
-  const collectionRef = eventsRef.parent.parent;
   let written = 0;
 
   for (let index = 0; index < docs.length; index += 400) {
@@ -546,7 +545,6 @@ async function commitPerDiemWrites(eventsRef, docs) {
 
     for (const { id, data } of chunk) {
       batch.set(eventsRef.doc(id), data, { merge: false });
-      if (collectionRef) batch.set(collectionRef.doc(id), data, { merge: false });
     }
 
     await batch.commit();
@@ -644,7 +642,7 @@ export async function rewriteUserPerDiem(
     lastImportSourceRows: (perdiemList || []).length,
     skippedDuplicates: (perdiemList || []).length - normalizedRows.length,
     storagePath: `${collectionName}/${resolvedOwner}/events`,
-    flatMirror: true,
+    flatMirror: admin.firestore.FieldValue.delete(),
     updatedAt: now,
   }, { merge: true });
 
@@ -652,7 +650,6 @@ export async function rewriteUserPerDiem(
     owner: resolvedOwner,
     collectionName,
     storagePath: `${collectionName}/${resolvedOwner}/events`,
-    flatStoragePath: collectionName,
     deleted,
     deletedFlat,
     written,
