@@ -1622,7 +1622,10 @@ function canonicalCrewSignature(item) {
 }
 
 function rosterFlightIdentity(item) {
+  // Keep different roster owners on the same flight as separate layover entries.
+  // This still collapses duplicate records belonging to the same owner.
   return [
+    rosterOwnerIdentity(item),
     dateSortKey(item.date),
     cleanText(item.activity, 80).toUpperCase(),
     upper(item.from),
