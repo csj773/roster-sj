@@ -292,8 +292,9 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
         const prevMonthName = MONTH_NAMES[prevMonthNum - 1] || "Unknown";
         const prevYear = prevMonthNum === 12 ? String(Number(Year) - 1) : Year;
 
-        let prevSnapshot = await db.collection("Perdiem")
-          .where("owner", "==", owner)
+        const eventsRef = db.collection("Perdiem").doc(owner).collection("events");
+
+        let prevSnapshot = await eventsRef
           .where("Month", "==", prevMonthName)
           .where("Year", "==", prevYear)
           .where("Destination", "==", From)
@@ -302,8 +303,7 @@ export async function generatePerDiemList(rosterJsonPath, owner) {
           .get();
 
         if (prevSnapshot.empty) {
-          prevSnapshot = await db.collection("Perdiem")
-            .where("owner", "==", owner)
+          prevSnapshot = await eventsRef
             .where("Month", "==", prevMonthNum)
             .where("Year", "==", prevYear)
             .where("Destination", "==", From)
@@ -432,9 +432,8 @@ function safeDocIdPart(value) {
     .replace(/^-+|-+$/g, "") || "blank";
 }
 
-function buildPerDiemDocId(item, owner = "") {
+function buildPerDiemDocId(item) {
   return [
-    owner,
     item.Year,
     item.Month,
     item.Date,
@@ -442,6 +441,15 @@ function buildPerDiemDocId(item, owner = "") {
     item.From,
     item.Destination,
   ].map(safeDocIdPart).join("_");
+}
+
+function buildPerDiemDedupeKey(item) {
+  return [
+    String(item.Date || "").trim(),
+    String(item.Activity || "").trim().toUpperCase(),
+    normalizeAirportCode(item.From),
+    normalizeAirportCode(item.Destination || item.To),
+  ].join("|");
 }
 
 function buildPerDiemSheetRow(item, id, ownerOverride = "") {
@@ -527,40 +535,77 @@ export async function appendPerDiemGoogleSheet(perdiemList, sheetsApi, spreadshe
 }
 
 // ------------------- Firestore 업로드 -------------------
+// rewrite 없이 기존 events를 유지하고, 동일 운항 키만 갱신/중복 제거한다.
 export async function uploadPerDiemFirestore(perdiemList, ownerOverride = "") {
   const owner = resolvePerDiemOwner(ownerOverride);
   if (!Array.isArray(perdiemList) || !owner) return;
 
-  if (!admin.apps.length)
+  if (!admin.apps.length) {
     admin.initializeApp({ credential: admin.credential.applicationDefault() });
+  }
 
   const db = admin.firestore();
-  const collectionRef = db.collection("Perdiem");
+  const ownerRef = db.collection("Perdiem").doc(owner);
+  const eventsRef = ownerRef.collection("events");
 
+  await ownerRef.set({
+    owner,
+    uid: owner,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  // 입력 목록 자체의 중복을 먼저 제거한다.
+  const uniqueItems = new Map();
   for (const rawItem of perdiemList) {
     const item = normalizePerDiemItem(rawItem);
-    const docId = buildPerDiemDocId(item, owner);
-    const legacyDocId = `${item.Year}${item.Month}${item.Date.replace(/\./g, "")}_${item.Destination}`;
-    const duplicateSnapshot = await collectionRef
-      .where("owner", "==", owner)
+    const normalized = {
+      ...item,
+      To: item.To || item.Destination,
+      owner,
+      uid: owner,
+    };
+    uniqueItems.set(buildPerDiemDedupeKey(normalized), normalized);
+  }
+
+  let saved = 0;
+  let duplicatesDeleted = 0;
+
+  for (const item of uniqueItems.values()) {
+    const docId = buildPerDiemDocId(item);
+
+    // 동일 Date + Activity + From + Destination 문서를 조회한다.
+    const duplicateSnapshot = await eventsRef
       .where("Date", "==", item.Date)
       .where("Activity", "==", item.Activity)
       .where("From", "==", item.From)
       .where("Destination", "==", item.Destination)
       .get();
 
-    for (const duplicateDoc of duplicateSnapshot.docs) {
-      if (duplicateDoc.id !== docId) await duplicateDoc.ref.delete();
-    }
+    const batch = db.batch();
 
-    if (legacyDocId !== docId) {
-      const legacyDoc = await collectionRef.doc(legacyDocId).get().catch(() => null);
-      if (legacyDoc?.exists && legacyDoc.data()?.owner === owner) {
-        await legacyDoc.ref.delete();
+    // 정규 docId 이외의 동일 문서는 삭제한다.
+    for (const duplicateDoc of duplicateSnapshot.docs) {
+      if (duplicateDoc.id !== docId) {
+        batch.delete(duplicateDoc.ref);
+        duplicatesDeleted += 1;
       }
     }
-    await collectionRef.doc(docId).set({ ...item, owner, uid: owner });
+
+    // 정규 문서는 merge upsert한다. 다른 날짜/운항 문서는 건드리지 않는다.
+    batch.set(eventsRef.doc(docId), {
+      ...item,
+      owner,
+      uid: owner,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    await batch.commit();
+    saved += 1;
   }
 
-  console.log(`✅ Firestore 업로드 완료 (${perdiemList.length}건)`);
+  console.log(
+    `✅ Firestore PerDiem upsert 완료 ` +
+    `(입력 ${perdiemList.length}건, 고유 ${uniqueItems.size}건, 저장 ${saved}건, 중복 삭제 ${duplicatesDeleted}건)`
+  );
+  console.log(`PERDIEM_STORAGE_PATH=Perdiem/${owner}/events`);
 }
