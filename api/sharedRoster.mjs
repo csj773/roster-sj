@@ -182,24 +182,6 @@ async function sharedOwnersFor(uid) {
 }
 
 async function rosterDocsForOwner(ownerUid, collectionName) {
-  const docs = [];
-  const seenPaths = new Set();
-
-  function appendDocs(snapshot) {
-    for (const doc of snapshot.docs) {
-      if (seenPaths.has(doc.ref.path)) continue;
-      seenPaths.add(doc.ref.path);
-      docs.push(doc);
-    }
-  }
-
-  const flatByOwner = await db()
-    .collection(collectionName)
-    .where("owner", "==", ownerUid)
-    .get();
-
-  appendDocs(flatByOwner);
-
   if (collectionName === PDC_COLLECTION) {
     const nestedSnapshot = await db()
       .collection(PDC_COLLECTION)
@@ -207,10 +189,15 @@ async function rosterDocsForOwner(ownerUid, collectionName) {
       .collection("events")
       .get();
 
-    appendDocs(nestedSnapshot);
+    return nestedSnapshot.docs;
   }
 
-  return docs;
+  const flatByOwner = await db()
+    .collection(collectionName)
+    .where("owner", "==", ownerUid)
+    .get();
+
+  return flatByOwner.docs;
 }
 
 async function rosterForOwner(
@@ -268,19 +255,7 @@ function dedupeRosterItems(items) {
 
   for (const item of items) {
     const key = rosterItemKey(item);
-
-    if (!unique.has(key)) {
-      unique.set(key, item);
-      continue;
-    }
-
-    const current = unique.get(key);
-    const currentNested = current.sourcePath?.includes("/events/");
-    const incomingNested = item.sourcePath?.includes("/events/");
-
-    if (incomingNested && !currentNested) {
-      unique.set(key, item);
-    }
+    if (!unique.has(key)) unique.set(key, item);
   }
 
   return [...unique.values()];
