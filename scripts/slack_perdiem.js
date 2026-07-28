@@ -535,23 +535,28 @@ async function commitDeleteRefs(db, refs) {
   return deleted;
 }
 
-async function commitPerDiemWrites(db, collectionName, docs) {
+async function commitPerDiemWrites(eventsRef, docs) {
+  const db = eventsRef.firestore;
   let written = 0;
+
   for (let index = 0; index < docs.length; index += 400) {
     const batch = db.batch();
     const chunk = docs.slice(index, index + 400);
+
     for (const { id, data } of chunk) {
-      batch.set(db.collection(collectionName).doc(id), data, { merge: false });
+      batch.set(eventsRef.doc(id), data, { merge: false });
     }
+
     await batch.commit();
     written += chunk.length;
   }
+
   return written;
 }
 
 /**
- * 해당 사용자(owner)의 Perdiem 문서만 삭제한 뒤 새 목록으로 재작성한다.
- * 다른 사용자의 문서는 건드리지 않는다.
+ * Perdiem/{owner}/events 문서만 삭제한 뒤 새 목록으로 재작성한다.
+ * 다른 owner 문서와 events는 건드리지 않는다.
  */
 export async function rewriteUserPerDiem(
   db,
@@ -573,10 +578,13 @@ export async function rewriteUserPerDiem(
   }
 
   const normalizedRows = normalizeSlackPerDiemRows(perdiemList || []);
-  const existingSnapshot = await db
-    .collection(collectionName)
-    .where("owner", "==", resolvedOwner)
-    .get();
+
+  // 최종 저장 구조:
+  // Perdiem/{owner}/events/{eventId}
+  const ownerRef = db.collection(collectionName).doc(resolvedOwner);
+  const eventsRef = ownerRef.collection("events");
+
+  const existingSnapshot = await eventsRef.get();
 
   const deleted = await commitDeleteRefs(
     db,
@@ -584,25 +592,42 @@ export async function rewriteUserPerDiem(
   );
 
   const now = admin.firestore.FieldValue.serverTimestamp();
+  const resolvedUid = cleanOwnerValue(uid || resolvedOwner);
+  const resolvedUserId = cleanOwnerValue(userId || uid || resolvedOwner);
+  const resolvedEmail = cleanOwnerValue(email, 240);
+  const resolvedDisplayName = cleanOwnerValue(displayName, 200);
+
+  await ownerRef.set({
+    owner: resolvedOwner,
+    uid: resolvedUid,
+    userId: resolvedUserId,
+    email: resolvedEmail,
+    display_name: resolvedDisplayName,
+    pdc_user_name: resolvedDisplayName,
+    updatedAt: now,
+  }, { merge: true });
+
   const writes = normalizedRows.map((item) => ({
     id: perDiemDocId(resolvedOwner, item),
     data: {
       ...item,
       owner: resolvedOwner,
-      uid: cleanOwnerValue(uid || resolvedOwner),
-      userId: cleanOwnerValue(userId || uid || resolvedOwner),
-      email: cleanOwnerValue(email, 240),
-      display_name: cleanOwnerValue(displayName, 200),
-      pdc_user_name: cleanOwnerValue(displayName, 200),
+      uid: resolvedUid,
+      userId: resolvedUserId,
+      email: resolvedEmail,
+      display_name: resolvedDisplayName,
+      pdc_user_name: resolvedDisplayName,
       updatedAt: now,
       importedAt: now,
     },
   }));
 
-  const written = await commitPerDiemWrites(db, collectionName, writes);
+  const written = await commitPerDiemWrites(eventsRef, writes);
+
   return {
     owner: resolvedOwner,
     collectionName,
+    storagePath: `${collectionName}/${resolvedOwner}/events`,
     deleted,
     written,
     skippedDuplicates: (perdiemList || []).length - normalizedRows.length,
@@ -620,4 +645,3 @@ export async function generateAndRewriteSlackPerDiem(
   const perdiemList = await generateSlackPerDiemList(rosterJsonPath);
   return rewriteUserPerDiem(db, perdiemList, ownerOptions);
 }
-
