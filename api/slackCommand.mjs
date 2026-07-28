@@ -231,24 +231,190 @@ async function linkSlackUserToDefaultUid(command) {
 
   const owner = await publicUser(firebaseUid);
   const linkId = slackLinkId(command.teamId, command.userId);
+  await db().collection(SLACK_LINK_COLLECTION).doc(linkId).set({
+    firebaseUid,
+    uid: firebaseUid,
+    owner: firebaseUid,
+    slackTeamId: command.teamId,
+    slackTeamDomain: command.teamDomain || "",
+    slackUserId: command.userId,
+    slackUserName: command.userName || "",
+    firebaseDisplayName: owner.displayName || "",
+    firebaseEmail: owner.email || "",
+    status: "active",
+    source: "slack_link_me",
+    updatedAt: nowTimestamp(),
+    createdAt: nowTimestamp(),
+  }, { merge: true });
+
+  await saveSlackTeamRosterOwner(command, {
+    uid: firebaseUid,
+    displayName: owner.displayName || "",
+    email: owner.email || "",
+  }, "slack_link_me");
+
+  return {
+    linkId,
+    firebaseUid,
+    owner,
+  };
+}
+
+function guestEmailUid(email) {
+  return `guest_email_${cleanText(email, 240).toLowerCase()}`.replace(/[^A-Za-z0-9_-]/g, "_");
+}
+
+function guestInviteUid(inviteCodeValue) {
+  return `guest_${cleanText(inviteCodeValue, 80)}`.replace(/[^A-Za-z0-9_-]/g, "_");
+}
+
+function displayNameForEmail(email) {
+  const normalizedEmail = cleanText(email, 240).toLowerCase();
+  const displayNames = {
+    "cutecsj773@gmail.com": "최상준",
+  };
+  return displayNames[normalizedEmail] || "";
+}
+
+async function acceptedInviteForEmail(email) {
+  const normalizedEmail = cleanText(email, 240).toLowerCase();
+  if (!normalizedEmail) return null;
+
+  const snap = await db()
+    .collection(INVITE_COLLECTION)
+    .where("recipientEmail", "==", normalizedEmail)
+    .limit(10)
+    .get();
+
+  const accepted = snap.docs
+    .map((doc) => ({ code: doc.id, ...doc.data() }))
+    .filter((invite) => invite.confirmed === true || invite.confirmationStatus === "accepted")
+    .sort((a, b) => {
+      const left = a.acceptedAt?.toMillis?.() || a.confirmedAt?.toMillis?.() || 0;
+      const right = b.acceptedAt?.toMillis?.() || b.confirmedAt?.toMillis?.() || 0;
+      return right - left;
+    });
+
+  return accepted[0] || null;
+}
+
+async function firebaseOwnerByEmail(email, requestedDisplayName = "") {
+  const normalizedEmail = cleanText(email, 240).toLowerCase();
+  if (!normalizedEmail) throw new Error("Email is required");
+
+  try {
+    const userRecord = await admin.auth().getUserByEmail(normalizedEmail);
+    return {
+      uid: userRecord.uid,
+      email: cleanText(userRecord.email || normalizedEmail, 240).toLowerCase(),
+      displayName:
+        cleanText(userRecord.displayName || "", 200) ||
+        cleanText(requestedDisplayName, 200) ||
+        displayNameForEmail(normalizedEmail) ||
+        normalizedEmail,
+      source: "firebase_auth_email",
+    };
+  } catch (error) {
+    if (error.code !== "auth/user-not-found") {
+      throw new Error(
+        `Firebase Auth email lookup failed for ${normalizedEmail}: ${error.code || error.message}`
+      );
+    }
+  }
+
+  return null;
+}
+
+async function resolveImportOwnerForEmail(command, email) {
+  const normalizedEmail = cleanText(email, 240).toLowerCase();
+  if (!normalizedEmail) throw new Error("Roster owner email is required");
+
+  const requestedDisplayName =
+    displayNameForEmail(normalizedEmail) ||
+    normalizedEmail ||
+    command.userName ||
+    "Roster user";
+
+  let owner = await firebaseOwnerByEmail(normalizedEmail, requestedDisplayName);
+
+  if (!owner) {
+    const invite = await acceptedInviteForEmail(normalizedEmail);
+    const acceptedUid = cleanText(invite?.acceptedByUid || "", 160);
+
+    if (acceptedUid && !acceptedUid.startsWith("guest_")) {
+      const acceptedUser = await publicUser(acceptedUid);
+      owner = {
+        uid: acceptedUid,
+        email: cleanText(
+          acceptedUser?.email || normalizedEmail,
+          240
+        ).toLowerCase(),
+        displayName:
+          cleanText(acceptedUser?.displayName || "", 200) ||
+          requestedDisplayName,
+        source: "accepted_invite",
+        inviteCode: invite?.code || "",
+      };
+    }
+  }
+
+  if (!owner) {
+    const fallbackUid = cleanText(
+      process.env.SLACK_DEFAULT_FIREBASE_UID || "",
+      160
+    );
+
+    if (!fallbackUid) {
+      throw new Error(
+        `No Firebase Authentication user found for ${normalizedEmail}, and SLACK_DEFAULT_FIREBASE_UID is not configured`
+      );
+    }
+
+    const fallbackUser = await publicUser(fallbackUid);
+    owner = {
+      uid: fallbackUid,
+      email: cleanText(
+        fallbackUser?.email || normalizedEmail,
+        240
+      ).toLowerCase(),
+      displayName:
+        cleanText(fallbackUser?.displayName || "", 200) ||
+        requestedDisplayName,
+      source: "default_firebase_uid",
+    };
+  }
+
+  if (!owner.uid || owner.uid.startsWith("guest_")) {
+    throw new Error(
+      `Invalid Firebase owner UID resolved: ${owner.uid || "(empty)"}`
+    );
+  }
+
+  const linkId = slackLinkId(command.teamId, command.userId);
+
+  await db().collection(SLACK_LINK_COLLECTION).doc(linkId).set({
+    firebaseUid: owner.uid,
+    uid: owner.uid,
+    owner: owner.uid,
+    slackTeamId: command.teamId,
+    slackTeamDomain: command.teamDomain || "",
+    slackUserId: command.userId,
+    slackUserName: command.userName || "",
+    recipientEmail: normalizedEmail,
+    firebaseEmail: owner.email || normalizedEmail,
+    firebaseDisplayName: owner.displayName || requestedDisplayName,
+    status: "active",
+    source: owner.source || "slack_import_email",
+    inviteCode: owner.inviteCode || "",
+    updatedAt: nowTimestamp(),
+    createdAt: nowTimestamp(),
+  }, { merge: true });
+
   await saveSlackTeamRosterOwner(command, {
     uid: owner.uid,
     displayName: owner.displayName || requestedDisplayName,
     email: owner.email || normalizedEmail,
   }, owner.source || "slack_import_email");
-
-  await db().collection(SLACK_LINK_COLLECTION).doc(linkId).set({
-    slackTeamId: command.teamId,
-    slackTeamDomain: command.teamDomain || "",
-    slackUserId: command.userId,
-    slackUserName: command.userName || "",
-    lastImportedOwnerUid: owner.uid,
-    lastImportedOwnerEmail: owner.email || normalizedEmail,
-    lastImportedOwnerDisplayName: owner.displayName || requestedDisplayName,
-    status: "active",
-    updatedAt: nowTimestamp(),
-    createdAt: nowTimestamp(),
-  }, { merge: true });
 
   console.log("SLACK_IMPORT_OWNER_RESOLVED", {
     linkId,
@@ -1113,7 +1279,6 @@ async function emailImportOwnersForSlackTeam(command) {
     });
   }
 
-  // Backward compatibility for previously created slack_user_links.
   const linkSnapshot = await db()
     .collection(SLACK_LINK_COLLECTION)
     .where("slackTeamId", "==", command.teamId)
@@ -1127,6 +1292,7 @@ async function emailImportOwnersForSlackTeam(command) {
       link.lastImportedOwnerUid ||
       link.firebaseUid ||
       link.uid ||
+      link.owner ||
       "",
       160
     );
@@ -1187,18 +1353,7 @@ async function sharedOwnersFor(uid, command = {}) {
     if (!owners.has(owner.uid)) owners.set(owner.uid, owner);
   }
 
-  const result = [...owners.values()];
-  console.log("SHARED_OWNERS_FOR", {
-    requesterUid: uid,
-    teamId: command.teamId || "",
-    ownerCount: result.length,
-    owners: result.map((owner) => ({
-      uid: owner.uid,
-      relation: owner.relation,
-      displayName: owner.displayName || "",
-    })),
-  });
-  return result;
+  return [...owners.values()];
 }
 
 function rosterItem(doc, owner) {
