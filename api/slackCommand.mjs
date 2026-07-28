@@ -39,29 +39,10 @@ const FULL_MONTH_NAMES = [
   "december",
 ];
 
-function normalizeSlackResponse(result) {
-  if (typeof result === "string") {
-    return {
-      response_type: "ephemeral",
-      text: result || "조회 결과가 없습니다.",
-    };
-  }
-
-  const body = result && typeof result === "object" ? result : {};
-  return {
-    response_type: body.response_type || "ephemeral",
-    replace_original: false,
-    text: String(body.text || "조회 결과가 없습니다."),
-    ...(Array.isArray(body.blocks) ? { blocks: body.blocks } : {}),
-  };
-}
-
 function slackJson(res, status, body) {
-  const payload = normalizeSlackResponse(body);
   res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.setHeader("Cache-Control", "no-store");
-  res.end(JSON.stringify(payload));
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify(body));
 }
 
 function queueSlackWork(work) {
@@ -84,26 +65,8 @@ async function postSlackResponse(responseUrl, body) {
 
 async function postCommandResult(command) {
   try {
-    const result = await handleCommand(command);
-
-    console.log("SLACK_COMMAND_RESULT_READY", {
-      command: command.command,
-      responseType: result.response_type,
-      textLength: String(result.text || "").length,
-    });
-
-    await postSlackResponse(command.responseUrl, result);
-
-    console.log("SLACK_COMMAND_RESULT_POSTED", {
-      command: command.command,
-    });
+    await postSlackResponse(command.responseUrl, await handleCommand(command));
   } catch (error) {
-    console.error("SLACK_COMMAND_RESULT_FAILED", {
-      command: command.command,
-      message: error.message,
-      stack: error.stack,
-    });
-
     await postSlackResponse(command.responseUrl, {
       response_type: "ephemeral",
       text: `Slack command failed for ${command.command || "command"}: ${error.message}`,
@@ -844,7 +807,7 @@ function extractRosterCalendarUrl(text) {
 }
 
 function fetchableCalendarUrl(value) {
-  const text = cleanText(value, 500).replace(/[*>.,;)\]]+$/g, "");
+  const text = cleanText(value, 500).replace(/^\*+|[*>.,;)\]]+$/g, "");
   if (/^webcal:\/\//i.test(text)) return `https://${text.slice("webcal://".length)}`;
   if (/^https:\/\//i.test(text)) return text;
   return "";
@@ -1213,21 +1176,21 @@ function rosterItem(doc, owner) {
 }
 
 async function ownerRosterDocs(ownerUid) {
-  const ownerDocId = ownerPdcDocId(ownerUid);
+  const normalizedUid = cleanText(ownerUid, 500);
+  if (!normalizedUid) return [];
+
+  const ownerDocId = ownerPdcDocId(normalizedUid);
   const [rosterSnapshot, pdcEventsSnapshot] = await Promise.all([
-    db().collection(ROSTER_COLLECTION).where("owner", "==", ownerUid).get(),
-    db()
-      .collection(PDC_COLLECTION)
-      .doc(ownerDocId)
-      .collection("events")
-      .get(),
+    db().collection(ROSTER_COLLECTION).where("owner", "==", normalizedUid).get(),
+    db().collection(PDC_COLLECTION).doc(ownerDocId).collection("events").get(),
   ]);
 
   console.log("OWNER_ROSTER_DOCS", {
-    ownerUid,
+    ownerUid: normalizedUid,
     ownerDocId,
     rosterCount: rosterSnapshot.size,
     pdcEventCount: pdcEventsSnapshot.size,
+    pdcPath: `${PDC_COLLECTION}/${ownerDocId}/events`,
   });
 
   return [...rosterSnapshot.docs, ...pdcEventsSnapshot.docs];
@@ -1579,40 +1542,50 @@ function myRosterResponseText({ station, startDate, days, items }) {
 }
 
 async function handleLayover(command) {
-  const firebaseUid = await linkedFirebaseUid(command);
+  const parsed = parseLayoverText(command.text);
+  if (!parsed.station) {
+    return {
+      response_type: "ephemeral",
+      text: "Usage: `/layover HNL` or `/layover HNL 2026-07-22 14`",
+    };
+  }
 
+  const firebaseUid = await linkedFirebaseUid(command, { allowDefault: true });
   console.log("LAYOVER_OWNER_RESOLVED", {
-    slackTeamId: command.teamId,
-    slackUserId: command.userId,
+    teamId: command.teamId,
+    userId: command.userId,
     firebaseUid: firebaseUid || "",
-    commandText: command.text || "",
   });
 
   if (!firebaseUid) {
     return { response_type: "ephemeral", text: notLinkedText(command) };
   }
 
-  const parsed = parseLayoverText(command.text);
   const items = await layoverItemsFor(firebaseUid, parsed, command);
-  const responseText = layoverResponseText({ ...parsed, items });
-
   console.log("LAYOVER_RESULT", {
     firebaseUid,
     station: parsed.station,
     startDate: parsed.startDate,
     days: parsed.days,
     itemCount: items.length,
-    textLength: responseText.length,
   });
 
   return {
     response_type: "ephemeral",
-    text: responseText,
+    text: layoverResponseText({ ...parsed, items }),
   };
 }
 
 async function handleMyRoster(command) {
-  const firebaseUid = await linkedFirebaseUid(command, { allowDefault: false });
+  // Use the explicit Slack link first and fall back to
+  // SLACK_DEFAULT_FIREBASE_UID when configured.
+  const firebaseUid = await linkedFirebaseUid(command, { allowDefault: true });
+  console.log("MY_ROSTER_OWNER_RESOLVED", {
+    teamId: command.teamId,
+    userId: command.userId,
+    firebaseUid: firebaseUid || "",
+  });
+
   if (!firebaseUid) {
     return {
       response_type: "ephemeral",
@@ -1622,6 +1595,14 @@ async function handleMyRoster(command) {
 
   const parsed = parseMyRosterText(command.text);
   const items = await myRosterItemsFor(firebaseUid, parsed);
+  console.log("MY_ROSTER_RESULT", {
+    firebaseUid,
+    station: parsed.station || "",
+    startDate: parsed.startDate,
+    days: parsed.days,
+    itemCount: items.length,
+  });
+
   return {
     response_type: "ephemeral",
     text: myRosterResponseText({ ...parsed, items }),
@@ -1703,45 +1684,10 @@ export default async function handler(req, res) {
   }
 
   let command = {};
-
   try {
     const rawBody = await readRawBody(req);
     verifySlackSignature(req, rawBody);
     command = parseSlashCommand(rawBody);
-
-    const commandName = cleanText(command.command, 80).trim().toLowerCase();
-    const synchronous =
-      commandName === "/layover" ||
-      commandName === "/my-roster" ||
-      commandName === "/roster-help" ||
-      cleanText(command.text, 500).trim().toLowerCase() === "help";
-
-    console.log("SLACK_COMMAND_RECEIVED", {
-      commandName,
-      text: command.text,
-      teamId: command.teamId,
-      channelId: command.channelId,
-      userId: command.userId,
-      hasResponseUrl: Boolean(command.responseUrl),
-      synchronous,
-    });
-
-    if (synchronous) {
-      const startedAt = Date.now();
-      const result = normalizeSlackResponse(await handleCommand(command));
-
-      console.log("SLACK_SYNC_RESULT", {
-        commandName,
-        responseType: result.response_type,
-        textLength: result.text.length,
-        hasBlocks: Array.isArray(result.blocks),
-        durationMs: Date.now() - startedAt,
-      });
-
-      slackJson(res, 200, result);
-      return;
-    }
-
     if (command.responseUrl) {
       queueSlackWork(postCommandResult(command));
       slackJson(res, 200, {
@@ -1755,15 +1701,6 @@ export default async function handler(req, res) {
   } catch (error) {
     const status = error.statusCode || 500;
     const isSlackAuthError = status === 401;
-
-    console.error("SLACK_COMMAND_FAILED", {
-      command: command.command || "",
-      text: command.text || "",
-      status,
-      message: error.message,
-      stack: error.stack,
-    });
-
     slackJson(res, isSlackAuthError ? status : 200, {
       response_type: "ephemeral",
       text: `Slack command failed${command.command ? ` for ${command.command}` : ""}: ${error.message}`,
