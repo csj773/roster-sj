@@ -585,10 +585,8 @@ async function uploadPdcDocs(db, owner, docs) {
   for (const docData of uniqueDocs) {
     const eventId = pdcEventDocId(docData);
     const eventRef = ownerRef.collection("events").doc(eventId);
-    // 평면 collection도 deterministic ID를 사용하여 사용자별 rewrite 결과가 명확해집니다.
-    const flatRef = db.collection(PDC_COLLECTION).doc(`event_${eventId}`);
+    // owner별 하위 컬렉션에만 저장합니다.
     operations.push((batch) => batch.set(eventRef, docData, { merge: false }));
-    operations.push((batch) => batch.set(flatRef, docData, { merge: false }));
   }
 
   await commitInChunks(db, operations);
