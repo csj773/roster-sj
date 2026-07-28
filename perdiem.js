@@ -534,8 +534,43 @@ export async function appendPerDiemGoogleSheet(perdiemList, sheetsApi, spreadshe
   console.log(`✅ Google Sheets ${sheetName} PerDiem sync 완료 (${syncedRows.length}건, 중복/삭제 정리 포함)`);
 }
 
+async function commitDeleteRefs(db, refs) {
+  let deleted = 0;
+  for (let index = 0; index < refs.length; index += 400) {
+    const batch = db.batch();
+    const chunk = refs.slice(index, index + 400);
+    for (const ref of chunk) batch.delete(ref);
+    await batch.commit();
+    deleted += chunk.length;
+  }
+  return deleted;
+}
+
+async function deleteFlatPerDiemRowsForOwner(db, owner) {
+  const snapshot = await db.collection("Perdiem").where("owner", "==", owner).get();
+  const refs = snapshot.docs
+    .filter((doc) => doc.data()?.Date && doc.data()?.Activity)
+    .map((doc) => doc.ref);
+  return commitDeleteRefs(db, refs);
+}
+
+async function commitPerDiemRewrite(eventsRef, docs) {
+  const db = eventsRef.firestore;
+  let written = 0;
+  for (let index = 0; index < docs.length; index += 400) {
+    const batch = db.batch();
+    const chunk = docs.slice(index, index + 400);
+    for (const { id, data } of chunk) {
+      batch.set(eventsRef.doc(id), data, { merge: false });
+    }
+    await batch.commit();
+    written += chunk.length;
+  }
+  return written;
+}
+
 // ------------------- Firestore 업로드 -------------------
-// rewrite 없이 기존 events를 유지하고, 동일 운항 키만 갱신/중복 제거한다.
+// pdc 저장처럼 owner 단위로 기존 events를 지운 뒤 새 목록으로 재작성한다.
 export async function uploadPerDiemFirestore(perdiemList, ownerOverride = "") {
   const owner = resolvePerDiemOwner(ownerOverride);
   if (!Array.isArray(perdiemList) || !owner) return;
@@ -547,11 +582,23 @@ export async function uploadPerDiemFirestore(perdiemList, ownerOverride = "") {
   const db = admin.firestore();
   const ownerRef = db.collection("Perdiem").doc(owner);
   const eventsRef = ownerRef.collection("events");
+  const legacyEventRef = ownerRef.collection("event");
+  const now = admin.firestore.FieldValue.serverTimestamp();
+
+  const existingSnapshot = await eventsRef.get();
+  const legacySnapshot = await legacyEventRef.get();
+  const deleted = await commitDeleteRefs(db, [
+    ...existingSnapshot.docs,
+    ...legacySnapshot.docs,
+  ].map((doc) => doc.ref));
+  const deletedFlat = await deleteFlatPerDiemRowsForOwner(db, owner);
 
   await ownerRef.set({
     owner,
     uid: owner,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    source: "roster_perdiem",
+    rewrittenAt: now,
+    updatedAt: now,
   }, { merge: true });
 
   // 입력 목록 자체의 중복을 먼저 제거한다.
@@ -567,45 +614,31 @@ export async function uploadPerDiemFirestore(perdiemList, ownerOverride = "") {
     uniqueItems.set(buildPerDiemDedupeKey(normalized), normalized);
   }
 
-  let saved = 0;
-  let duplicatesDeleted = 0;
-
-  for (const item of uniqueItems.values()) {
-    const docId = buildPerDiemDocId(item);
-
-    // 동일 Date + Activity + From + Destination 문서를 조회한다.
-    const duplicateSnapshot = await eventsRef
-      .where("Date", "==", item.Date)
-      .where("Activity", "==", item.Activity)
-      .where("From", "==", item.From)
-      .where("Destination", "==", item.Destination)
-      .get();
-
-    const batch = db.batch();
-
-    // 정규 docId 이외의 동일 문서는 삭제한다.
-    for (const duplicateDoc of duplicateSnapshot.docs) {
-      if (duplicateDoc.id !== docId) {
-        batch.delete(duplicateDoc.ref);
-        duplicatesDeleted += 1;
-      }
-    }
-
-    // 정규 문서는 merge upsert한다. 다른 날짜/운항 문서는 건드리지 않는다.
-    batch.set(eventsRef.doc(docId), {
+  const writes = [...uniqueItems.values()].map((item) => ({
+    id: buildPerDiemDocId(item),
+    data: {
       ...item,
       owner,
       uid: owner,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
+      updatedAt: now,
+      importedAt: now,
+    },
+  }));
 
-    await batch.commit();
-    saved += 1;
-  }
+  const saved = await commitPerDiemRewrite(eventsRef, writes);
+
+  await ownerRef.set({
+    eventCount: saved,
+    lastImportSourceRows: perdiemList.length,
+    skippedDuplicates: perdiemList.length - uniqueItems.size,
+    storagePath: `Perdiem/${owner}/events`,
+    flatMirror: admin.firestore.FieldValue.delete(),
+    updatedAt: now,
+  }, { merge: true });
 
   console.log(
-    `✅ Firestore PerDiem upsert 완료 ` +
-    `(입력 ${perdiemList.length}건, 고유 ${uniqueItems.size}건, 저장 ${saved}건, 중복 삭제 ${duplicatesDeleted}건)`
+    `✅ Firestore PerDiem rewrite 완료 ` +
+    `(입력 ${perdiemList.length}건, 고유 ${uniqueItems.size}건, 저장 ${saved}건, 기존 events 삭제 ${deleted}건, flat 삭제 ${deletedFlat}건)`
   );
   console.log(`PERDIEM_STORAGE_PATH=Perdiem/${owner}/events`);
 }
