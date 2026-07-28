@@ -202,7 +202,6 @@ function dedupeRows(rows) {
 
   for (const row of rows) {
     const key = [
-      cleanText(row.owner),
       cleanText(row.Date),
       cleanText(row.Activity),
       cleanText(row.From).toUpperCase(),
@@ -330,15 +329,27 @@ async function main() {
   console.log(`TARGET_MONTH=${targetMonth}`);
   console.log(`TARGET_YEAR=${year}`);
 
-  const snapshot = await db
+  // 최종 Firestore 구조:
+  // Perdiem/{ownerUid}/events/{eventId}
+  const ownerRef = db
     .collection(PERDIEM_COLLECTION)
-    .where("owner", "==", owner.uid)
-    .get();
+    .doc(owner.uid);
 
-  const ownerRows = snapshot.docs.map((doc) => ({
-    id: doc.id,
-    ...doc.data(),
-  }));
+  const eventsRef = ownerRef.collection("events");
+  const snapshot = await eventsRef.get();
+
+  const ownerRows = snapshot.docs.map((doc) => {
+    const data = doc.data();
+    return {
+      id: doc.id,
+      ...data,
+      owner: data.owner || owner.uid,
+      uid: data.uid || owner.uid,
+      email: data.email || owner.email,
+    };
+  });
+
+  console.log(`PERDIEM_STORAGE_PATH=${PERDIEM_COLLECTION}/${owner.uid}/events`);
 
   const monthRows = ownerRows.filter((row) =>
     Number(row.Year) === year &&
@@ -387,6 +398,7 @@ async function main() {
     JSON.stringify({
       user: owner.email || owner.uid,
       ownerUid: owner.uid,
+      storagePath: `${PERDIEM_COLLECTION}/${owner.uid}/events`,
       ownerResolution: owner.resolvedBy,
       firebaseUserCreated: owner.created,
       rowsBeforeDedupe: monthRows.length,
@@ -403,6 +415,7 @@ async function main() {
   const summary = [
     `User: ${owner.email || owner.uid}`,
     `Owner UID: ${owner.uid}`,
+    `Storage: ${PERDIEM_COLLECTION}/${owner.uid}/events`,
     `Firebase user created: ${owner.created ? "Yes" : "No"}`,
     `Rows before dedupe: ${monthRows.length}`,
     `Rows: ${rows.length}`,
