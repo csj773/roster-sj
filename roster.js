@@ -100,21 +100,32 @@ function isRenderRuntime() {
 }
 
 async function buildBrowserLaunchOptions() {
-  const args = ["--no-sandbox", "--disable-setuid-sandbox"];
+  const args = [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+  ];
+  const commonOptions = {
+    args,
+    timeout: Number(process.env.PUPPETEER_LAUNCH_TIMEOUT_MS || 120000),
+    protocolTimeout: Number(process.env.PUPPETEER_PROTOCOL_TIMEOUT_MS || 120000),
+  };
   if (process.env.CHROME_PATH) {
-    return { headless: "new", executablePath: process.env.CHROME_PATH, args };
+    return { ...commonOptions, headless: "new", executablePath: process.env.CHROME_PATH };
   }
 
   if (isRenderRuntime()) {
     const { default: chromium } = await import("@sparticuz/chromium");
     return {
+      ...commonOptions,
       headless: true,
       executablePath: await chromium.executablePath(),
       args: [...chromium.args, ...args],
     };
   }
 
-  return { headless: "new", args };
+  return { ...commonOptions, headless: "new" };
 }
 
 async function clickRosterNavigation(page) {

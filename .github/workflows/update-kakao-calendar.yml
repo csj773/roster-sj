@@ -45,7 +45,6 @@ jobs:
       - name: Generate roster JSON only
         env:
           ROSTER_JSON_ONLY: "1"
-          CHROME_PATH: "/usr/bin/chromium-browser"
           INPUT_PDC_USERNAME: ${{ github.event.inputs.username || secrets.PDC_USERNAME }}
           INPUT_PDC_PASSWORD: ${{ github.event.inputs.password || secrets.PDC_PASSWORD }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}

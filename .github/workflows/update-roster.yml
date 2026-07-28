@@ -54,7 +54,6 @@ jobs:
       # 4. roster.js 실행 (로스터 JSON 생성)
       - name: Run roster.js
         env:
-          CHROME_PATH: "/usr/bin/chromium-browser"
           INPUT_PDC_USERNAME: ${{ github.event.inputs.username || secrets.PDC_USERNAME }}
           INPUT_PDC_PASSWORD: ${{ github.event.inputs.password || secrets.PDC_PASSWORD }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
