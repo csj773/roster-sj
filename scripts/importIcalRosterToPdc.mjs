@@ -2,6 +2,7 @@ import crypto from "crypto";
 import admin from "firebase-admin";
 
 const PDC_COLLECTION = "pdc";
+const PERDIEM_COLLECTION = "Perdiem";
 const SLACK_ICAL_SOURCE = "slack_ical";
 
 function requiredEnv(name) {
@@ -436,6 +437,170 @@ function applyPerDiemMarkers(docs) {
   return sorted;
 }
 
+
+const PERDIEM_RATES = {
+  LAX: 3.42,
+  SFO: 3.42,
+  EWR: 3.44,
+  HNL: 3.01,
+  FRA: 3.18,
+  BCN: 3.11,
+  BKK: 2.14,
+  DAD: 2.01,
+  OSL: 3.24,
+  DAC: 33,
+  NRT: 33,
+  HKG: 33,
+};
+
+const QUICK_TURN_DESTINATIONS = new Set(["DAC", "NRT", "HKG"]);
+
+function perDiemEventDocId(docData) {
+  return hashText([
+    docData.owner,
+    docData.Date,
+    docData.Activity,
+    docData.From,
+    docData.Destination,
+  ].join("|"));
+}
+
+function hoursBetweenIso(startIso, endIso) {
+  const start = Date.parse(startIso || "");
+  const end = Date.parse(endIso || "");
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return 0;
+  return (end - start) / 3600000;
+}
+
+function formatHoursAsHHmm(hours) {
+  const totalMinutes = Math.max(0, Math.round(Number(hours || 0) * 60));
+  const hh = Math.floor(totalMinutes / 60);
+  const mm = totalMinutes % 60;
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
+function buildPerDiemDoc(rosterDoc, owner) {
+  const from = cleanText(rosterDoc.From, 10).toUpperCase();
+  const to = cleanText(rosterDoc.To, 10).toUpperCase();
+
+  if (!from || !to || from === to) return null;
+
+  const isOutbound = from === "ICN" && to !== "ICN";
+  const isInbound = to === "ICN" && from !== "ICN";
+  const quickTurn = isInbound && QUICK_TURN_DESTINATIONS.has(from);
+
+  let rateAirport = "";
+  let rate = 0;
+  let stayHoursNumber = 0;
+  let total = 0;
+  let transportFee = 0;
+
+  if (isOutbound) {
+    rateAirport = to;
+    rate = Number(PERDIEM_RATES[to] || 0);
+    transportFee = 7000;
+  } else if (isInbound) {
+    rateAirport = from;
+    rate = Number(PERDIEM_RATES[from] || 0);
+
+    if (quickTurn) {
+      rate = 33;
+      total = 33;
+      transportFee = 14000;
+    } else {
+      stayHoursNumber = hoursBetweenIso(rosterDoc.RI, rosterDoc.RO);
+      total = Math.round(rate * stayHoursNumber * 100) / 100;
+    }
+  } else {
+    rateAirport = to;
+    rate = Number(PERDIEM_RATES[to] || 0);
+    stayHoursNumber = hoursBetweenIso(rosterDoc.RI, rosterDoc.RO);
+    total = Math.round(rate * stayHoursNumber * 100) / 100;
+  }
+
+  return {
+    owner: owner.uid,
+    uid: owner.uid,
+    Date: rosterDoc.Date || "",
+    Activity: rosterDoc.Activity || rosterDoc.F || "",
+    From: from,
+    Destination: to,
+    To: to,
+    RI: rosterDoc.RI || "",
+    RO: rosterDoc.RO || "",
+    StayHours: formatHoursAsHHmm(stayHoursNumber),
+    StayHoursNumber: stayHoursNumber,
+    RateAirport: rateAirport,
+    Rate: rate,
+    Total: total,
+    TransportFee: transportFee,
+    Month: rosterDoc.Month || "",
+    Year: rosterDoc.Year || "",
+    QuickTurn: Boolean(quickTurn || rosterDoc.QuickTurn),
+    email: owner.email || "",
+    pdc_user_name: owner.displayName || "",
+    display_name: owner.displayName || "",
+    source: "pdc_roster",
+    sourcePdcEventId: pdcEventDocId(rosterDoc),
+    importedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+}
+
+async function uploadPerDiemDocs(db, owner, rosterDocs) {
+  const ownerUid = cleanText(owner.uid, 500);
+  if (!ownerUid) throw new Error("FIREBASE_UID is required for PerDiem storage");
+
+  const ownerRef = db.collection(PERDIEM_COLLECTION).doc(ownerPdcDocId(ownerUid));
+  const eventsRef = ownerRef.collection("events");
+
+  await ownerRef.set({
+    owner: ownerUid,
+    uid: ownerUid,
+    display_name: owner.displayName || "",
+    pdc_user_name: owner.displayName || "",
+    email: owner.email || "",
+    source: "pdc_roster",
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  const perDiemDocs = rosterDocs
+    .map((docData) => buildPerDiemDoc(docData, owner))
+    .filter(Boolean);
+
+  let saved = 0;
+  let deletedDuplicates = 0;
+
+  for (const docData of perDiemDocs) {
+    const eventId = perDiemEventDocId(docData);
+    const duplicateSnapshot = await eventsRef
+      .where("Date", "==", docData.Date)
+      .where("Activity", "==", docData.Activity)
+      .where("From", "==", docData.From)
+      .where("Destination", "==", docData.Destination)
+      .get();
+
+    const batch = db.batch();
+
+    for (const duplicateDoc of duplicateSnapshot.docs) {
+      if (duplicateDoc.id !== eventId) {
+        batch.delete(duplicateDoc.ref);
+        deletedDuplicates += 1;
+      }
+    }
+
+    batch.set(eventsRef.doc(eventId), docData, { merge: true });
+    await batch.commit();
+    saved += 1;
+  }
+
+  return {
+    generated: perDiemDocs.length,
+    saved,
+    deletedDuplicates,
+  };
+}
+
 function firstRoute(text) {
   const normalized = cleanText(text, 1000).toUpperCase();
   const match = normalized.match(/\b([A-Z]{3})\s*(?:-|–|—|→|>|TO)\s*([A-Z]{3})\b/);
@@ -748,8 +913,21 @@ async function main() {
     .filter(Boolean);
   if (!docs.length) throw new Error("iCal calendar was fetched, but no roster events were found");
 
-  const result = await uploadPdcDocs(db, owner, docs);
-  console.log(`Rewrote ${PDC_COLLECTION} for this owner; saved ${result.imported} event(s); removed ${result.deleted} previous owner event(s); skipped ${result.skippedDuplicates} duplicate event(s).`);
+  const finalRosterDocs = applyPerDiemMarkers(dedupeImportDocs(docs));
+
+  // 1) 원본 Roster는 기존대로 pdc/{uid}/events에 저장합니다.
+  const pdcResult = await uploadPdcDocs(db, owner, finalRosterDocs);
+  console.log(`PDC_STORAGE_PATH=${PDC_COLLECTION}/${owner.uid}/events`);
+  console.log(`PDC_IMPORTED=${pdcResult.imported}`);
+  console.log(`PDC_REMOVED_PREVIOUS=${pdcResult.deleted}`);
+  console.log(`PDC_SKIPPED_DUPLICATES=${pdcResult.skippedDuplicates}`);
+
+  // 2) 계산된 PerDiem은 별도로 Perdiem/{uid}/events에 중복 제거 upsert합니다.
+  const perDiemResult = await uploadPerDiemDocs(db, owner, finalRosterDocs);
+  console.log(`PERDIEM_STORAGE_PATH=${PERDIEM_COLLECTION}/${owner.uid}/events`);
+  console.log(`PERDIEM_GENERATED=${perDiemResult.generated}`);
+  console.log(`PERDIEM_SAVED=${perDiemResult.saved}`);
+  console.log(`PERDIEM_DUPLICATES_DELETED=${perDiemResult.deletedDuplicates}`);
 }
 
 main().catch((error) => {
