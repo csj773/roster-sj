@@ -65,8 +65,26 @@ async function postSlackResponse(responseUrl, body) {
 
 async function postCommandResult(command) {
   try {
-    await postSlackResponse(command.responseUrl, await handleCommand(command));
+    const result = await handleCommand(command);
+
+    console.log("SLACK_COMMAND_RESULT_READY", {
+      command: command.command,
+      responseType: result.response_type,
+      textLength: String(result.text || "").length,
+    });
+
+    await postSlackResponse(command.responseUrl, result);
+
+    console.log("SLACK_COMMAND_RESULT_POSTED", {
+      command: command.command,
+    });
   } catch (error) {
+    console.error("SLACK_COMMAND_RESULT_FAILED", {
+      command: command.command,
+      message: error.message,
+      stack: error.stack,
+    });
+
     await postSlackResponse(command.responseUrl, {
       response_type: "ephemeral",
       text: `Slack command failed for ${command.command || "command"}: ${error.message}`,
@@ -1642,6 +1660,21 @@ export default async function handler(req, res) {
     const rawBody = await readRawBody(req);
     verifySlackSignature(req, rawBody);
     command = parseSlashCommand(rawBody);
+    const commandName = cleanText(command.command, 80).toLowerCase();
+
+    // 조회 명령은 현재 요청 안에서 완료하여 Slack에 결과를 바로 반환한다.
+    // Vercel background 작업이 종료되면서 response_url 결과가 유실되는 문제를 방지한다.
+    if (
+      commandName === "/layover" ||
+      commandName === "/my-roster" ||
+      commandName === "/roster-help" ||
+      command.text === "help"
+    ) {
+      slackJson(res, 200, await handleCommand(command));
+      return;
+    }
+
+    // GitHub workflow 호출 등 시간이 오래 걸릴 수 있는 명령만 background 처리한다.
     if (command.responseUrl) {
       queueSlackWork(postCommandResult(command));
       slackJson(res, 200, {
