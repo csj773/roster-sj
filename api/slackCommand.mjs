@@ -1,6 +1,10 @@
 import crypto from "crypto";
+import fs from "fs";
+import os from "os";
+import path from "path";
 import admin from "firebase-admin";
 import { waitUntil } from "@vercel/functions";
+import { generateAndRewriteSlackPerDiem } from "../scripts/slack_perdiem.js";
 import {
   cleanDate,
   cleanText,
@@ -25,6 +29,7 @@ const DEFAULT_GITHUB_REF = "main";
 const ICAL_IMPORT_WORKFLOW_FILE = "import-ical-roster-to-pdc.yml";
 const PERDIEM_SLACK_WORKFLOW_FILE = "monthly-perdiem-slack-report.yml";
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const ROSTER_HEADERS = ["Date", "D/C", "C/I(L)", "C/O(L)", "Activity", "F", "From", "STD(L)", "STD(Z)", "To", "STA(L)", "STA(Z)", "BLH", "Crew"];
 const FULL_MONTH_NAMES = [
   "january",
   "february",
@@ -1334,6 +1339,53 @@ async function uploadImportedRosterToPdc(docs) {
   return { deleted, imported, skippedDuplicates: docs.length - uniqueDocs.length };
 }
 
+function importedPdcDocToRosterRow(doc) {
+  return [
+    cleanText(doc.DateRaw || doc.Date, 20),
+    cleanText(doc.DC || doc["D/C"], 20),
+    cleanText(doc.CIL || doc["C/I(L)"], 20),
+    cleanText(doc.COL || doc["C/O(L)"], 20),
+    cleanText(doc.Activity, 80),
+    cleanText(doc.F || doc.Activity, 80),
+    cleanText(doc.From, 10),
+    cleanText(doc.STDL || doc["STD(L)"], 40),
+    cleanText(doc.STDZ || doc["STD(Z)"], 40),
+    cleanText(doc.To || doc.Destination, 10),
+    cleanText(doc.STAL || doc["STA(L)"], 40),
+    cleanText(doc.STAZ || doc["STA(Z)"], 40),
+    cleanText(doc.BLH, 40),
+    cleanText(doc.Crew, 1000),
+  ];
+}
+
+function writeImportedRosterJson(docs, ownerUid) {
+  const rows = docs
+    .filter((doc) => cleanText(doc.Activity, 80) && cleanText(doc.From, 10) && cleanText(doc.To || doc.Destination, 10))
+    .sort((a, b) => {
+      const left = `${cleanText(a.DateRaw || a.Date, 20)}_${cleanText(a.STDZ || a.STDL, 40)}_${cleanText(a.Activity, 80)}`;
+      const right = `${cleanText(b.DateRaw || b.Date, 20)}_${cleanText(b.STDZ || b.STDL, 40)}_${cleanText(b.Activity, 80)}`;
+      return left.localeCompare(right);
+    })
+    .map(importedPdcDocToRosterRow);
+  const safeOwner = cleanText(ownerUid, 500).replace(/[^A-Za-z0-9_-]/g, "_") || "owner";
+  const filePath = path.join(os.tmpdir(), `slack-import-roster-${safeOwner}.json`);
+  fs.writeFileSync(filePath, JSON.stringify({ values: [ROSTER_HEADERS, ...rows] }, null, 2), "utf-8");
+  return { filePath, rowCount: rows.length };
+}
+
+async function rewriteImportedPerDiem(docs, owner) {
+  const { filePath, rowCount } = writeImportedRosterJson(docs, owner.uid);
+  if (!rowCount) return { deleted: 0, written: 0, skippedDuplicates: 0, rowCount };
+  const result = await generateAndRewriteSlackPerDiem(db(), filePath, {
+    owner: owner.uid,
+    uid: owner.uid,
+    userId: owner.uid,
+    email: owner.email || "",
+    displayName: owner.displayName || "",
+  });
+  return { ...result, rowCount };
+}
+
 function isOffDuty(activity) {
   return /^(REST|OFF|OFFD|DAY OFF|DO|VAC|LEAVE|RSV)$/i.test(cleanText(activity, 40));
 }
@@ -1901,9 +1953,10 @@ async function handleRosterImport(command) {
   }
 
   const result = await uploadImportedRosterToPdc(docs);
+  const perdiemResult = await rewriteImportedPerDiem(docs, { uid: firebaseUid, ...owner });
   return {
     response_type: "ephemeral",
-    text: `Roster iCal import complete. Rewrote pdc for this owner: saved ${result.imported} event(s), removed ${result.deleted} previous owner event(s), skipped ${result.skippedDuplicates} duplicate event(s).`,
+    text: `Roster iCal import complete. Rewrote pdc for this owner: saved ${result.imported} event(s), removed ${result.deleted} previous owner event(s), skipped ${result.skippedDuplicates} duplicate event(s). Rewrote Perdiem: saved ${perdiemResult.written} event(s), removed ${perdiemResult.deleted} previous event(s), skipped ${perdiemResult.skippedDuplicates} duplicate event(s).`,
   };
 }
 

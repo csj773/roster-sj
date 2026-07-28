@@ -1,9 +1,14 @@
 import crypto from "crypto";
+import fs from "fs";
+import os from "os";
+import path from "path";
 import admin from "firebase-admin";
+import { generateAndRewriteSlackPerDiem } from "./slack_perdiem.js";
 
 const PDC_COLLECTION = "pdc";
 const PERDIEM_COLLECTION = "Perdiem";
 const SLACK_ICAL_SOURCE = "slack_ical";
+const ROSTER_HEADERS = ["Date", "D/C", "C/I(L)", "C/O(L)", "Activity", "F", "From", "STD(L)", "STD(Z)", "To", "STA(L)", "STA(Z)", "BLH", "Crew"];
 
 function requiredEnv(name) {
   const value = String(process.env[name] || "").trim();
@@ -710,6 +715,53 @@ function icsEventToPdcDoc(event, owner) {
   };
 }
 
+function pdcDocToRosterRow(doc) {
+  return [
+    cleanText(doc.DateRaw || doc.Date, 20),
+    cleanText(doc.DC || doc["D/C"], 20),
+    cleanText(doc.CIL || doc["C/I(L)"], 20),
+    cleanText(doc.COL || doc["C/O(L)"], 20),
+    cleanText(doc.Activity, 80),
+    cleanText(doc.F || doc.Activity, 80),
+    cleanText(doc.From, 10),
+    cleanText(doc.STDL || doc["STD(L)"], 40),
+    cleanText(doc.STDZ || doc["STD(Z)"], 40),
+    cleanText(doc.To || doc.Destination, 10),
+    cleanText(doc.STAL || doc["STA(L)"], 40),
+    cleanText(doc.STAZ || doc["STA(Z)"], 40),
+    cleanText(doc.BLH, 40),
+    cleanText(doc.Crew, 1000),
+  ];
+}
+
+function writeImportedRosterJson(docs, ownerUid) {
+  const rows = docs
+    .filter((doc) => cleanText(doc.Activity, 80) && cleanText(doc.From, 10) && cleanText(doc.To || doc.Destination, 10))
+    .sort((a, b) => {
+      const left = `${cleanText(a.DateRaw || a.Date, 20)}_${cleanText(a.STDZ || a.STDL, 40)}_${cleanText(a.Activity, 80)}`;
+      const right = `${cleanText(b.DateRaw || b.Date, 20)}_${cleanText(b.STDZ || b.STDL, 40)}_${cleanText(b.Activity, 80)}`;
+      return left.localeCompare(right);
+    })
+    .map(pdcDocToRosterRow);
+  const safeOwner = cleanText(ownerUid, 500).replace(/[^A-Za-z0-9_-]/g, "_") || "owner";
+  const filePath = path.join(os.tmpdir(), `imported-ical-roster-${safeOwner}.json`);
+  fs.writeFileSync(filePath, JSON.stringify({ values: [ROSTER_HEADERS, ...rows] }, null, 2), "utf-8");
+  return { filePath, rowCount: rows.length };
+}
+
+async function rewriteImportedPerDiem(db, docs, owner) {
+  const { filePath, rowCount } = writeImportedRosterJson(docs, owner.uid);
+  if (!rowCount) return { deleted: 0, written: 0, skippedDuplicates: 0, rowCount };
+  const result = await generateAndRewriteSlackPerDiem(db, filePath, {
+    owner: owner.uid,
+    uid: owner.uid,
+    userId: owner.uid,
+    email: owner.email || "",
+    displayName: owner.displayName || "",
+  });
+  return { ...result, rowCount };
+}
+
 async function fetchIcsCalendar(calendarUrl) {
   const url = fetchableCalendarUrl(calendarUrl);
   if (!url) throw new Error("webcal:// or https:// iCal URL is required");
@@ -922,12 +974,10 @@ async function main() {
   console.log(`PDC_REMOVED_PREVIOUS=${pdcResult.deleted}`);
   console.log(`PDC_SKIPPED_DUPLICATES=${pdcResult.skippedDuplicates}`);
 
-  // 2) 계산된 PerDiem은 별도로 Perdiem/{uid}/events에 중복 제거 upsert합니다.
-  const perDiemResult = await uploadPerDiemDocs(db, owner, finalRosterDocs);
+  // 2) 같은 Roster를 Perdiem/{uid}/events에 owner 단위로 rewrite합니다.
+  const perDiemResult = await rewriteImportedPerDiem(db, finalRosterDocs, owner);
   console.log(`PERDIEM_STORAGE_PATH=${PERDIEM_COLLECTION}/${owner.uid}/events`);
-  console.log(`PERDIEM_GENERATED=${perDiemResult.generated}`);
-  console.log(`PERDIEM_SAVED=${perDiemResult.saved}`);
-  console.log(`PERDIEM_DUPLICATES_DELETED=${perDiemResult.deletedDuplicates}`);
+  console.log(`Rewrote Perdiem for this owner; source rows ${perdiemResult.rowCount}; saved ${perdiemResult.written} event(s); removed ${perdiemResult.deleted} previous event(s); skipped ${perdiemResult.skippedDuplicates} duplicate event(s).`);
 }
 
 main().catch((error) => {
