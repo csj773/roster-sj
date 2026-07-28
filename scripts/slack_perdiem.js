@@ -537,6 +537,7 @@ async function commitDeleteRefs(db, refs) {
 
 async function commitPerDiemWrites(eventsRef, docs) {
   const db = eventsRef.firestore;
+  const collectionRef = eventsRef.parent.parent;
   let written = 0;
 
   for (let index = 0; index < docs.length; index += 400) {
@@ -545,6 +546,7 @@ async function commitPerDiemWrites(eventsRef, docs) {
 
     for (const { id, data } of chunk) {
       batch.set(eventsRef.doc(id), data, { merge: false });
+      if (collectionRef) batch.set(collectionRef.doc(id), data, { merge: false });
     }
 
     await batch.commit();
@@ -552,6 +554,14 @@ async function commitPerDiemWrites(eventsRef, docs) {
   }
 
   return written;
+}
+
+async function deleteFlatPerDiemRowsForOwner(db, collectionName, owner) {
+  const snapshot = await db.collection(collectionName).where("owner", "==", owner).get();
+  const refs = snapshot.docs
+    .filter((doc) => doc.data()?.Date && doc.data()?.Activity)
+    .map((doc) => doc.ref);
+  return commitDeleteRefs(db, refs);
 }
 
 /**
@@ -590,6 +600,7 @@ export async function rewriteUserPerDiem(
     db,
     existingSnapshot.docs.map((doc) => doc.ref)
   );
+  const deletedFlat = await deleteFlatPerDiemRowsForOwner(db, collectionName, resolvedOwner);
 
   const now = admin.firestore.FieldValue.serverTimestamp();
   const resolvedUid = cleanOwnerValue(uid || resolvedOwner);
@@ -624,11 +635,22 @@ export async function rewriteUserPerDiem(
 
   const written = await commitPerDiemWrites(eventsRef, writes);
 
+  await ownerRef.set({
+    eventCount: written,
+    lastImportSourceRows: (perdiemList || []).length,
+    skippedDuplicates: (perdiemList || []).length - normalizedRows.length,
+    storagePath: `${collectionName}/${resolvedOwner}/events`,
+    flatMirror: true,
+    updatedAt: now,
+  }, { merge: true });
+
   return {
     owner: resolvedOwner,
     collectionName,
     storagePath: `${collectionName}/${resolvedOwner}/events`,
+    flatStoragePath: collectionName,
     deleted,
+    deletedFlat,
     written,
     skippedDuplicates: (perdiemList || []).length - normalizedRows.length,
   };
