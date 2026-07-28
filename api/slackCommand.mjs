@@ -1176,6 +1176,30 @@ function rosterItem(doc, owner) {
   };
 }
 
+
+async function rosterDocsForOwner(collectionName, ownerUid) {
+  const docs = [];
+
+  const flatSnapshot = await db()
+    .collection(collectionName)
+    .where("owner", "==", ownerUid)
+    .get();
+
+  docs.push(...flatSnapshot.docs);
+
+  if (collectionName === PDC_COLLECTION) {
+    const nestedSnapshot = await db()
+      .collection(PDC_COLLECTION)
+      .doc(ownerPdcDocId(ownerUid))
+      .collection("events")
+      .get();
+
+    docs.push(...nestedSnapshot.docs);
+  }
+
+  return docs;
+}
+
 async function layoverItemsFor(uid, { station, startDate, days }, command = {}) {
   const endDate = addDays(startDate, days - 1);
   const startKey = dateSortKey(startDate);
@@ -1184,8 +1208,8 @@ async function layoverItemsFor(uid, { station, startDate, days }, command = {}) 
   const nested = await Promise.all(
     owners.flatMap((owner) =>
       SHARE_ROSTER_COLLECTIONS.map(async (collectionName) => {
-        const snap = await db().collection(collectionName).where("owner", "==", owner.uid).get();
-        return snap.docs
+        const docs = await rosterDocsForOwner(collectionName, owner.uid);
+        return docs
           .map((doc) => rosterItem(doc, owner))
           .filter((item) => item.type === "flight")
           .filter((item) => {
@@ -1272,8 +1296,8 @@ async function myRosterItemsFor(uid, { station, startDate, days }) {
   const endKey = dateSortKey(endDate);
   const nested = await Promise.all(
     SHARE_ROSTER_COLLECTIONS.map(async (collectionName) => {
-      const snap = await db().collection(collectionName).where("owner", "==", uid).get();
-      return snap.docs
+      const docs = await rosterDocsForOwner(collectionName, uid);
+      return docs
         .map((doc) => rosterItem(doc, owner))
         .filter((item) => item.date && item.activity)
         .filter((item) => {
