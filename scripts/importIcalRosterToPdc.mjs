@@ -977,7 +977,7 @@ async function main() {
   // 2) 같은 Roster를 Perdiem/{uid}/events에 owner 단위로 rewrite합니다.
   const perDiemResult = await rewriteImportedPerDiem(db, finalRosterDocs, owner);
   console.log(`PERDIEM_STORAGE_PATH=${PERDIEM_COLLECTION}/${owner.uid}/events`);
-  console.log(`Rewrote Perdiem for this owner; source rows ${perdiemResult.rowCount}; saved ${perdiemResult.written} event(s); removed ${perdiemResult.deleted} previous event(s); skipped ${perdiemResult.skippedDuplicates} duplicate event(s).`);
+  console.log(`Rewrote Perdiem for this owner; source rows ${perDiemResult.rowCount}; saved ${perDiemResult.written} event(s); removed ${perDiemResult.deleted} previous event(s); skipped ${perDiemResult.skippedDuplicates} duplicate event(s).`);
 }
 
 main().catch((error) => {
