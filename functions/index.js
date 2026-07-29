@@ -12,6 +12,8 @@ const OWNER_QUERY_COLLECTIONS = [
   "Pilotlog",
   "CrewRest",
   "DutyPeriod",
+  "DutyPeroid",
+  "UploadUrl",
   "UploadFile",
 ];
 
@@ -23,6 +25,11 @@ const OWNER_DOC_COLLECTIONS = [
   "PaymentsByUser",
   "PilotlogByUser",
   "LimitsByUser",
+  "CrewRestByUser",
+  "DutyPeriodByUser",
+  "DutyPeroidByUser",
+  "UploadUrlByUser",
+  "UploadFileByUser",
 ];
 
 function ownerDocId(uid) {

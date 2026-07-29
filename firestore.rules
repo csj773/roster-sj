@@ -128,6 +128,126 @@ service cloud.firestore {
       }
     }
 
+    match /CrewRest/{docId} {
+      allow read, delete: if isOwner();
+      allow create: if createsOwnDoc();
+      allow update: if keepsOwner();
+    }
+
+    match /CrewRestByUser/{docId} {
+      allow read, delete: if isOwner();
+      allow create: if createsOwnDoc();
+      allow update: if keepsOwner();
+
+      match /events/{eventId} {
+        allow read, delete: if signedIn()
+          && (docId == request.auth.uid || resource.data.owner == request.auth.uid);
+        allow create: if signedIn()
+          && docId == request.auth.uid
+          && request.resource.data.owner == request.auth.uid;
+        allow update: if signedIn()
+          && docId == request.auth.uid
+          && resource.data.owner == request.auth.uid
+          && request.resource.data.owner == resource.data.owner;
+      }
+    }
+
+    match /DutyPeriod/{docId} {
+      allow read, delete: if isOwner();
+      allow create: if createsOwnDoc();
+      allow update: if keepsOwner();
+    }
+
+    match /DutyPeriodByUser/{docId} {
+      allow read, delete: if isOwner();
+      allow create: if createsOwnDoc();
+      allow update: if keepsOwner();
+
+      match /events/{eventId} {
+        allow read, delete: if signedIn()
+          && (docId == request.auth.uid || resource.data.owner == request.auth.uid);
+        allow create: if signedIn()
+          && docId == request.auth.uid
+          && request.resource.data.owner == request.auth.uid;
+        allow update: if signedIn()
+          && docId == request.auth.uid
+          && resource.data.owner == request.auth.uid
+          && request.resource.data.owner == resource.data.owner;
+      }
+    }
+
+    match /DutyPeroid/{docId} {
+      allow read, delete: if isOwner();
+      allow create: if createsOwnDoc();
+      allow update: if keepsOwner();
+    }
+
+    match /DutyPeroidByUser/{docId} {
+      allow read, delete: if isOwner();
+      allow create: if createsOwnDoc();
+      allow update: if keepsOwner();
+
+      match /events/{eventId} {
+        allow read, delete: if signedIn()
+          && (docId == request.auth.uid || resource.data.owner == request.auth.uid);
+        allow create: if signedIn()
+          && docId == request.auth.uid
+          && request.resource.data.owner == request.auth.uid;
+        allow update: if signedIn()
+          && docId == request.auth.uid
+          && resource.data.owner == request.auth.uid
+          && request.resource.data.owner == resource.data.owner;
+      }
+    }
+
+    match /UploadUrl/{docId} {
+      allow read, delete: if isOwner();
+      allow create: if createsOwnDoc();
+      allow update: if keepsOwner();
+    }
+
+    match /UploadUrlByUser/{docId} {
+      allow read, delete: if isOwner();
+      allow create: if createsOwnDoc();
+      allow update: if keepsOwner();
+
+      match /events/{eventId} {
+        allow read, delete: if signedIn()
+          && (docId == request.auth.uid || resource.data.owner == request.auth.uid);
+        allow create: if signedIn()
+          && docId == request.auth.uid
+          && request.resource.data.owner == request.auth.uid;
+        allow update: if signedIn()
+          && docId == request.auth.uid
+          && resource.data.owner == request.auth.uid
+          && request.resource.data.owner == resource.data.owner;
+      }
+    }
+
+    match /UploadFile/{docId} {
+      allow read, delete: if isOwner();
+      allow create: if createsOwnDoc();
+      allow update: if keepsOwner();
+    }
+
+    match /UploadFileByUser/{docId} {
+      allow read, delete: if isOwner();
+      allow create: if createsOwnDoc();
+      allow update: if keepsOwner();
+
+      match /events/{eventId} {
+        allow read, delete: if signedIn()
+          && (docId == request.auth.uid || resource.data.owner == request.auth.uid);
+        allow create: if signedIn()
+          && docId == request.auth.uid
+          && request.resource.data.owner == request.auth.uid;
+        allow update: if signedIn()
+          && docId == request.auth.uid
+          && resource.data.owner == request.auth.uid
+          && request.resource.data.owner == resource.data.owner;
+      }
+    }
+
     match /pdc/{docId} {
       allow read, delete: if isOwner();
       allow create: if createsOwnDoc();
