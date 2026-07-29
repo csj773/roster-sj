@@ -86,6 +86,12 @@ service cloud.firestore {
       }
     }
 
+    match /PdcEvents/{docId} {
+      allow read, delete: if isOwner();
+      allow create: if createsOwnDoc();
+      allow update: if keepsOwner();
+    }
+
     match /{path=**}/events/{eventId} {
       allow read: if signedIn() && resource.data.owner == request.auth.uid;
       allow write: if false;

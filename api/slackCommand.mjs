@@ -20,6 +20,7 @@ const INVITE_COLLECTION = "roster_share_invites";
 const SHARE_COLLECTION = "roster_shares";
 const ROSTER_COLLECTION = "roster";
 const PDC_COLLECTION = "pdc";
+const PDC_FLAT_MIRROR_COLLECTION = "PdcEvents";
 const SHARE_ROSTER_COLLECTIONS = [ROSTER_COLLECTION, PDC_COLLECTION];
 const SLACK_LINK_COLLECTION = "slack_user_links";
 const SLACK_TEAM_OWNER_COLLECTION = "slack_team_roster_owners";
@@ -1028,6 +1029,11 @@ async function deleteExistingOwnerPdcDocs(docs) {
     refs.set(doc.ref.path, doc.ref);
   }
 
+  const mirrorSnapshot = await db().collection(PDC_FLAT_MIRROR_COLLECTION).where("owner", "==", owner).get();
+  for (const doc of mirrorSnapshot.docs) {
+    refs.set(doc.ref.path, doc.ref);
+  }
+
   const eventsSnapshot = await db()
     .collection(PDC_COLLECTION)
     .doc(ownerPdcDocId(owner))
@@ -1323,7 +1329,9 @@ async function uploadImportedRosterToPdc(docs) {
   for (const docData of uniqueDocs) {
     const batch = db().batch();
     const ownerRef = db().collection(PDC_COLLECTION).doc(ownerPdcDocId(docData.owner));
-    const eventRef = ownerRef.collection("events").doc(pdcEventDocId(docData));
+    const eventId = pdcEventDocId(docData);
+    const eventRef = ownerRef.collection("events").doc(eventId);
+    const mirrorRef = db().collection(PDC_FLAT_MIRROR_COLLECTION).doc(eventId);
     batch.set(ownerRef, {
       owner: docData.owner,
       uid: docData.uid,
@@ -1335,6 +1343,7 @@ async function uploadImportedRosterToPdc(docs) {
       updatedAt: nowTimestamp(),
     }, { merge: true });
     batch.set(eventRef, docData, { merge: false });
+    batch.set(mirrorRef, docData, { merge: false });
     await batch.commit();
     imported += 1;
   }

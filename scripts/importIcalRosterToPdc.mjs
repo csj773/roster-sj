@@ -6,6 +6,7 @@ import admin from "firebase-admin";
 import { generateAndRewriteSlackPerDiem } from "./slack_perdiem.js";
 
 const PDC_COLLECTION = "pdc";
+const PDC_FLAT_MIRROR_COLLECTION = "PdcEvents";
 const PERDIEM_COLLECTION = "Perdiem";
 const SLACK_ICAL_SOURCE = "slack_ical";
 const ROSTER_HEADERS = ["Date", "D/C", "C/I(L)", "C/O(L)", "Activity", "F", "From", "STD(L)", "STD(Z)", "To", "STA(L)", "STA(Z)", "BLH", "Crew"];
@@ -206,6 +207,9 @@ async function deleteExistingOwnerPdcDocs(db, ownerUid) {
   // 평면 pdc 문서 중 현재 사용자(owner) 자료만 삭제합니다.
   const flatSnapshot = await db.collection(PDC_COLLECTION).where("owner", "==", owner).get();
   for (const doc of flatSnapshot.docs) refs.set(doc.ref.path, doc.ref);
+
+  const mirrorSnapshot = await db.collection(PDC_FLAT_MIRROR_COLLECTION).where("owner", "==", owner).get();
+  for (const doc of mirrorSnapshot.docs) refs.set(doc.ref.path, doc.ref);
 
   // 사용자 문서 아래 events도 현재 사용자 것만 삭제합니다.
   const ownerRef = db.collection(PDC_COLLECTION).doc(ownerPdcDocId(owner));
@@ -802,8 +806,10 @@ async function uploadPdcDocs(db, owner, docs) {
   for (const docData of uniqueDocs) {
     const eventId = pdcEventDocId(docData);
     const eventRef = ownerRef.collection("events").doc(eventId);
-    // owner별 하위 컬렉션에만 저장합니다.
+    const mirrorRef = db.collection(PDC_FLAT_MIRROR_COLLECTION).doc(eventId);
+    // owner별 하위 컬렉션을 원본으로 유지하고, FlutterFlow용 최상위 mirror도 같이 저장합니다.
     operations.push((batch) => batch.set(eventRef, docData, { merge: false }));
+    operations.push((batch) => batch.set(mirrorRef, docData, { merge: false }));
   }
 
   await commitInChunks(db, operations);
