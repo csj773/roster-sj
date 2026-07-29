@@ -56,6 +56,12 @@ service cloud.firestore {
       }
     }
 
+    match /PerdiemEvents/{docId} {
+      allow read, delete: if isOwner();
+      allow create: if createsOwnDoc();
+      allow update: if keepsOwner();
+    }
+
     match /Payments/{docId} {
       allow read, delete: if isOwner();
       allow create: if createsOwnDoc();

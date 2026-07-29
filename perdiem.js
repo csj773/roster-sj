@@ -22,6 +22,7 @@ const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Se
 const MONTH_NAME_TO_NUMBER = Object.fromEntries(MONTH_NAMES.map((name, index) => [name.toLowerCase(), index + 1]));
 const WEEKDAY_INDEX = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
 const TRANSPORT_FEE_PER_FLIGHT = 7000;
+const PERDIEM_FLAT_MIRROR_COLLECTION = "PerdiemEvents";
 const QUICK_TURN_THRESHOLD_HOURS = 12;
 const QUICK_TURN_MINIMUM_TOTAL = 33;
 const FLIGHT_ACTIVITY_RE = /^YP\d+/i;
@@ -554,14 +555,19 @@ async function deleteFlatPerDiemRowsForOwner(db, owner) {
   return commitDeleteRefs(db, refs);
 }
 
-async function commitPerDiemRewrite(eventsRef, docs) {
-  const db = eventsRef.firestore;
+async function deletePerDiemMirrorRowsForOwner(db, owner) {
+  const snapshot = await db.collection(PERDIEM_FLAT_MIRROR_COLLECTION).where("owner", "==", owner).get();
+  return commitDeleteRefs(db, snapshot.docs.map((doc) => doc.ref));
+}
+
+async function commitPerDiemRewrite(ref, docs) {
+  const db = ref.firestore;
   let written = 0;
   for (let index = 0; index < docs.length; index += 400) {
     const batch = db.batch();
     const chunk = docs.slice(index, index + 400);
     for (const { id, data } of chunk) {
-      batch.set(eventsRef.doc(id), data, { merge: false });
+      batch.set(ref.doc(id), data, { merge: false });
     }
     await batch.commit();
     written += chunk.length;
@@ -592,6 +598,7 @@ export async function uploadPerDiemFirestore(perdiemList, ownerOverride = "") {
     ...legacySnapshot.docs,
   ].map((doc) => doc.ref));
   const deletedFlat = await deleteFlatPerDiemRowsForOwner(db, owner);
+  const deletedMirror = await deletePerDiemMirrorRowsForOwner(db, owner);
 
   await ownerRef.set({
     owner,
@@ -625,20 +632,27 @@ export async function uploadPerDiemFirestore(perdiemList, ownerOverride = "") {
     },
   }));
 
+  const mirrorWrites = writes.map(({ id, data }) => ({
+    id: `${safeDocIdPart(owner)}_${id}`,
+    data,
+  }));
+
   const saved = await commitPerDiemRewrite(eventsRef, writes);
+  await commitPerDiemRewrite(db.collection(PERDIEM_FLAT_MIRROR_COLLECTION), mirrorWrites);
 
   await ownerRef.set({
     eventCount: saved,
     lastImportSourceRows: perdiemList.length,
     skippedDuplicates: perdiemList.length - uniqueItems.size,
     storagePath: `Perdiem/${owner}/events`,
-    flatMirror: admin.firestore.FieldValue.delete(),
+    flatMirror: PERDIEM_FLAT_MIRROR_COLLECTION,
     updatedAt: now,
   }, { merge: true });
 
   console.log(
     `✅ Firestore PerDiem rewrite 완료 ` +
-    `(입력 ${perdiemList.length}건, 고유 ${uniqueItems.size}건, 저장 ${saved}건, 기존 events 삭제 ${deleted}건, flat 삭제 ${deletedFlat}건)`
+    `(입력 ${perdiemList.length}건, 고유 ${uniqueItems.size}건, 저장 ${saved}건, 기존 events 삭제 ${deleted}건, flat 삭제 ${deletedFlat}건, mirror 삭제 ${deletedMirror}건)`
   );
   console.log(`PERDIEM_STORAGE_PATH=Perdiem/${owner}/events`);
+  console.log(`PERDIEM_FLAT_MIRROR_PATH=${PERDIEM_FLAT_MIRROR_COLLECTION}`);
 }

@@ -32,6 +32,7 @@ const QUICK_TURN_THRESHOLD_HOURS = 12;
 const QUICK_TURN_MINIMUM_TOTAL = 33;
 const FLIGHT_ACTIVITY_RE = /^YP\d+/i;
 const PERDIEM_COLLECTION = String(process.env.PERDIEM_COLLECTION || "Perdiem").trim();
+const PERDIEM_FLAT_MIRROR_COLLECTION = String(process.env.PERDIEM_FLAT_MIRROR_COLLECTION || "PerdiemEvents").trim();
 const DUPLICATE_TIME_TOLERANCE_MINUTES = Number(process.env.PERDIEM_DEDUPE_TOLERANCE_MINUTES || 15);
 
 function normalizeAirportCode(value) {
@@ -562,6 +563,11 @@ async function deleteFlatPerDiemRowsForOwner(db, collectionName, owner) {
   return commitDeleteRefs(db, refs);
 }
 
+async function deletePerDiemMirrorRowsForOwner(db, owner) {
+  const snapshot = await db.collection(PERDIEM_FLAT_MIRROR_COLLECTION).where("owner", "==", owner).get();
+  return commitDeleteRefs(db, snapshot.docs.map((doc) => doc.ref));
+}
+
 /**
  * Perdiem/{owner}/events 문서만 삭제한 뒤 새 목록으로 재작성한다.
  * 다른 owner 문서와 events는 건드리지 않는다.
@@ -591,6 +597,7 @@ export async function rewriteUserPerDiem(
   // Perdiem/{owner}/events/{eventId}
   const ownerRef = db.collection(collectionName).doc(resolvedOwner);
   const eventsRef = ownerRef.collection("events");
+  const mirrorRef = db.collection(PERDIEM_FLAT_MIRROR_COLLECTION);
 
   const existingSnapshot = await eventsRef.get();
   const legacyEventSnapshot = await ownerRef.collection("event").get();
@@ -603,6 +610,7 @@ export async function rewriteUserPerDiem(
     ].map((doc) => doc.ref)
   );
   const deletedFlat = await deleteFlatPerDiemRowsForOwner(db, collectionName, resolvedOwner);
+  const deletedMirror = await deletePerDiemMirrorRowsForOwner(db, resolvedOwner);
 
   const now = admin.firestore.FieldValue.serverTimestamp();
   const resolvedUid = cleanOwnerValue(uid || resolvedOwner);
@@ -636,13 +644,14 @@ export async function rewriteUserPerDiem(
   }));
 
   const written = await commitPerDiemWrites(eventsRef, writes);
+  await commitPerDiemWrites(mirrorRef, writes);
 
   await ownerRef.set({
     eventCount: written,
     lastImportSourceRows: (perdiemList || []).length,
     skippedDuplicates: (perdiemList || []).length - normalizedRows.length,
     storagePath: `${collectionName}/${resolvedOwner}/events`,
-    flatMirror: admin.firestore.FieldValue.delete(),
+    flatMirror: PERDIEM_FLAT_MIRROR_COLLECTION,
     updatedAt: now,
   }, { merge: true });
 
@@ -652,6 +661,7 @@ export async function rewriteUserPerDiem(
     storagePath: `${collectionName}/${resolvedOwner}/events`,
     deleted,
     deletedFlat,
+    deletedMirror,
     written,
     skippedDuplicates: (perdiemList || []).length - normalizedRows.length,
   };
