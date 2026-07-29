@@ -19,6 +19,7 @@ const OWNER_DOC_COLLECTIONS = [
   "Perdiem",
   "pdc",
   "rosterByUser",
+  "PaymentsByUser",
 ];
 
 function ownerDocId(uid) {
