@@ -1,6 +1,8 @@
 name: Import iCal Roster to PDC
 
 on:
+  schedule:
+    - cron: "0 0 * * *" # 매일 KST 09:00 = UTC 00:00
   workflow_dispatch:
     inputs:
       ical_roster_url:
