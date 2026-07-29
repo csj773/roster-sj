@@ -83,6 +83,7 @@ console.log("✅ Google Sheets 초기화 완료");
 const flutterflowUid = process.env.INPUT_FIREBASE_UID || process.env.FIREBASE_UID;
 const firestoreAdminUid = process.env.INPUT_ADMIN_FIREBASE_UID || process.env.ADMIN_FIREBASE_UID;
 const firestoreCollection = process.env.INPUT_FIRESTORE_COLLECTION || "roster";
+const rosterByUserCollection = process.env.INPUT_ROSTER_BY_USER_COLLECTION || "rosterByUser";
 if (!flutterflowUid || !firestoreAdminUid) {
   console.error("❌ Firebase UID 또는 Admin UID 없음");
   process.exit(1);
@@ -755,24 +756,42 @@ function sleep(ms) {
     const existingSnapshot = await db.collection(collectionName)
       .where("owner", "==", owner)
       .get();
+    const ownerRef = db.collection(rosterByUserCollection).doc(owner);
+    const ownerEventsRef = ownerRef.collection("events");
+    const existingOwnerEventsSnapshot = await ownerEventsRef.get();
     await commitBatchOperations(
       db,
-      existingSnapshot.docs.map(doc => batch => batch.delete(doc.ref))
+      [
+        ...existingSnapshot.docs.map(doc => batch => batch.delete(doc.ref)),
+        ...existingOwnerEventsSnapshot.docs.map(doc => batch => batch.delete(doc.ref)),
+      ]
     );
 
     const uniqueDocs = new Map();
     for (const docData of docs) uniqueDocs.set(rosterDedupeKey(docData), docData);
 
-    const writes = [...uniqueDocs.values()].map(docData => {
+    const writes = [
+      batch => batch.set(ownerRef, {
+        owner,
+        uid: owner,
+        source: "roster_js",
+        eventCount: uniqueDocs.size,
+        rewrittenAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true }),
+    ];
+    for (const docData of uniqueDocs.values()) {
       const docId = rosterDocId(docData);
-      return batch => batch.set(db.collection(collectionName).doc(docId), docData, { merge: false });
-    });
+      writes.push(batch => batch.set(db.collection(collectionName).doc(docId), docData, { merge: false }));
+      writes.push(batch => batch.set(ownerEventsRef.doc(docId), docData, { merge: false }));
+    }
     await commitBatchOperations(db, writes);
 
     console.log(
       `✅ Roster Firestore rewrite 완료 ` +
-      `(owner=${owner}, 기존 삭제 ${existingSnapshot.size}건, 입력 ${docs.length}건, 고유 저장 ${uniqueDocs.size}건, 중복 제외 ${docs.length - uniqueDocs.size}건)`
+      `(owner=${owner}, 기존 roster 삭제 ${existingSnapshot.size}건, 기존 ${rosterByUserCollection}/events 삭제 ${existingOwnerEventsSnapshot.size}건, 입력 ${docs.length}건, 고유 저장 ${uniqueDocs.size}건, 중복 제외 ${docs.length - uniqueDocs.size}건)`
     );
+    console.log(`ROSTER_BY_USER_STORAGE_PATH=${rosterByUserCollection}/${owner}/events`);
   }
 
   const rosterDocs = [];
