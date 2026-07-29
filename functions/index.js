@@ -8,6 +8,7 @@ const OWNER_QUERY_COLLECTIONS = [
   "PerdiemEvents",
   "PdcEvents",
   "Payments",
+  "Limits",
   "Pilotlog",
   "CrewRest",
   "DutyPeriod",
@@ -21,6 +22,7 @@ const OWNER_DOC_COLLECTIONS = [
   "rosterByUser",
   "PaymentsByUser",
   "PilotlogByUser",
+  "LimitsByUser",
 ];
 
 function ownerDocId(uid) {
