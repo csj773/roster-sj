@@ -2,6 +2,7 @@
 import fs from "fs";
 import path from "path";
 import "dotenv/config";
+import crypto from "crypto";
 import admin from "firebase-admin";
 import { google } from "googleapis";
 import { exec } from "child_process";
@@ -716,36 +717,72 @@ function sleep(ms) {
     return docData;
   }
 
-  async function uploadDoc(db, collectionName, docData, i) {
-    // Firestore 업로드 시 중복 제거 기준: owner/Date/DC/Activity/From/To
-    // F 컬럼 매핑이 바뀌어도 같은 roster 항목을 찾아 지울 수 있게 Activity를 기준으로 쓴다.
-    const querySnapshot = await db.collection(collectionName)
-      .where("owner", "==", docData.owner)
-      .where("Date", "==", docData.Date)
-      .where("DC", "==", docData.DC)
-      .where("Activity", "==", docData.Activity)
-      .where("From", "==", docData.From)
-      .where("To", "==", docData.To)
-      .get();
+  function rosterDocId(docData) {
+    return crypto.createHash("sha256").update([
+      docData.owner,
+      docData.Date,
+      docData.DC,
+      docData.Activity,
+      docData.From,
+      docData.To,
+    ].join("|")).digest("hex");
+  }
 
-    if (!querySnapshot.empty) {
-      for (const d of querySnapshot.docs) {
-        await db.collection(collectionName).doc(d.id).delete();
-      }
+  function rosterDedupeKey(docData) {
+    return [
+      docData.owner,
+      docData.Date,
+      docData.DC,
+      docData.Activity,
+      docData.From,
+      docData.To,
+    ].map(value => String(value || "").trim().toUpperCase()).join("|");
+  }
+
+  async function commitBatchOperations(db, operations, chunkSize = 400) {
+    for (let index = 0; index < operations.length; index += chunkSize) {
+      const batch = db.batch();
+      for (const operation of operations.slice(index, index + chunkSize)) operation(batch);
+      await batch.commit();
     }
+  }
 
-    const newDocRef = await db.collection(collectionName).add(docData);
+  async function rewriteRosterCollection(db, collectionName, docs) {
+    if (!docs.length) throw new Error("Roster rewrite aborted: no roster docs parsed");
+    const owner = docs[0]?.owner || firestoreAdminUid || "";
+    if (!owner) throw new Error("Roster rewrite requires owner uid");
+
+    const existingSnapshot = await db.collection(collectionName)
+      .where("owner", "==", owner)
+      .get();
+    await commitBatchOperations(
+      db,
+      existingSnapshot.docs.map(doc => batch => batch.delete(doc.ref))
+    );
+
+    const uniqueDocs = new Map();
+    for (const docData of docs) uniqueDocs.set(rosterDedupeKey(docData), docData);
+
+    const writes = [...uniqueDocs.values()].map(docData => {
+      const docId = rosterDocId(docData);
+      return batch => batch.set(db.collection(collectionName).doc(docId), docData, { merge: false });
+    });
+    await commitBatchOperations(db, writes);
+
     console.log(
-      `✅ ${i}행 업로드 완료 (중복 기준: owner/Date/DC/Activity/From/To): ${newDocRef.id}, NT=${docData.NT}, ET=${docData.ET}, CrewCount=${docData.CrewArray.length}, Year=${docData.Year}, Month=${docData.Month}`
+      `✅ Roster Firestore rewrite 완료 ` +
+      `(owner=${owner}, 기존 삭제 ${existingSnapshot.size}건, 입력 ${docs.length}건, 고유 저장 ${uniqueDocs.size}건, 중복 제외 ${docs.length - uniqueDocs.size}건)`
     );
   }
 
+  const rosterDocs = [];
   for (let i = 1; i < values.length; i++) {
     const row = values[i];
     const docData = buildDocData(row, headers, i, values);
     if (!docData) continue;
-    await uploadDoc(db, firestoreCollection, docData, i);
+    rosterDocs.push(docData);
   }
+  await rewriteRosterCollection(db, firestoreCollection, rosterDocs);
 
   console.log("✅ Roster Firestore 업로드 완료");
 
