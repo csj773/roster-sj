@@ -1330,9 +1330,11 @@ async function uploadImportedRosterToPdc(docs) {
       display_name: docData.display_name || docData.pdc_user_name || "",
       pdc_user_name: docData.pdc_user_name || "",
       email: docData.email || "",
+      source: SLACK_ICAL_SOURCE,
+      rewrittenAt: nowTimestamp(),
       updatedAt: nowTimestamp(),
     }, { merge: true });
-    batch.set(eventRef, docData, { merge: true });
+    batch.set(eventRef, docData, { merge: false });
     await batch.commit();
     imported += 1;
   }
