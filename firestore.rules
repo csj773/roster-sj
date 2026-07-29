@@ -62,6 +62,24 @@ service cloud.firestore {
       allow update: if keepsOwner();
     }
 
+    match /pdc/{docId} {
+      allow read, delete: if isOwner();
+      allow create: if createsOwnDoc();
+      allow update: if keepsOwner();
+
+      match /events/{eventId} {
+        allow read, delete: if signedIn()
+          && (docId == request.auth.uid || resource.data.owner == request.auth.uid);
+        allow create: if signedIn()
+          && docId == request.auth.uid
+          && request.resource.data.owner == request.auth.uid;
+        allow update: if signedIn()
+          && docId == request.auth.uid
+          && resource.data.owner == request.auth.uid
+          && request.resource.data.owner == resource.data.owner;
+      }
+    }
+
     match /users/{userId} {
       allow read, create, update: if signedIn() && request.auth.uid == userId;
       allow delete: if false;
