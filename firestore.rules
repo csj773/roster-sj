@@ -80,6 +80,11 @@ service cloud.firestore {
       }
     }
 
+    match /{path=**}/events/{eventId} {
+      allow read: if signedIn() && resource.data.owner == request.auth.uid;
+      allow write: if false;
+    }
+
     match /users/{userId} {
       allow read, create, update: if signedIn() && request.auth.uid == userId;
       allow delete: if false;
