@@ -50,7 +50,9 @@ jobs:
           PILOTLOG_SPREADSHEET_ID: ${{ secrets.PILOTLOG_SPREADSHEET_ID || '1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc' }}
           PILOTLOG_SHEET_NAME: flt_log
           PILOTLOG_COLLECTION: Pilotlog
+          PILOTLOG_BY_USER_COLLECTION: PilotlogByUser
           PILOTLOG_EMAIL: sjchoi787@gmail.com
+          PILOTLOG_OWNER_UID: ${{ secrets.PILOTLOG_OWNER_UID || secrets.FIREBASE_UID || 'khbM4wQw52YpY9SrUpoAcG3umqT2' }}
           TARGET_START_DATE: ${{ github.event.inputs.target_start_date || '2023.4.29' }}
           TARGET_END_DATE: ${{ github.event.inputs.target_end_date || '2026.6.25' }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
@@ -64,7 +66,9 @@ jobs:
           const spreadsheetId = process.env.PILOTLOG_SPREADSHEET_ID;
           const sheetName = process.env.PILOTLOG_SHEET_NAME || "flt_log";
           const collectionName = process.env.PILOTLOG_COLLECTION || "Pilotlog";
+          const byUserCollectionName = process.env.PILOTLOG_BY_USER_COLLECTION || "PilotlogByUser";
           const email = process.env.PILOTLOG_EMAIL || "sjchoi787@gmail.com";
+          const ownerUid = process.env.PILOTLOG_OWNER_UID || "";
           const targetStartDate = process.env.TARGET_START_DATE || "2023.4.29";
           const targetEndDate = process.env.TARGET_END_DATE || "2026.6.25";
           const targetFlts = String(process.env.TARGET_FLT || "")
@@ -145,6 +149,18 @@ jobs:
             return "";
           }
 
+          function normalizeOwnerUid(value) {
+            return String(normalizeFirestoreValue(value) || "").trim();
+          }
+
+          function isTargetOwnerDoc(data) {
+            return normalizeOwnerUid(data.owner) === ownerUid && normalizeOwnerUid(data.uid) === ownerUid;
+          }
+
+          function isTargetEmailDoc(data) {
+            return !email || String(valueByKeys(data, ["Email", "email"])).trim().toLowerCase() === email.toLowerCase();
+          }
+
           function normalizeFlightNumber(value) {
             return String(value || "").trim().replace(/^YP/i, "");
           }
@@ -171,6 +187,10 @@ jobs:
               normalizeDateKey(parts.date),
               normalizeFlightNumber(parts.flt),
             ].join("|");
+          }
+
+          function ownerScopedKey(baseKey) {
+            return [ownerUid, ownerUid, baseKey].join("|");
           }
 
           function normalizeHeader(value) {
@@ -411,13 +431,17 @@ jobs:
           const sheetRows = buildSheetRows(sheetValues);
           if (!sheetRows.length) throw new Error(`No flt_log rows found for ${targetRangeLabel()}`);
 
-          const firestoreSnapshot = await db.collection(collectionName).where("Email", "==", email).get();
+          if (!ownerUid) throw new Error("PILOTLOG_OWNER_UID is required to sync Pilotlog safely.");
+
+          const firestoreSnapshot = await db.collection(collectionName).where("owner", "==", ownerUid).get();
           const docsByKey = new Map();
           const docsByFallbackKey = new Map();
           let duplicateFirestoreDocs = 0;
           let duplicateFallbackDocs = 0;
           for (const doc of firestoreSnapshot.docs) {
             const data = doc.data();
+            if (!isTargetOwnerDoc(data)) continue;
+            if (!isTargetEmailDoc(data)) continue;
             const date = valueByKeys(data, ["Date", "DATE", "date", "flightDate"]);
             const flt = valueByKeys(data, ["FLT", "F", "Activity", "flightNo"]);
             if (!isDateInTargetRange(date)) continue;
@@ -429,19 +453,21 @@ jobs:
               to: valueByKeys(data, ["TO", "To", "to"]),
             });
             const fallbackKey = dateFlightKey({ date, flt });
-            const existing = docsByKey.get(key);
+            const scopedKey = ownerScopedKey(key);
+            const scopedFallbackKey = ownerScopedKey(fallbackKey);
+            const existing = docsByKey.get(scopedKey);
             if (existing) {
               duplicateFirestoreDocs += 1;
               if (writeSortValue(existing) > writeSortValue(doc)) continue;
             }
-            docsByKey.set(key, doc);
+            docsByKey.set(scopedKey, doc);
 
-            const existingFallback = docsByFallbackKey.get(fallbackKey);
+            const existingFallback = docsByFallbackKey.get(scopedFallbackKey);
             if (existingFallback) {
               duplicateFallbackDocs += 1;
               if (writeSortValue(existingFallback) > writeSortValue(doc)) continue;
             }
-            docsByFallbackKey.set(fallbackKey, doc);
+            docsByFallbackKey.set(scopedFallbackKey, doc);
           }
 
           let matched = 0;
@@ -459,24 +485,55 @@ jobs:
             batchWrites = 0;
           }
 
+          if (!dryRun) {
+            batch.set(
+              db.collection(byUserCollectionName).doc(ownerUid),
+              {
+                owner: ownerUid,
+                uid: ownerUid,
+                email,
+                source: "sync_pilotlog_sheet_to_firestore",
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              },
+              { merge: true }
+            );
+            batchWrites += 1;
+          }
+
           for (const sheetRow of sheetRows) {
-            const doc = docsByKey.get(sheetRow.key) || docsByFallbackKey.get(sheetRow.fallbackKey);
+            const scopedSheetKey = ownerScopedKey(sheetRow.key);
+            const scopedSheetFallbackKey = ownerScopedKey(sheetRow.fallbackKey);
+            const doc = docsByKey.get(scopedSheetKey) || docsByFallbackKey.get(scopedSheetFallbackKey);
             if (!doc) {
               missing += 1;
               console.log(`Missing Firestore doc for ${sheetRow.key} fallback=${sheetRow.fallbackKey}`);
               continue;
             }
             matched += 1;
-            if (!docsByKey.has(sheetRow.key)) fallbackMatched += 1;
+            if (!docsByKey.has(scopedSheetKey)) fallbackMatched += 1;
             const update = buildUpdateForDoc(headers, doc.data(), sheetRow.row);
             console.log(`${dryRun ? "Would update" : "Updating"} ${doc.id} ${sheetRow.key}`, update);
             if (!dryRun) {
               batch.update(doc.ref, {
                 ...update,
+                owner: ownerUid,
+                uid: ownerUid,
                 sheetSyncUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
                 sheetSyncSource: `${sheetName} ${targetRangeLabel()} REG,DC,BLK,NGT,INS,PIC,이륙,착륙,RO,RI`,
               });
-              batchWrites += 1;
+              batch.set(
+                db.collection(byUserCollectionName).doc(ownerUid).collection("events").doc(doc.id),
+                {
+                  ...doc.data(),
+                  ...update,
+                  owner: ownerUid,
+                  uid: ownerUid,
+                  sheetSyncUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                  sheetSyncSource: `${sheetName} ${targetRangeLabel()} REG,DC,BLK,NGT,INS,PIC,이륙,착륙,RO,RI`,
+                },
+                { merge: false }
+              );
+              batchWrites += 2;
               updatedDocRefs.push(doc.ref);
               await commitBatch();
             }
@@ -514,6 +571,7 @@ jobs:
               `target_start_date=${targetStartDate}`,
               `target_end_date=${targetEndDate}`,
               `target_flt=${targetFlts.length ? targetFlts.join(",") : "*"}`,
+              `owner_uid=${ownerUid}`,
               `dry_run=${dryRun}`,
               `sheet_rows=${sheetRows.length}`,
               `matched_docs=${matched}`,

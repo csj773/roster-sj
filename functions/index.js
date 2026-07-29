@@ -20,6 +20,7 @@ const OWNER_DOC_COLLECTIONS = [
   "pdc",
   "rosterByUser",
   "PaymentsByUser",
+  "PilotlogByUser",
 ];
 
 function ownerDocId(uid) {
