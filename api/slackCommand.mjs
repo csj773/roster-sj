@@ -2109,15 +2109,16 @@ function parseRosterCalendarText(text) {
   let days = 0;
 
   for (const part of parts) {
-    const monthMatch = part.match(/^(\d{4})[-.](\d{1,2})$/);
-    const number = Number.parseInt(part, 10);
+    const token = part.replace(/[\\/.,;:]+$/g, "");
+    const monthMatch = token.match(/^(\d{4})[-.](\d{1,2})$/);
+    const number = Number.parseInt(token, 10);
     if (monthMatch) {
       yearText = monthMatch[1];
       monthText = monthMatch[2].padStart(2, "0");
-    } else if (/^\d{1,3}$/.test(part) && !Number.isNaN(number)) {
+    } else if (/^\d{1,3}$/.test(token) && !Number.isNaN(number)) {
       days = Math.min(Math.max(number, 1), 45);
     } else if (!station) {
-      station = upper(part);
+      station = upper(token);
     }
   }
 
