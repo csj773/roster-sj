@@ -2171,13 +2171,13 @@ function calendarCrewName(item) {
   return cleanText(name.split("@")[0], 80);
 }
 
-function rosterCalendarLine(item) {
+function rosterCalendarLine(item, { includeName = true } = {}) {
   const route = [item.from, item.to].filter(Boolean).join("-");
   const url = rosterEventUrl(item);
-  const name = calendarCrewName(item);
+  const name = includeName ? `${calendarCrewName(item)}  ` : "";
   const timeLabel = calendarTimeLabel(item);
   const time = calendarTime(item);
-  return `${calendarDay(item.date)}  ${name}  ${item.activity} ${route}  ${timeLabel} ${time}  <${url}|Crew 보기>`.trim();
+  return `${calendarDay(item.date)}  ${name}${item.activity} ${route}  ${timeLabel} ${time}  <${url}|Crew 보기>`.trim();
 }
 
 function rosterCalendarResponseText({ station, monthLabel, items }) {
@@ -2205,7 +2205,9 @@ function myRosterResponseText({ station, startDate, days, items }) {
     return `No personal roster found${stationText} from ${startDate} for ${days} day(s).`;
   }
 
-  const lines = items.slice(0, 40).map(rosterCalendarLine);
+  const lines = items
+    .slice(0, 40)
+    .map((item) => rosterCalendarLine(item, { includeName: false }));
   const suffix = items.length > 40 ? `\n…and ${items.length - 40} more` : "";
   return `*My roster${stationText}* (${startDate}, ${days} day(s))\n${lines.join("\n")}${suffix}`;
 }
