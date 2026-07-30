@@ -1,5 +1,7 @@
 # Slack Roster Bot Setup
 
+Korean version: [SLACK_ROSTER_BOT_SETUP_KO.md](SLACK_ROSTER_BOT_SETUP_KO.md)
+
 This MVP adds Slack slash commands for roster sharing and layover lookup.
 
 ## Slack App
