@@ -53,6 +53,8 @@ jobs:
           INPUT_ICAL_URL: ${{ github.event.inputs.ical_roster_url }}
           SECRET_ICAL_URL: ${{ secrets.ICAL_ROSTER_URL }}
           SECRET_WEB_URL: ${{ secrets.WEB_ROSTER_URL }}
+          SECRET_ROSTER_ICAL_URL: ${{ secrets.ROSTER_ICAL_URL }}
+          SECRET_PDC_ICAL_URL: ${{ secrets.PDC_ICAL_ROSTER_URL }}
         run: |
           if [ -n "$INPUT_ICAL_URL" ]; then
             echo "::add-mask::$INPUT_ICAL_URL"
@@ -66,11 +68,29 @@ jobs:
             echo "::add-mask::$SECRET_WEB_URL"
           fi
 
+          if [ -n "$SECRET_ROSTER_ICAL_URL" ]; then
+            echo "::add-mask::$SECRET_ROSTER_ICAL_URL"
+          fi
+
+          if [ -n "$SECRET_PDC_ICAL_URL" ]; then
+            echo "::add-mask::$SECRET_PDC_ICAL_URL"
+          fi
+
+      - name: Check required iCal URL
+        shell: bash
+        env:
+          RESOLVED_ICAL_URL: ${{ github.event.inputs.ical_roster_url || secrets.ICAL_ROSTER_URL || secrets.WEB_ROSTER_URL || secrets.ROSTER_ICAL_URL || secrets.PDC_ICAL_ROSTER_URL }}
+        run: |
+          if [ -z "$RESOLVED_ICAL_URL" ]; then
+            echo "::error::Missing iCal roster URL. For scheduled runs, add one repository secret: ICAL_ROSTER_URL, WEB_ROSTER_URL, ROSTER_ICAL_URL, or PDC_ICAL_ROSTER_URL. For manual runs, provide the ical_roster_url input."
+            exit 1
+          fi
+
       - name: Import iCal roster to pdc
         env:
-          INPUT_ICAL_ROSTER_URL: ${{ github.event.inputs.ical_roster_url || secrets.ICAL_ROSTER_URL || secrets.WEB_ROSTER_URL }}
-          ICAL_ROSTER_URL: ${{ github.event.inputs.ical_roster_url || secrets.ICAL_ROSTER_URL || secrets.WEB_ROSTER_URL }}
-          WEB_ROSTER_URL: ${{ secrets.WEB_ROSTER_URL }}
+          INPUT_ICAL_ROSTER_URL: ${{ github.event.inputs.ical_roster_url || secrets.ICAL_ROSTER_URL || secrets.WEB_ROSTER_URL || secrets.ROSTER_ICAL_URL || secrets.PDC_ICAL_ROSTER_URL }}
+          ICAL_ROSTER_URL: ${{ github.event.inputs.ical_roster_url || secrets.ICAL_ROSTER_URL || secrets.WEB_ROSTER_URL || secrets.ROSTER_ICAL_URL || secrets.PDC_ICAL_ROSTER_URL }}
+          WEB_ROSTER_URL: ${{ secrets.WEB_ROSTER_URL || secrets.ICAL_ROSTER_URL || secrets.ROSTER_ICAL_URL || secrets.PDC_ICAL_ROSTER_URL }}
 
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
