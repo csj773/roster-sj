@@ -106,6 +106,7 @@
       <h2>기본 명령어</h2>
       <pre><code>/roster-share
 /roster-update
+/roster-calendar
 /my-roster
 /layover
 /perdiem-report
@@ -138,6 +139,13 @@
 /layover HNL 2026-07-22 14</code></pre>
       <p><code>/layover</code>는 본인 roster, 공유받은 roster, 같은 Slack team에 등록된 owner들의 roster를 함께 조회합니다.</p>
       <p>검색은 <code>roster</code> collection을 먼저 사용하고, 해당 owner의 roster rows가 없을 때만 <code>pdc/{uid}/events</code>로 fallback합니다.</p>
+
+      <h2>Calendar 형식 조회</h2>
+      <pre><code>/roster-calendar
+/roster-calendar 2026-08
+/roster-calendar HNL 2026-08</code></pre>
+      <p>표시 순서는 <code>08/03 choi sang joon YP152 HNL-ICN RO 23:10 Crew 보기</code> 형식입니다.</p>
+      <p><code>Crew 보기</code>를 누르면 해당 activity의 crew 명단을 볼 수 있습니다.</p>
 
       <h2>Roster Share 초대</h2>
       <pre><code>/roster-share

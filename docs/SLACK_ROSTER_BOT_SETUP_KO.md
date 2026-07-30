@@ -16,6 +16,7 @@ PerDiem report 실행을 사용하는 방법을 정리합니다.
    - `/layover`
    - `/roster-help`
    - `/roster-update`
+   - `/roster-calendar`
 4. 각 command의 request URL을 아래로 설정합니다.
 
 ```text
@@ -145,6 +146,14 @@ Firestore에 저장하지 않습니다.
 ```text
 /layover HNL
 /layover HNL 2026-07-22 14
+```
+
+공유 roster를 calendar 형식으로 조회하고 각 activity의 crew link 보기:
+
+```text
+/roster-calendar
+/roster-calendar 2026-08
+/roster-calendar HNL 2026-08
 ```
 
 본인 roster만 조회:

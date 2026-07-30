@@ -20,6 +20,7 @@ Slack Roster 앱은 Slack command로 roster를 가져오고, 공유된 crew layo
 ```text
 /roster-share
 /roster-update
+/roster-calendar
 /my-roster
 /layover
 /perdiem-report
@@ -130,6 +131,24 @@ roster 검색 대상에 등록됩니다.
 
 검색 순서는 `roster` collection이 우선이고, 해당 owner의 `roster` data가 없으면
 `pdc/{uid}/events` data를 사용합니다.
+
+## Calendar 형식 조회
+
+공유 roster를 한눈에 보기 쉬운 calendar 형식으로 조회합니다.
+
+```text
+/roster-calendar
+/roster-calendar 2026-08
+/roster-calendar HNL 2026-08
+```
+
+표시 순서는 아래와 같습니다.
+
+```text
+08/03  choi sang joon  YP152 HNL-ICN  RO 23:10  <Crew 보기>
+```
+
+`Crew 보기`를 누르면 해당 activity의 crew 명단을 볼 수 있습니다.
 
 ## Roster Share 초대
 

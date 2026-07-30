@@ -14,6 +14,7 @@ This MVP adds Slack slash commands for roster sharing and layover lookup.
    - `/perdiem-report`
    - `/layover`
    - `/roster-update`
+   - `/roster-calendar`
 4. Set each request URL to:
 
 ```text
@@ -139,6 +140,14 @@ Look up shared layover crew:
 ```text
 /layover HNL
 /layover HNL 2026-07-22 14
+```
+
+Show shared roster in calendar style with crew links:
+
+```text
+/roster-calendar
+/roster-calendar 2026-08
+/roster-calendar HNL 2026-08
 ```
 
 Look up only your own roster:

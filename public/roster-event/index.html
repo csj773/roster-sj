@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Roster Crew</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #182026;
+        --muted: #66717c;
+        --line: #dfe5ea;
+        --surface: #f6f8fa;
+        --accent: #0f7b6c;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: var(--surface);
+        color: var(--ink);
+      }
+
+      main {
+        width: min(100%, 560px);
+        background: white;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 28px;
+        box-shadow: 0 18px 50px rgba(24, 32, 38, 0.08);
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 25px;
+        line-height: 1.2;
+        letter-spacing: 0;
+      }
+
+      p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 15px;
+        line-height: 1.55;
+      }
+
+      .route {
+        margin: 18px 0;
+        padding: 14px 16px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfd;
+        font-size: 16px;
+        line-height: 1.55;
+      }
+
+      .label {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      ul {
+        margin: 14px 0 0;
+        padding-left: 22px;
+      }
+
+      li {
+        margin: 6px 0;
+        font-size: 16px;
+        line-height: 1.45;
+      }
+
+      .status {
+        color: var(--muted);
+      }
+
+      .error {
+        color: #995d13;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1 id="title">Crew 확인 중</h1>
+      <p id="subtitle" class="status">Roster event를 불러오고 있습니다.</p>
+      <div class="route" id="route" hidden></div>
+      <div id="crew"></div>
+    </main>
+
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const owner = params.get("owner") || "";
+      const event = params.get("event") || "";
+      const title = document.getElementById("title");
+      const subtitle = document.getElementById("subtitle");
+      const route = document.getElementById("route");
+      const crew = document.getElementById("crew");
+
+      function setError(message) {
+        title.textContent = "Crew 정보를 볼 수 없습니다";
+        subtitle.textContent = message;
+        subtitle.className = "error";
+      }
+
+      function text(value) {
+        return String(value || "").trim();
+      }
+
+      function escapeHtml(value) {
+        return text(value).replace(/[&<>"']/g, (char) => ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;",
+        })[char]);
+      }
+
+      async function loadEvent() {
+        if (!owner || !event) {
+          setError("owner 또는 event 값이 없습니다.");
+          return;
+        }
+
+        try {
+          const response = await fetch(`/api/publicRosterEvent?owner=${encodeURIComponent(owner)}&event=${encodeURIComponent(event)}`);
+          const data = await response.json();
+          if (!response.ok || !data.ok) throw new Error(data.error || "Crew 정보를 불러오지 못했습니다.");
+
+          const item = data.event;
+          const routeText = [item.from, item.to].filter(Boolean).join("-");
+          title.textContent = `${text(item.activity)} ${routeText}`.trim();
+          subtitle.textContent = `${text(item.date)} · STD ${text(item.stdl) || "-"} · STA ${text(item.stal) || "-"}`;
+          route.hidden = false;
+          route.innerHTML = `
+            <div><span class="label">Owner</span><br>${escapeHtml(item.owner)}</div>
+            <div style="margin-top:10px;"><span class="label">Source</span><br>${escapeHtml(item.sourcePath)}</div>
+          `;
+
+          const crewList = Array.isArray(item.crewArray) ? item.crewArray.filter(Boolean) : [];
+          if (!crewList.length) {
+            crew.innerHTML = '<p class="status">저장된 crew 명단이 없습니다.</p>';
+            return;
+          }
+
+          crew.innerHTML = `<p class="label">Crew</p><ul>${crewList.map((name) => `<li>${escapeHtml(name)}</li>`).join("")}</ul>`;
+        } catch (error) {
+          setError(error.message);
+        }
+      }
+
+      loadEvent();
+    </script>
+  </body>
+</html>

@@ -1617,12 +1617,16 @@ async function sharedOwnersFor(uid, command = {}) {
 
 function rosterItem(doc, owner) {
   const data = doc.data();
+  const sourcePath = doc.ref?.path || "";
+  const sourceCollection = sourcePath.split("/")[0] || "";
   const activity = cleanText(data.Activity, 80);
   const crewArray = Array.isArray(data.CrewArray)
     ? data.CrewArray.map((name) => cleanText(name, 40)).filter(Boolean)
     : [];
   return {
     ownerUid: data.owner || owner.uid,
+    eventId: doc.id,
+    sourceCollection,
     crewName: owner.displayName || data.ownerDisplayName || "",
     date: cleanText(data.Date, 20),
     activity,
@@ -1689,6 +1693,31 @@ async function layoverItemsFor(uid, { station, startDate, days }, command = {}) 
   return dedupeRosterItems(nested.flat(), { ignoreTimes: true }).sort((a, b) => {
     const left = `${dateSortKey(a.date)}_${a.stdl}_${a.crewName}_${a.activity}`;
     const right = `${dateSortKey(b.date)}_${b.stdl}_${b.crewName}_${b.activity}`;
+    return left.localeCompare(right);
+  });
+}
+
+async function rosterCalendarItemsFor(uid, { station, startDate, days }, command = {}) {
+  const endDate = addDays(startDate, days - 1);
+  const startKey = dateSortKey(startDate);
+  const endKey = dateSortKey(endDate);
+  const owners = await sharedOwnersFor(uid, command);
+  const nested = await Promise.all(
+    owners.map(async (owner) => {
+      const docs = await ownerRosterDocs(owner.uid);
+      return docs
+        .map((doc) => rosterItem(doc, owner))
+        .filter((item) => item.type === "flight")
+        .filter((item) => {
+          const key = dateSortKey(item.date);
+          return key >= startKey && key <= endKey;
+        })
+        .filter((item) => !station || item.from === station || item.to === station);
+    })
+  );
+  return dedupeRosterItems(nested.flat(), { ignoreTimes: true }).sort((a, b) => {
+    const left = `${dateSortKey(a.date)}_${a.stdl || a.stal}_${a.crewName}_${a.activity}`;
+    const right = `${dateSortKey(b.date)}_${b.stdl || b.stal}_${b.crewName}_${b.activity}`;
     return left.localeCompare(right);
   });
 }
@@ -1864,6 +1893,9 @@ function helpText() {
     "`/roster-share import friend@example.com webcal://...` - link that Slack user to an email owner and import",
     "`/roster-update webcal://...` - shortcut for roster iCal import/update",
     "`/roster-update friend@example.com webcal://...` - shortcut for email owner import/update",
+    "`/roster-calendar` - show shared roster in a calendar-style list",
+    "`/roster-calendar 2026-08` - show shared roster for a month",
+    "`/roster-calendar HNL 2026-08` - filter shared roster by station",
     "`/my-roster` - show only your roster for today + 30 days",
     "`/my-roster HNL 2026-07-22 14` - show only your roster with optional station/date/days",
     "`/perdiem-report` - show your monthly PerDiem report in Slack",
@@ -2065,6 +2097,81 @@ function parseMyRosterText(text) {
   return { station, startDate, days };
 }
 
+function daysInMonth(year, month) {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function parseRosterCalendarText(text) {
+  const parts = cleanText(text, 200).split(/\s+/).filter(Boolean);
+  const today = todaySeoul();
+  let [yearText, monthText] = today.slice(0, 7).split("-");
+  let station = "";
+  let days = 0;
+
+  for (const part of parts) {
+    const monthMatch = part.match(/^(\d{4})[-.](\d{1,2})$/);
+    const number = Number.parseInt(part, 10);
+    if (monthMatch) {
+      yearText = monthMatch[1];
+      monthText = monthMatch[2].padStart(2, "0");
+    } else if (/^\d{1,3}$/.test(part) && !Number.isNaN(number)) {
+      days = Math.min(Math.max(number, 1), 45);
+    } else if (!station) {
+      station = upper(part);
+    }
+  }
+
+  const year = Number(yearText);
+  const month = Number(monthText);
+  return {
+    station,
+    startDate: `${yearText}-${monthText}-01`,
+    days: days || daysInMonth(year, month),
+    monthLabel: `${monthName(month)} ${yearText}`,
+  };
+}
+
+function rosterEventUrl(item) {
+  const params = new URLSearchParams({
+    owner: cleanText(item.ownerUid, 500),
+    event: cleanText(item.eventId, 500),
+  });
+  return `${appBaseUrl()}/roster-event/?${params.toString()}`;
+}
+
+function calendarDay(value) {
+  const key = dateSortKey(value);
+  const match = key.match(/^\d{4}-(\d{2})-(\d{2})$/);
+  return match ? `${match[1]}/${match[2]}` : cleanText(value, 10);
+}
+
+function calendarTimeLabel(item) {
+  return item.to === "ICN" ? "RO" : "STD";
+}
+
+function calendarTime(item) {
+  return item.to === "ICN"
+    ? cleanText(item.stal || item.stdl, 20)
+    : cleanText(item.stdl || item.stal, 20);
+}
+
+function rosterCalendarLine(item) {
+  const route = [item.from, item.to].filter(Boolean).join("-");
+  const url = rosterEventUrl(item);
+  const name = cleanText(item.crewName || item.ownerUid, 80);
+  const timeLabel = calendarTimeLabel(item);
+  const time = calendarTime(item);
+  return `${calendarDay(item.date)}  ${name}  ${item.activity} ${route}  ${timeLabel} ${time}  <${url}|Crew 보기>`.trim();
+}
+
+function rosterCalendarResponseText({ station, monthLabel, items }) {
+  const stationText = station ? ` ${station}` : "";
+  if (!items.length) return `No shared roster found${stationText} for ${monthLabel}.`;
+  const lines = items.slice(0, 40).map(rosterCalendarLine);
+  const suffix = items.length > 40 ? `\n…and ${items.length - 40} more` : "";
+  return `*${monthLabel} Shared Roster${stationText}*\n${lines.join("\n")}${suffix}`;
+}
+
 function rosterLine(item, { includeName = false } = {}) {
   const route = [item.from, item.to].filter(Boolean).join("-");
   const time = item.stdl || item.stal || "";
@@ -2165,6 +2272,37 @@ async function handleMyRoster(command) {
   };
 }
 
+async function handleRosterCalendar(command) {
+  const firebaseUid = await linkedFirebaseUid(command, { allowDefault: true });
+  console.log("ROSTER_CALENDAR_OWNER_RESOLVED", {
+    teamId: command.teamId,
+    userId: command.userId,
+    firebaseUid: firebaseUid || "",
+  });
+
+  if (!firebaseUid || firebaseUid.startsWith("guest_")) {
+    return {
+      response_type: "ephemeral",
+      text: `${notLinkedText(command)}\n\nUse \`/roster-share link-me\` first, then run \`/roster-calendar\`.`,
+    };
+  }
+
+  const parsed = parseRosterCalendarText(command.text);
+  const items = await rosterCalendarItemsFor(firebaseUid, parsed, command);
+  console.log("ROSTER_CALENDAR_RESULT", {
+    firebaseUid,
+    station: parsed.station || "",
+    startDate: parsed.startDate,
+    days: parsed.days,
+    itemCount: items.length,
+  });
+
+  return {
+    response_type: "ephemeral",
+    text: rosterCalendarResponseText({ ...parsed, items }),
+  };
+}
+
 async function handlePerDiemReport(command) {
   const parsed = parsePerDiemReportText(command.text);
   if (["set-email", "setemail", "email"].includes(parsed.action)) {
@@ -2228,6 +2366,7 @@ async function handleCommand(command) {
   }
   if (commandName === "/roster-share") return handleRosterShare(command);
   if (commandName === "/roster-update") return handleRosterImport(command);
+  if (commandName === "/roster-calendar") return handleRosterCalendar(command);
   if (commandName === "/my-roster") return handleMyRoster(command);
   if (commandName === "/perdiem-report") return handlePerDiemReport(command);
   if (commandName === "/layover") return handleLayover(command);
