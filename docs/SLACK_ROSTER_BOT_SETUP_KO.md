@@ -1,5 +1,7 @@
 # Slack Roster Bot 설정
 
+사용자용 가이드: [SLACK_ROSTER_APP_USER_GUIDE_KO.md](SLACK_ROSTER_APP_USER_GUIDE_KO.md)
+
 이 문서는 Slack slash command로 roster 공유, iCal import, layover 조회,
 PerDiem report 실행을 사용하는 방법을 정리합니다.
 
