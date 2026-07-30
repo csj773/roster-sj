@@ -13,6 +13,7 @@ This MVP adds Slack slash commands for roster sharing and layover lookup.
    - `/my-roster`
    - `/perdiem-report`
    - `/layover`
+   - `/roster-update`
 4. Set each request URL to:
 
 ```text
@@ -93,6 +94,7 @@ Import a personal iCal roster link without using FlutterFlow:
 
 ```text
 /roster-share import webcal://your-private-calendar-url
+/roster-update webcal://your-private-calendar-url
 ```
 
 Import and automatically link the current Slack user to an email-based roster
@@ -100,6 +102,7 @@ owner:
 
 ```text
 /roster-share import friend@example.com webcal://your-private-calendar-url
+/roster-update friend@example.com webcal://your-private-calendar-url
 ```
 
 The following words are treated as the same import action:

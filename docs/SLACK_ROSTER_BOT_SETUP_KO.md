@@ -15,6 +15,7 @@ PerDiem report 실행을 사용하는 방법을 정리합니다.
    - `/perdiem-report`
    - `/layover`
    - `/roster-help`
+   - `/roster-update`
 4. 각 command의 request URL을 아래로 설정합니다.
 
 ```text
@@ -94,12 +95,14 @@ FlutterFlow를 거치지 않고 개인 iCal roster link import:
 
 ```text
 /roster-share import webcal://your-private-calendar-url
+/roster-update webcal://your-private-calendar-url
 ```
 
 email owner로 roster import하고 현재 Slack user와 자동 연결:
 
 ```text
 /roster-share import friend@example.com webcal://your-private-calendar-url
+/roster-update friend@example.com webcal://your-private-calendar-url
 ```
 
 아래 단어들은 모두 같은 import action으로 처리됩니다.

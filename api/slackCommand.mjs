@@ -1862,6 +1862,8 @@ function helpText() {
     "`/roster-share link-me` - link your Slack user to the default Firebase roster user",
     "`/roster-share import webcal://...` - import your personal iCal roster privately",
     "`/roster-share import friend@example.com webcal://...` - link that Slack user to an email owner and import",
+    "`/roster-update webcal://...` - shortcut for roster iCal import/update",
+    "`/roster-update friend@example.com webcal://...` - shortcut for email owner import/update",
     "`/my-roster` - show only your roster for today + 30 days",
     "`/my-roster HNL 2026-07-22 14` - show only your roster with optional station/date/days",
     "`/perdiem-report` - show your monthly PerDiem report in Slack",
@@ -2225,6 +2227,7 @@ async function handleCommand(command) {
     return { response_type: "ephemeral", text: helpText() };
   }
   if (commandName === "/roster-share") return handleRosterShare(command);
+  if (commandName === "/roster-update") return handleRosterImport(command);
   if (commandName === "/my-roster") return handleMyRoster(command);
   if (commandName === "/perdiem-report") return handlePerDiemReport(command);
   if (commandName === "/layover") return handleLayover(command);

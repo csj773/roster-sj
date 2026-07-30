@@ -19,6 +19,7 @@ Slack Roster 앱은 Slack command로 roster를 가져오고, 공유된 crew layo
 
 ```text
 /roster-share
+/roster-update
 /my-roster
 /layover
 /perdiem-report
@@ -55,12 +56,14 @@ Slack Roster 앱은 Slack command로 roster를 가져오고, 공유된 crew layo
 
 ```text
 /roster-share import webcal://your-private-calendar-url
+/roster-update webcal://your-private-calendar-url
 ```
 
 다른 사용자의 email owner로 가져오려면 email을 같이 입력합니다.
 
 ```text
 /roster-share import friend@example.com webcal://your-private-calendar-url
+/roster-update friend@example.com webcal://your-private-calendar-url
 ```
 
 `import` 대신 아래 단어도 사용할 수 있습니다.
@@ -76,6 +79,7 @@ webcal
 
 ```text
 /roster-share sync friend@example.com webcal://your-private-calendar-url
+/roster-update friend@example.com webcal://your-private-calendar-url
 ```
 
 import가 성공하면 해당 사용자의 roster가 Firestore에 저장되고, 같은 Slack team의

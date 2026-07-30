@@ -105,6 +105,7 @@
 
       <h2>기본 명령어</h2>
       <pre><code>/roster-share
+/roster-update
 /my-roster
 /layover
 /perdiem-report
@@ -119,9 +120,11 @@
 
       <h2>Roster 가져오기</h2>
       <p>개인 iCal roster link를 Slack에서 import합니다.</p>
-      <pre><code>/roster-share import webcal://your-private-calendar-url</code></pre>
+      <pre><code>/roster-share import webcal://your-private-calendar-url
+/roster-update webcal://your-private-calendar-url</code></pre>
       <p>다른 사용자의 email owner로 import하려면 email을 같이 입력합니다.</p>
-      <pre><code>/roster-share import friend@example.com webcal://your-private-calendar-url</code></pre>
+      <pre><code>/roster-share import friend@example.com webcal://your-private-calendar-url
+/roster-update friend@example.com webcal://your-private-calendar-url</code></pre>
       <p><code>import</code>, <code>sync</code>, <code>link</code>, <code>ical</code>, <code>webcal</code>은 같은 import action으로 처리됩니다.</p>
 
       <h2>내 Roster 조회</h2>
