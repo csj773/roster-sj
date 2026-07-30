@@ -1654,11 +1654,11 @@ async function ownerRosterDocs(ownerUid) {
     rosterCount: rosterSnapshot.size,
     pdcEventCount: pdcEventsSnapshot.size,
     pdcPath: `${PDC_COLLECTION}/${ownerDocId}/events`,
-    source: pdcEventsSnapshot.empty ? "roster_fallback" : "pdc_events",
+    source: rosterSnapshot.empty ? "pdc_events_fallback" : "roster",
   });
 
-  if (!pdcEventsSnapshot.empty) return pdcEventsSnapshot.docs;
-  return rosterSnapshot.docs;
+  if (!rosterSnapshot.empty) return rosterSnapshot.docs;
+  return pdcEventsSnapshot.docs;
 }
 
 async function layoverItemsFor(uid, { station, startDate, days }, command = {}) {

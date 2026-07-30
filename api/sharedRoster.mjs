@@ -12,6 +12,10 @@ const SHARE_COLLECTION = "roster_shares";
 const ROSTER_COLLECTION = "roster";
 const PDC_COLLECTION = "pdc";
 const SHARE_ROSTER_COLLECTIONS = [ROSTER_COLLECTION, PDC_COLLECTION];
+const SOURCE_PRIORITY = {
+  [ROSTER_COLLECTION]: 0,
+  [PDC_COLLECTION]: 1,
+};
 const DEFAULT_DAYS = 14;
 const MAX_DAYS = 45;
 
@@ -222,6 +226,7 @@ async function rosterForOwner(
     .map((item) => ({
       ...item,
       sourceCollection: collectionName,
+      sourcePriority: SOURCE_PRIORITY[collectionName] ?? 99,
       relation: owner.relation,
       shareScope: owner.scope,
     }));
@@ -366,11 +371,11 @@ export default async function handler(req, res) {
     const items = dedupeRosterItems(nested.flat()).sort((a, b) => {
       const left =
         `${dateSortKey(a.date)}_${a.cil || a.stdl || ""}_` +
-        `${a.crewName}_${a.activity}`;
+        `${a.sourcePriority ?? 99}_${a.crewName}_${a.activity}`;
 
       const right =
         `${dateSortKey(b.date)}_${b.cil || b.stdl || ""}_` +
-        `${b.crewName}_${b.activity}`;
+        `${b.sourcePriority ?? 99}_${b.crewName}_${b.activity}`;
 
       return left.localeCompare(right);
     });
