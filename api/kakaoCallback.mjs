@@ -106,7 +106,9 @@ if (window.opener && !window.opener.closed) {
   window.close();
 } else {
   const target = new URL(${JSON.stringify(returnTo)});
-  target.hash = 'kakaoAuth=' + encodeURIComponent(JSON.stringify(message));
+  const encodedMessage = encodeURIComponent(JSON.stringify(message));
+  target.searchParams.set('kakaoAuth', encodedMessage);
+  target.hash = 'kakaoAuth=' + encodedMessage;
   window.location.replace(target.toString());
 }
 </script>
