@@ -49,6 +49,35 @@ function hashText(value) {
   return crypto.createHash("sha256").update(String(value || "")).digest("hex");
 }
 
+const PDC_HASH_SKIP_FIELDS = new Set([
+  "createdAt",
+  "importedAt",
+  "rewrittenAt",
+  "updatedAt",
+  "sourceHash",
+  "sourceHashUpdatedAt",
+]);
+
+function stableHashValue(value) {
+  if (value == null) return null;
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(stableHashValue);
+  if (typeof value === "object") {
+    return Object.fromEntries(Object.keys(value)
+      .filter((key) => !PDC_HASH_SKIP_FIELDS.has(key))
+      .sort()
+      .map((key) => [key, stableHashValue(value[key])]));
+  }
+  return value;
+}
+
+function sourceHashForDocEntries(entries) {
+  const stableEntries = entries
+    .map(({ id, data }) => ({ id, data: stableHashValue(data) }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  return hashText(JSON.stringify(stableEntries));
+}
+
 function ownerPdcDocId(ownerUid) {
   return cleanText(ownerUid, 500).replace(/\//g, "_") || "unknown_owner";
 }
@@ -787,9 +816,24 @@ async function uploadPdcDocs(db, owner, docs) {
 
   const uniqueDocs = applyPerDiemMarkers(dedupeImportDocs(docs));
 
+  const ownerRef = db.collection(PDC_COLLECTION).doc(ownerPdcDocId(ownerUid));
+  const docEntries = uniqueDocs.map((docData) => ({
+    id: pdcEventDocId(docData),
+    data: docData,
+  }));
+  const sourceHash = sourceHashForDocEntries(docEntries);
+  const ownerSnapshot = await ownerRef.get();
+  if (ownerSnapshot.exists && ownerSnapshot.get("sourceHash") === sourceHash) {
+    return {
+      deleted: 0,
+      imported: docEntries.length,
+      skippedDuplicates: docs.length - uniqueDocs.length,
+      skippedRewrite: true,
+    };
+  }
+
   // 사용자별 rewrite: 해당 owner의 기존 Per Diem/PDC 자료만 먼저 삭제합니다.
   const deleted = await deleteExistingOwnerPdcDocs(db, ownerUid);
-  const ownerRef = db.collection(PDC_COLLECTION).doc(ownerPdcDocId(ownerUid));
 
   const operations = [];
   operations.push((batch) => batch.set(ownerRef, {
@@ -799,12 +843,13 @@ async function uploadPdcDocs(db, owner, docs) {
     pdc_user_name: owner.displayName || "",
     email: owner.email || "",
     source: SLACK_ICAL_SOURCE,
+    sourceHash,
+    sourceHashUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
     rewrittenAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   }, { merge: true }));
 
-  for (const docData of uniqueDocs) {
-    const eventId = pdcEventDocId(docData);
+  for (const { id: eventId, data: docData } of docEntries) {
     const eventRef = ownerRef.collection("events").doc(eventId);
     const mirrorRef = db.collection(PDC_FLAT_MIRROR_COLLECTION).doc(eventId);
     // owner별 하위 컬렉션을 원본으로 유지하고, FlutterFlow용 최상위 mirror도 같이 저장합니다.
@@ -979,6 +1024,7 @@ async function main() {
   console.log(`PDC_IMPORTED=${pdcResult.imported}`);
   console.log(`PDC_REMOVED_PREVIOUS=${pdcResult.deleted}`);
   console.log(`PDC_SKIPPED_DUPLICATES=${pdcResult.skippedDuplicates}`);
+  console.log(`PDC_SKIPPED_REWRITE=${pdcResult.skippedRewrite ? "true" : "false"}`);
 
   // 2) 같은 Roster를 Perdiem/{uid}/events에 owner 단위로 rewrite합니다.
   const perDiemResult = await rewriteImportedPerDiem(db, finalRosterDocs, owner);

@@ -740,6 +740,35 @@ function sleep(ms) {
     ].map(value => String(value || "").trim().toUpperCase()).join("|");
   }
 
+  const ROSTER_HASH_SKIP_FIELDS = new Set([
+    "createdAt",
+    "importedAt",
+    "rewrittenAt",
+    "updatedAt",
+    "sourceHash",
+    "sourceHashUpdatedAt",
+  ]);
+
+  function stableHashValue(value) {
+    if (value == null) return null;
+    if (value instanceof Date) return value.toISOString();
+    if (Array.isArray(value)) return value.map(stableHashValue);
+    if (typeof value === "object") {
+      return Object.fromEntries(Object.keys(value)
+        .filter((key) => !ROSTER_HASH_SKIP_FIELDS.has(key))
+        .sort()
+        .map((key) => [key, stableHashValue(value[key])]));
+    }
+    return value;
+  }
+
+  function sourceHashForDocEntries(entries) {
+    const stableEntries = entries
+      .map(({ id, data }) => ({ id, data: stableHashValue(data) }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+    return crypto.createHash("sha256").update(JSON.stringify(stableEntries)).digest("hex");
+  }
+
   async function commitBatchOperations(db, operations, chunkSize = 400) {
     for (let index = 0; index < operations.length; index += chunkSize) {
       const batch = db.batch();
@@ -753,11 +782,29 @@ function sleep(ms) {
     const owner = docs[0]?.owner || firestoreAdminUid || "";
     if (!owner) throw new Error("Roster rewrite requires owner uid");
 
+    const uniqueDocs = new Map();
+    for (const docData of docs) uniqueDocs.set(rosterDedupeKey(docData), docData);
+
+    const ownerRef = db.collection(rosterByUserCollection).doc(owner);
+    const ownerEventsRef = ownerRef.collection("events");
+    const docEntries = [...uniqueDocs.values()].map((docData) => ({
+      id: rosterDocId(docData),
+      data: docData,
+    }));
+    const sourceHash = sourceHashForDocEntries(docEntries);
+    const ownerSnapshot = await ownerRef.get();
+    if (ownerSnapshot.exists && ownerSnapshot.get("sourceHash") === sourceHash) {
+      console.log(
+        `✅ Roster Firestore rewrite skip ` +
+        `(owner=${owner}, 입력 ${docs.length}건, 고유 ${uniqueDocs.size}건, sourceHash 동일)`
+      );
+      console.log(`ROSTER_BY_USER_STORAGE_PATH=${rosterByUserCollection}/${owner}/events`);
+      return;
+    }
+
     const existingSnapshot = await db.collection(collectionName)
       .where("owner", "==", owner)
       .get();
-    const ownerRef = db.collection(rosterByUserCollection).doc(owner);
-    const ownerEventsRef = ownerRef.collection("events");
     const existingOwnerEventsSnapshot = await ownerEventsRef.get();
     await commitBatchOperations(
       db,
@@ -767,23 +814,21 @@ function sleep(ms) {
       ]
     );
 
-    const uniqueDocs = new Map();
-    for (const docData of docs) uniqueDocs.set(rosterDedupeKey(docData), docData);
-
     const writes = [
       batch => batch.set(ownerRef, {
         owner,
         uid: owner,
         source: "roster_js",
         eventCount: uniqueDocs.size,
+        sourceHash,
+        sourceHashUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
         rewrittenAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true }),
     ];
-    for (const docData of uniqueDocs.values()) {
-      const docId = rosterDocId(docData);
-      writes.push(batch => batch.set(db.collection(collectionName).doc(docId), docData, { merge: false }));
-      writes.push(batch => batch.set(ownerEventsRef.doc(docId), docData, { merge: false }));
+    for (const { id, data } of docEntries) {
+      writes.push(batch => batch.set(db.collection(collectionName).doc(id), data, { merge: false }));
+      writes.push(batch => batch.set(ownerEventsRef.doc(id), data, { merge: false }));
     }
     await commitBatchOperations(db, writes);
 

@@ -453,6 +453,35 @@ function buildPerDiemDedupeKey(item) {
   ].join("|");
 }
 
+const PERDIEM_HASH_SKIP_FIELDS = new Set([
+  "createdAt",
+  "importedAt",
+  "rewrittenAt",
+  "updatedAt",
+  "sourceHash",
+  "sourceHashUpdatedAt",
+]);
+
+function stableHashValue(value) {
+  if (value == null) return null;
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(stableHashValue);
+  if (typeof value === "object") {
+    return Object.fromEntries(Object.keys(value)
+      .filter((key) => !PERDIEM_HASH_SKIP_FIELDS.has(key))
+      .sort()
+      .map((key) => [key, stableHashValue(value[key])]));
+  }
+  return value;
+}
+
+function sourceHashForDocEntries(entries) {
+  const stableEntries = entries
+    .map(({ id, data }) => ({ id, data: stableHashValue(data) }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  return crypto.createHash("sha256").update(JSON.stringify(stableEntries)).digest("hex");
+}
+
 function buildPerDiemSheetRow(item, id, ownerOverride = "") {
   const owner = resolvePerDiemOwner(
     item.Owner ||
@@ -591,23 +620,6 @@ export async function uploadPerDiemFirestore(perdiemList, ownerOverride = "") {
   const legacyEventRef = ownerRef.collection("event");
   const now = admin.firestore.FieldValue.serverTimestamp();
 
-  const existingSnapshot = await eventsRef.get();
-  const legacySnapshot = await legacyEventRef.get();
-  const deleted = await commitDeleteRefs(db, [
-    ...existingSnapshot.docs,
-    ...legacySnapshot.docs,
-  ].map((doc) => doc.ref));
-  const deletedFlat = await deleteFlatPerDiemRowsForOwner(db, owner);
-  const deletedMirror = await deletePerDiemMirrorRowsForOwner(db, owner);
-
-  await ownerRef.set({
-    owner,
-    uid: owner,
-    source: "roster_perdiem",
-    rewrittenAt: now,
-    updatedAt: now,
-  }, { merge: true });
-
   // 입력 목록 자체의 중복을 먼저 제거한다.
   const uniqueItems = new Map();
   for (const rawItem of perdiemList) {
@@ -636,6 +648,37 @@ export async function uploadPerDiemFirestore(perdiemList, ownerOverride = "") {
     id: `${safeDocIdPart(owner)}_${id}`,
     data,
   }));
+
+  const sourceHash = sourceHashForDocEntries(writes);
+  const ownerSnapshot = await ownerRef.get();
+  if (ownerSnapshot.exists && ownerSnapshot.get("sourceHash") === sourceHash) {
+    console.log(
+      `✅ Firestore PerDiem rewrite skip ` +
+      `(owner=${owner}, 입력 ${perdiemList.length}건, 고유 ${uniqueItems.size}건, sourceHash 동일)`
+    );
+    console.log(`PERDIEM_STORAGE_PATH=Perdiem/${owner}/events`);
+    console.log(`PERDIEM_FLAT_MIRROR_PATH=${PERDIEM_FLAT_MIRROR_COLLECTION}`);
+    return { skipped: true, written: writes.length, skippedDuplicates: perdiemList.length - uniqueItems.size };
+  }
+
+  const existingSnapshot = await eventsRef.get();
+  const legacySnapshot = await legacyEventRef.get();
+  const deleted = await commitDeleteRefs(db, [
+    ...existingSnapshot.docs,
+    ...legacySnapshot.docs,
+  ].map((doc) => doc.ref));
+  const deletedFlat = await deleteFlatPerDiemRowsForOwner(db, owner);
+  const deletedMirror = await deletePerDiemMirrorRowsForOwner(db, owner);
+
+  await ownerRef.set({
+    owner,
+    uid: owner,
+    source: "roster_perdiem",
+    sourceHash,
+    sourceHashUpdatedAt: now,
+    rewrittenAt: now,
+    updatedAt: now,
+  }, { merge: true });
 
   const saved = await commitPerDiemRewrite(eventsRef, writes);
   await commitPerDiemRewrite(db.collection(PERDIEM_FLAT_MIRROR_COLLECTION), mirrorWrites);

@@ -524,6 +524,35 @@ function perDiemDocId(owner, item) {
   ].join("|")).digest("hex");
 }
 
+const PERDIEM_HASH_SKIP_FIELDS = new Set([
+  "createdAt",
+  "importedAt",
+  "rewrittenAt",
+  "updatedAt",
+  "sourceHash",
+  "sourceHashUpdatedAt",
+]);
+
+function stableHashValue(value) {
+  if (value == null) return null;
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(stableHashValue);
+  if (typeof value === "object") {
+    return Object.fromEntries(Object.keys(value)
+      .filter((key) => !PERDIEM_HASH_SKIP_FIELDS.has(key))
+      .sort()
+      .map((key) => [key, stableHashValue(value[key])]));
+  }
+  return value;
+}
+
+function sourceHashForDocEntries(entries) {
+  const stableEntries = entries
+    .map(({ id, data }) => ({ id, data: stableHashValue(data) }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  return crypto.createHash("sha256").update(JSON.stringify(stableEntries)).digest("hex");
+}
+
 async function commitDeleteRefs(db, refs) {
   let deleted = 0;
   for (let index = 0; index < refs.length; index += 400) {
@@ -599,34 +628,11 @@ export async function rewriteUserPerDiem(
   const eventsRef = ownerRef.collection("events");
   const mirrorRef = db.collection(PERDIEM_FLAT_MIRROR_COLLECTION);
 
-  const existingSnapshot = await eventsRef.get();
-  const legacyEventSnapshot = await ownerRef.collection("event").get();
-
-  const deleted = await commitDeleteRefs(
-    db,
-    [
-      ...existingSnapshot.docs,
-      ...legacyEventSnapshot.docs,
-    ].map((doc) => doc.ref)
-  );
-  const deletedFlat = await deleteFlatPerDiemRowsForOwner(db, collectionName, resolvedOwner);
-  const deletedMirror = await deletePerDiemMirrorRowsForOwner(db, resolvedOwner);
-
   const now = admin.firestore.FieldValue.serverTimestamp();
   const resolvedUid = cleanOwnerValue(uid || resolvedOwner);
   const resolvedUserId = cleanOwnerValue(userId || uid || resolvedOwner);
   const resolvedEmail = cleanOwnerValue(email, 240);
   const resolvedDisplayName = cleanOwnerValue(displayName, 200);
-
-  await ownerRef.set({
-    owner: resolvedOwner,
-    uid: resolvedUid,
-    userId: resolvedUserId,
-    email: resolvedEmail,
-    display_name: resolvedDisplayName,
-    pdc_user_name: resolvedDisplayName,
-    updatedAt: now,
-  }, { merge: true });
 
   const writes = normalizedRows.map((item) => ({
     id: perDiemDocId(resolvedOwner, item),
@@ -642,6 +648,47 @@ export async function rewriteUserPerDiem(
       importedAt: now,
     },
   }));
+
+  const sourceHash = sourceHashForDocEntries(writes);
+  const ownerSnapshot = await ownerRef.get();
+  if (ownerSnapshot.exists && ownerSnapshot.get("sourceHash") === sourceHash) {
+    return {
+      owner: resolvedOwner,
+      collectionName,
+      storagePath: `${collectionName}/${resolvedOwner}/events`,
+      deleted: 0,
+      deletedFlat: 0,
+      deletedMirror: 0,
+      written: writes.length,
+      skippedDuplicates: (perdiemList || []).length - normalizedRows.length,
+      skippedRewrite: true,
+    };
+  }
+
+  const existingSnapshot = await eventsRef.get();
+  const legacyEventSnapshot = await ownerRef.collection("event").get();
+
+  const deleted = await commitDeleteRefs(
+    db,
+    [
+      ...existingSnapshot.docs,
+      ...legacyEventSnapshot.docs,
+    ].map((doc) => doc.ref)
+  );
+  const deletedFlat = await deleteFlatPerDiemRowsForOwner(db, collectionName, resolvedOwner);
+  const deletedMirror = await deletePerDiemMirrorRowsForOwner(db, resolvedOwner);
+
+  await ownerRef.set({
+    owner: resolvedOwner,
+    uid: resolvedUid,
+    userId: resolvedUserId,
+    email: resolvedEmail,
+    display_name: resolvedDisplayName,
+    pdc_user_name: resolvedDisplayName,
+    sourceHash,
+    sourceHashUpdatedAt: now,
+    updatedAt: now,
+  }, { merge: true });
 
   const written = await commitPerDiemWrites(eventsRef, writes);
   await commitPerDiemWrites(mirrorRef, writes);

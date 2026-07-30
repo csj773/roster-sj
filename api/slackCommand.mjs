@@ -944,6 +944,35 @@ function hashText(value) {
   return crypto.createHash("sha256").update(String(value || "")).digest("hex");
 }
 
+const PDC_HASH_SKIP_FIELDS = new Set([
+  "createdAt",
+  "importedAt",
+  "rewrittenAt",
+  "updatedAt",
+  "sourceHash",
+  "sourceHashUpdatedAt",
+]);
+
+function stableHashValue(value) {
+  if (value == null) return null;
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(stableHashValue);
+  if (typeof value === "object") {
+    return Object.fromEntries(Object.keys(value)
+      .filter((key) => !PDC_HASH_SKIP_FIELDS.has(key))
+      .sort()
+      .map((key) => [key, stableHashValue(value[key])]));
+  }
+  return value;
+}
+
+function sourceHashForDocEntries(entries) {
+  const stableEntries = entries
+    .map(({ id, data }) => ({ id, data: stableHashValue(data) }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  return hashText(JSON.stringify(stableEntries));
+}
+
 function ownerPdcDocId(ownerUid) {
   return cleanText(ownerUid, 500).replace(/\//g, "_") || "unknown_owner";
 }
@@ -1327,13 +1356,28 @@ async function fetchIcsCalendar(calendarUrl) {
 
 async function uploadImportedRosterToPdc(docs) {
   const uniqueDocs = dedupeImportedRosterDocs(docs);
+  const owner = cleanText(uniqueDocs[0]?.owner, 500);
+  const ownerRef = db().collection(PDC_COLLECTION).doc(ownerPdcDocId(owner));
+  const docEntries = uniqueDocs.map((docData) => ({
+    id: pdcEventDocId(docData),
+    data: docData,
+  }));
+  const sourceHash = sourceHashForDocEntries(docEntries);
+  const ownerSnapshot = await ownerRef.get();
+  if (ownerSnapshot.exists && ownerSnapshot.get("sourceHash") === sourceHash) {
+    return {
+      deleted: 0,
+      imported: docEntries.length,
+      skippedDuplicates: docs.length - uniqueDocs.length,
+      skippedRewrite: true,
+    };
+  }
+
   let deleted = await deleteExistingOwnerPdcDocs(uniqueDocs);
   let imported = 0;
 
-  for (const docData of uniqueDocs) {
+  for (const { id: eventId, data: docData } of docEntries) {
     const batch = db().batch();
-    const ownerRef = db().collection(PDC_COLLECTION).doc(ownerPdcDocId(docData.owner));
-    const eventId = pdcEventDocId(docData);
     const eventRef = ownerRef.collection("events").doc(eventId);
     const mirrorRef = db().collection(PDC_FLAT_MIRROR_COLLECTION).doc(eventId);
     batch.set(ownerRef, {
@@ -1343,6 +1387,8 @@ async function uploadImportedRosterToPdc(docs) {
       pdc_user_name: docData.pdc_user_name || "",
       email: docData.email || "",
       source: SLACK_ICAL_SOURCE,
+      sourceHash,
+      sourceHashUpdatedAt: nowTimestamp(),
       rewrittenAt: nowTimestamp(),
       updatedAt: nowTimestamp(),
     }, { merge: true });
@@ -1352,7 +1398,7 @@ async function uploadImportedRosterToPdc(docs) {
     imported += 1;
   }
 
-  return { deleted, imported, skippedDuplicates: docs.length - uniqueDocs.length };
+  return { deleted, imported, skippedDuplicates: docs.length - uniqueDocs.length, skippedRewrite: false };
 }
 
 function importedPdcDocToRosterRow(doc) {
@@ -1972,9 +2018,11 @@ async function handleRosterImport(command) {
 
   const result = await uploadImportedRosterToPdc(docs);
   const perdiemResult = await rewriteImportedPerDiem(docs, { uid: firebaseUid, ...owner });
+  const pdcAction = result.skippedRewrite ? "Skipped unchanged pdc rewrite" : "Rewrote pdc for this owner";
+  const perdiemAction = perdiemResult.skippedRewrite ? "Skipped unchanged Perdiem rewrite" : "Rewrote Perdiem";
   return {
     response_type: "ephemeral",
-    text: `Roster iCal import complete. Rewrote pdc for this owner: saved ${result.imported} event(s), removed ${result.deleted} previous owner event(s), skipped ${result.skippedDuplicates} duplicate event(s). Rewrote Perdiem: saved ${perdiemResult.written} event(s), removed ${perdiemResult.deleted} previous event(s), skipped ${perdiemResult.skippedDuplicates} duplicate event(s).`,
+    text: `Roster iCal import complete. ${pdcAction}: saved ${result.imported} event(s), removed ${result.deleted} previous owner event(s), skipped ${result.skippedDuplicates} duplicate event(s). ${perdiemAction}: saved ${perdiemResult.written} event(s), removed ${perdiemResult.deleted} previous event(s), skipped ${perdiemResult.skippedDuplicates} duplicate event(s).`,
   };
 }
 
