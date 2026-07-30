@@ -2150,15 +2150,30 @@ function calendarTimeLabel(item) {
 }
 
 function calendarTime(item) {
-  return item.to === "ICN"
+  return formatCalendarTime(item.to === "ICN"
     ? cleanText(item.stal || item.stdl, 20)
-    : cleanText(item.stdl || item.stal, 20);
+    : cleanText(item.stdl || item.stal, 20));
+}
+
+function formatCalendarTime(value) {
+  const text = cleanText(value, 20);
+  const fourDigit = text.match(/^(\d{2})(\d{2})$/);
+  if (fourDigit) return `${fourDigit[1]}:${fourDigit[2]}`;
+  const threeDigit = text.match(/^(\d)(\d{2})$/);
+  if (threeDigit) return `0${threeDigit[1]}:${threeDigit[2]}`;
+  return text;
+}
+
+function calendarCrewName(item) {
+  const name = cleanText(item.crewName || item.ownerUid, 80);
+  if (!name.includes("@")) return name;
+  return cleanText(name.split("@")[0], 80);
 }
 
 function rosterCalendarLine(item) {
   const route = [item.from, item.to].filter(Boolean).join("-");
   const url = rosterEventUrl(item);
-  const name = cleanText(item.crewName || item.ownerUid, 80);
+  const name = calendarCrewName(item);
   const timeLabel = calendarTimeLabel(item);
   const time = calendarTime(item);
   return `${calendarDay(item.date)}  ${name}  ${item.activity} ${route}  ${timeLabel} ${time}  <${url}|Crew 보기>`.trim();
