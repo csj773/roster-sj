@@ -681,6 +681,9 @@ function importEmailArg(commandText) {
 async function dispatchIcalImportWorkflow({ calendarUrl, firebaseUid, owner }) {
   const token = process.env.GITHUB_TOKEN || "";
   if (!token) return { dispatched: false };
+  if (!calendarUrl) {
+    throw new Error("Slack iCal import requires the user's personal iCal URL.");
+  }
 
   const repo = process.env.GITHUB_REPO || DEFAULT_GITHUB_REPO;
   const ref = process.env.GITHUB_REF || DEFAULT_GITHUB_REF;
@@ -701,6 +704,7 @@ async function dispatchIcalImportWorkflow({ calendarUrl, firebaseUid, owner }) {
         current_user_uid: firebaseUid,
         current_user_email: owner.email || "",
         pdc_user_name: owner.displayName || "",
+        import_source: "slack",
       },
     }),
   });

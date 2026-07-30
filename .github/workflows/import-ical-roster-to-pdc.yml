@@ -25,6 +25,11 @@ on:
         required: false
         type: string
 
+      import_source:
+        description: "Internal caller marker. Slack imports must provide ical_roster_url and cannot fall back to repository secrets."
+        required: false
+        type: string
+
 permissions:
   contents: read
 
@@ -79,18 +84,33 @@ jobs:
       - name: Check required iCal URL
         shell: bash
         env:
-          RESOLVED_ICAL_URL: ${{ github.event.inputs.ical_roster_url || secrets.ICAL_ROSTER_URL || secrets.WEB_ROSTER_URL || secrets.ROSTER_ICAL_URL || secrets.PDC_ICAL_ROSTER_URL }}
+          INPUT_ICAL_URL: ${{ github.event.inputs.ical_roster_url }}
+          IMPORT_SOURCE: ${{ github.event.inputs.import_source }}
+          SECRET_ICAL_URL: ${{ secrets.ICAL_ROSTER_URL }}
+          SECRET_WEB_URL: ${{ secrets.WEB_ROSTER_URL }}
+          SECRET_ROSTER_ICAL_URL: ${{ secrets.ROSTER_ICAL_URL }}
+          SECRET_PDC_ICAL_URL: ${{ secrets.PDC_ICAL_ROSTER_URL }}
         run: |
+          if [ "$IMPORT_SOURCE" = "slack" ] && [ -z "$INPUT_ICAL_URL" ]; then
+            echo "::error::Slack roster imports must include the user's personal iCal URL. Repository secret fallback is disabled for Slack imports."
+            exit 1
+          fi
+
+          RESOLVED_ICAL_URL="${INPUT_ICAL_URL:-${SECRET_ICAL_URL:-${SECRET_WEB_URL:-${SECRET_ROSTER_ICAL_URL:-$SECRET_PDC_ICAL_URL}}}}"
           if [ -z "$RESOLVED_ICAL_URL" ]; then
             echo "::error::Missing iCal roster URL. For scheduled runs, add one repository secret: ICAL_ROSTER_URL, WEB_ROSTER_URL, ROSTER_ICAL_URL, or PDC_ICAL_ROSTER_URL. For manual runs, provide the ical_roster_url input."
             exit 1
           fi
 
       - name: Import iCal roster to pdc
+        shell: bash
         env:
-          INPUT_ICAL_ROSTER_URL: ${{ github.event.inputs.ical_roster_url || secrets.ICAL_ROSTER_URL || secrets.WEB_ROSTER_URL || secrets.ROSTER_ICAL_URL || secrets.PDC_ICAL_ROSTER_URL }}
-          ICAL_ROSTER_URL: ${{ github.event.inputs.ical_roster_url || secrets.ICAL_ROSTER_URL || secrets.WEB_ROSTER_URL || secrets.ROSTER_ICAL_URL || secrets.PDC_ICAL_ROSTER_URL }}
-          WEB_ROSTER_URL: ${{ secrets.WEB_ROSTER_URL || secrets.ICAL_ROSTER_URL || secrets.ROSTER_ICAL_URL || secrets.PDC_ICAL_ROSTER_URL }}
+          INPUT_ICAL_URL: ${{ github.event.inputs.ical_roster_url }}
+          IMPORT_SOURCE: ${{ github.event.inputs.import_source }}
+          SECRET_ICAL_URL: ${{ secrets.ICAL_ROSTER_URL }}
+          SECRET_WEB_URL: ${{ secrets.WEB_ROSTER_URL }}
+          SECRET_ROSTER_ICAL_URL: ${{ secrets.ROSTER_ICAL_URL }}
+          SECRET_PDC_ICAL_URL: ${{ secrets.PDC_ICAL_ROSTER_URL }}
 
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
@@ -102,4 +122,14 @@ jobs:
           PDC_USER_NAME: ${{ github.event.inputs.pdc_user_name || secrets.PDC_USER_NAME }}
           USER_NAME: ${{ github.event.inputs.pdc_user_name || secrets.PDC_USER_NAME }}
 
-        run: node scripts/importIcalRosterToPdc.mjs
+        run: |
+          if [ "$IMPORT_SOURCE" = "slack" ]; then
+            RESOLVED_ICAL_URL="$INPUT_ICAL_URL"
+          else
+            RESOLVED_ICAL_URL="${INPUT_ICAL_URL:-${SECRET_ICAL_URL:-${SECRET_WEB_URL:-${SECRET_ROSTER_ICAL_URL:-$SECRET_PDC_ICAL_URL}}}}"
+          fi
+
+          export INPUT_ICAL_ROSTER_URL="$RESOLVED_ICAL_URL"
+          export ICAL_ROSTER_URL="$RESOLVED_ICAL_URL"
+          export WEB_ROSTER_URL="$RESOLVED_ICAL_URL"
+          node scripts/importIcalRosterToPdc.mjs
