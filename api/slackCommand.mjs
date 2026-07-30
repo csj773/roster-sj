@@ -2172,24 +2172,14 @@ function rosterCalendarResponseText({ station, monthLabel, items }) {
   return `*${monthLabel} Shared Roster${stationText}*\n${lines.join("\n")}${suffix}`;
 }
 
-function rosterLine(item, { includeName = false } = {}) {
-  const route = [item.from, item.to].filter(Boolean).join("-");
-  const time = item.stdl || item.stal || "";
-  const name = includeName ? `${item.crewName || item.ownerUid}: ` : "";
-  const crew = item.crewArray?.length ? ` | Crew: ${item.crewArray.join(", ")}` : "";
-  return `- ${item.date} ${time} ${name}${item.activity} ${route}${crew}`.trim();
-}
-
 function layoverResponseText({ station, startDate, days, items }) {
   if (!station) return "Usage: `/layover HNL` or `/layover HNL 2026-07-22 14`";
   if (!items.length) {
     return `No shared crew found for ${station} from ${startDate} for ${days} day(s).`;
   }
 
-  const lines = items.slice(0, 30).map((item) => {
-    return rosterLine(item, { includeName: true });
-  });
-  const suffix = items.length > 30 ? `\n…and ${items.length - 30} more` : "";
+  const lines = items.slice(0, 40).map(rosterCalendarLine);
+  const suffix = items.length > 40 ? `\n…and ${items.length - 40} more` : "";
   return `*${station} shared layover crew* (${startDate}, ${days} day(s))\n${lines.join("\n")}${suffix}`;
 }
 
@@ -2199,7 +2189,7 @@ function myRosterResponseText({ station, startDate, days, items }) {
     return `No personal roster found${stationText} from ${startDate} for ${days} day(s).`;
   }
 
-  const lines = items.slice(0, 40).map((item) => rosterLine(item));
+  const lines = items.slice(0, 40).map(rosterCalendarLine);
   const suffix = items.length > 40 ? `\n…and ${items.length - 40} more` : "";
   return `*My roster${stationText}* (${startDate}, ${days} day(s))\n${lines.join("\n")}${suffix}`;
 }
