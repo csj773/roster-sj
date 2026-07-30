@@ -11,6 +11,7 @@ import {
 const SHARE_COLLECTION = "roster_shares";
 const ROSTER_COLLECTION = "roster";
 const PDC_COLLECTION = "pdc";
+const PDC_FLAT_MIRROR_COLLECTION = "PdcEvents";
 const SHARE_ROSTER_COLLECTIONS = [ROSTER_COLLECTION, PDC_COLLECTION];
 const SOURCE_PRIORITY = {
   [ROSTER_COLLECTION]: 0,
@@ -133,6 +134,67 @@ function rosterSummary(doc, person) {
         : [],
     type: isOffDuty(activity) ? "day_off" : "flight",
   };
+}
+
+function eventSummary(doc, data) {
+  const crewArray = Array.isArray(data.CrewArray)
+    ? data.CrewArray.map((name) => cleanText(name, 80)).filter(Boolean)
+    : Array.isArray(data.crewArray)
+      ? data.crewArray.map((name) => cleanText(name, 80)).filter(Boolean)
+      : cleanText(data.Crew, 1000)
+          .split(",")
+          .map((name) => cleanText(name, 80))
+          .filter(Boolean);
+
+  return {
+    id: doc.id,
+    owner: cleanText(data.owner || data.uid, 500),
+    date: cleanText(data.Date, 20),
+    activity: cleanText(data.Activity, 80),
+    from: upper(data.From),
+    to: upper(data.To),
+    stdl: cleanText(data.STDL || data["STD(L)"], 40),
+    stal: cleanText(data.STAL || data["STA(L)"], 40),
+    crew: cleanText(data.Crew, 1000),
+    crewArray,
+    sourcePath: doc.ref.path,
+  };
+}
+
+async function findRosterEvent(owner, eventId) {
+  const rosterDoc = await db().collection(ROSTER_COLLECTION).doc(eventId).get();
+  if (rosterDoc.exists) {
+    const data = rosterDoc.data();
+    if (cleanText(data.owner || data.uid, 500) === owner) {
+      return eventSummary(rosterDoc, data);
+    }
+  }
+
+  const pdcDoc = await db()
+    .collection(PDC_COLLECTION)
+    .doc(ownerPdcDocId(owner))
+    .collection("events")
+    .doc(eventId)
+    .get();
+  if (pdcDoc.exists) {
+    const data = pdcDoc.data();
+    if (cleanText(data.owner || data.uid, 500) === owner) {
+      return eventSummary(pdcDoc, data);
+    }
+  }
+
+  const mirrorDoc = await db()
+    .collection(PDC_FLAT_MIRROR_COLLECTION)
+    .doc(eventId)
+    .get();
+  if (mirrorDoc.exists) {
+    const data = mirrorDoc.data();
+    if (cleanText(data.owner || data.uid, 500) === owner) {
+      return eventSummary(mirrorDoc, data);
+    }
+  }
+
+  return null;
 }
 
 function stationMatches(item, station) {
@@ -323,8 +385,28 @@ export default async function handler(req, res) {
   }
 
   try {
-    const user = await requireFirebaseUser(req);
     const query = requestQuery(req);
+    const mode = cleanText(query.mode || "calendar", 20);
+
+    if (mode === "event") {
+      const owner = cleanText(query.owner, 500);
+      const eventId = cleanText(query.event, 500);
+      if (!owner || !eventId) {
+        json(res, 400, { error: "owner and event are required" });
+        return;
+      }
+
+      const event = await findRosterEvent(owner, eventId);
+      if (!event) {
+        json(res, 404, { error: "Roster event not found" });
+        return;
+      }
+
+      json(res, 200, { ok: true, event });
+      return;
+    }
+
+    const user = await requireFirebaseUser(req);
 
     const startDate =
       cleanDate(query.startDate || query.date) || todaySeoul();
@@ -341,7 +423,6 @@ export default async function handler(req, res) {
       cleanDate(query.endDate) || addDays(startDate, days - 1);
 
     const station = upper(query.station || "");
-    const mode = cleanText(query.mode || "calendar", 20);
 
     const owners = await sharedOwnersFor(user.uid);
 
