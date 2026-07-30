@@ -62,10 +62,23 @@ SLACK_DEFAULT_FIREBASE_UID=kakao_1234567890
 
 ## Commands
 
+Show Slack roster command help:
+
+```text
+/roster-help
+/roster-share help
+```
+
 Create a Roster Share invite:
 
 ```text
 /roster-share
+```
+
+Create a Roster Share invite with an email-compose button:
+
+```text
+/roster-share friend@example.com
 ```
 
 Link your Slack user to the configured default Firebase roster user:
@@ -85,6 +98,16 @@ owner:
 
 ```text
 /roster-share import friend@example.com webcal://your-private-calendar-url
+```
+
+The following words are treated as the same import action:
+
+```text
+import
+sync
+link
+ical
+webcal
 ```
 
 This import command always requires a per-user Firestore link in
@@ -110,6 +133,7 @@ Look up shared layover crew:
 
 ```text
 /layover HNL
+/layover HNL 2026-07-22 14
 ```
 
 Look up only your own roster:
@@ -117,6 +141,7 @@ Look up only your own roster:
 ```text
 /my-roster
 /my-roster HNL
+/my-roster HNL 2026-07-22 14
 ```
 
 Post a monthly PerDiem report back to Slack:
@@ -129,30 +154,24 @@ Post a monthly PerDiem report back to Slack:
 /perdiem-report 2026-07
 ```
 
-Choose start date and range:
-
-```text
-/my-roster 2026-07-22 14
-/my-roster HNL 2026-07-22 14
-/layover HNL 2026-07-22 14
-```
-
 The `/my-roster` command returns only the signed-in Slack user's linked roster.
 The `/layover` command returns that user's own roster plus rosters shared with
-that Firebase user through `roster_shares`.
+that Firebase user through `roster_shares`, plus same-team owners registered in
+`slack_team_roster_owners` and `slack_user_links`. Roster search uses the
+`roster` collection first and falls back to `pdc/{uid}/events` when that owner
+has no `roster` rows.
+
 The `/perdiem-report` command queues the separate
 `monthly-perdiem-slack-report.yml` workflow, builds the report from the user's
-Firestore `pdc` roster rows, stores calculated rows under
-`Perdiem/{pdc_user_name}/items`, removes previous Slack PerDiem rows for the
-same Firebase owner or `pdc_user_name`, then posts the saved monthly result back
-to Slack instead of sending email. Slack row totals are rounded the same way as
-the app display before monthly totals are summed. Slack uses the separate
-`scripts/slack_perdiem.js` calculator so the existing `perdiem.js` behavior
-remains unchanged.
+Firestore `Perdiem/{uid}/events` rows, and posts the saved monthly result back
+to Slack instead of sending email. Email-specific reports resolve the owner from
+Firestore `pdc` or `users`; they do not use `slack_team_roster_owners`
+directly.
 
 ## Firestore Collections
 
 - `slack_user_links`: Slack user to Firebase UID mapping
+- `slack_team_roster_owners`: same Slack team owner candidates for roster search
 - `roster_share_invites`: invite links generated from Slack
 - `roster_shares`: accepted roster share relationships
 - `roster_friendships`: friendship/group state
