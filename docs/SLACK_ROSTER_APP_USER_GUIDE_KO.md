@@ -2,6 +2,14 @@
 
 이 문서는 Slack에서 Roster Share 앱을 사용하는 방법을 설명합니다.
 
+공개 리뷰 URL:
+
+```text
+https://roster-sj-j3bu.vercel.app/slack-roster-guide/
+```
+
+사용자 초대 전이나 사용 시작 전에 위 링크를 공유하면 됩니다.
+
 ## 기본 개념
 
 Slack Roster 앱은 Slack command로 roster를 가져오고, 공유된 crew layover를

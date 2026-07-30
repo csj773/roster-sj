@@ -611,6 +611,11 @@ function inviteUrl(code) {
   return `${appBaseUrl()}${path}?invite=${encodeURIComponent(code)}`;
 }
 
+function slackRosterGuideUrl() {
+  const path = process.env.SLACK_ROSTER_GUIDE_PATH || "/slack-roster-guide/";
+  return `${appBaseUrl()}${path}`;
+}
+
 function slackChannelUrl(command) {
   if (!command.teamId || !command.channelId) return "";
   return `https://app.slack.com/client/${encodeURIComponent(command.teamId)}/${encodeURIComponent(command.channelId)}`;
@@ -634,6 +639,7 @@ function mailInviteUrl({ inviteUrl: url, ownerName = "", recipientEmail = "", ch
     "",
     "[주의]",
     "수락하면 같은 Roster Share 채널 참여자들과 layover roster 공유가 자동 연결됩니다.",
+    `사용 전 가이드: ${slackRosterGuideUrl()}`,
     `본인 roster를 공유하려면 Slack 채널에서 /roster-share import ${recipientEmail || "본인이메일@example.com"} webcal://... 를 실행해 주세요.`,
     "공유 조회는 채널에서 /layover IAD 처럼 실행합니다.",
     "",
@@ -662,6 +668,7 @@ function inviteShareText(url, channelUrl = "") {
     "",
     "[주의]",
     "수락하면 같은 Roster Share 채널 참여자들과 layover roster 공유가 자동 연결됩니다.",
+    `사용 전 가이드: ${slackRosterGuideUrl()}`,
     "본인 roster 공유: /roster-share import 본인이메일@example.com webcal://...",
     "공유 조회: /layover IAD",
   ].join("\n");
@@ -1862,6 +1869,7 @@ function helpText() {
     "`/perdiem-report set-email user@example.com` - save your default PerDiem report owner email",
     "`/layover HNL` - show shared HNL crew for today + 30 days",
     "`/layover HNL 2026-07-22 14` - choose start date and days",
+    `User guide: ${slackRosterGuideUrl()}`,
   ].join("\n");
 }
 

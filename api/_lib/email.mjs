@@ -32,6 +32,20 @@ function configuredReplyTo() {
   );
 }
 
+function appBaseUrl() {
+  return cleanText(
+    process.env.ROSTER_SHARE_APP_URL ||
+      process.env.APP_BASE_URL ||
+      "https://roster-sj-j3bu.vercel.app",
+    500
+  ).replace(/\/+$/, "");
+}
+
+function slackRosterGuideUrl() {
+  const path = cleanText(process.env.SLACK_ROSTER_GUIDE_PATH || "/slack-roster-guide/", 120);
+  return `${appBaseUrl()}${path}`;
+}
+
 function resendClient() {
   const apiKey = cleanText(process.env.RESEND_API_KEY || "", 300);
   if (!apiKey) return null;
@@ -64,6 +78,8 @@ export async function sendRosterShareInviteEmail({
   const url = cleanText(inviteUrl, 1000);
   const safeOwner = escapeHtml(owner);
   const safeUrl = escapeHtml(url);
+  const guideUrl = slackRosterGuideUrl();
+  const safeGuideUrl = escapeHtml(guideUrl);
   const safeScope = escapeHtml(cleanText(scope || "layover_only", 80));
   const safeDays = escapeHtml(String(expiresInDays || 14));
   const confirmationText = confirmationRequired
@@ -90,6 +106,8 @@ export async function sendRosterShareInviteEmail({
           </a>
         </p>
         <p style="margin:20px 0 0;font-size:12px;line-height:1.6;color:#6b7280;">
+          사용 전 가이드:
+          <a href="${safeGuideUrl}" style="color:#2563eb;word-break:break-all;">${safeGuideUrl}</a><br><br>
           버튼이 열리지 않으면 아래 링크를 복사해 브라우저에서 열어주세요.<br>
           <a href="${safeUrl}" style="color:#2563eb;word-break:break-all;">${safeUrl}</a>
         </p>
@@ -105,6 +123,8 @@ export async function sendRosterShareInviteEmail({
     `공유 범위: ${scope || "layover_only"}`,
     `초대 만료: ${expiresInDays || 14}일 후`,
     confirmationText,
+    "",
+    `사용 전 가이드: ${guideUrl}`,
     "",
     `참여 링크: ${url}`,
   ].join("\n");

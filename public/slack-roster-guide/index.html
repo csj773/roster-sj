@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Slack Roster 앱 User Guide</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #182026;
+        --muted: #66717c;
+        --line: #dfe5ea;
+        --surface: #f6f8fa;
+        --accent: #0f7b6c;
+        --code: #f1f5f7;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: var(--surface);
+        color: var(--ink);
+      }
+
+      main {
+        width: min(100%, 920px);
+        margin: 0 auto;
+        padding: 32px 18px 56px;
+      }
+
+      header {
+        padding: 28px 0 22px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font-size: 30px;
+        line-height: 1.2;
+        letter-spacing: 0;
+      }
+
+      h2 {
+        margin: 34px 0 12px;
+        font-size: 21px;
+        line-height: 1.3;
+        letter-spacing: 0;
+      }
+
+      p,
+      li {
+        font-size: 16px;
+        line-height: 1.65;
+        color: var(--muted);
+      }
+
+      p {
+        margin: 0 0 14px;
+      }
+
+      ul {
+        margin: 8px 0 18px;
+        padding-left: 22px;
+      }
+
+      code {
+        background: var(--code);
+        border-radius: 6px;
+        padding: 2px 5px;
+        color: var(--ink);
+      }
+
+      pre {
+        margin: 12px 0 20px;
+        padding: 14px 16px;
+        overflow-x: auto;
+        background: var(--code);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+
+      pre code {
+        padding: 0;
+        background: transparent;
+      }
+
+      .note {
+        border-left: 4px solid var(--accent);
+        padding: 12px 14px;
+        background: white;
+        color: var(--ink);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Slack Roster 앱 User Guide</h1>
+        <p>Slack에서 roster를 가져오고, 공유 layover를 조회하고, 월간 PerDiem report를 실행하는 방법입니다.</p>
+      </header>
+
+      <h2>기본 명령어</h2>
+      <pre><code>/roster-share
+/my-roster
+/layover
+/perdiem-report
+/roster-help</code></pre>
+
+      <h2>처음 사용하는 경우</h2>
+      <p>먼저 본인의 Slack user와 Firebase roster user를 연결합니다.</p>
+      <pre><code>/roster-share link-me</code></pre>
+      <p>도움말은 언제든지 아래 명령으로 확인할 수 있습니다.</p>
+      <pre><code>/roster-help
+/roster-share help</code></pre>
+
+      <h2>Roster 가져오기</h2>
+      <p>개인 iCal roster link를 Slack에서 import합니다.</p>
+      <pre><code>/roster-share import webcal://your-private-calendar-url</code></pre>
+      <p>다른 사용자의 email owner로 import하려면 email을 같이 입력합니다.</p>
+      <pre><code>/roster-share import friend@example.com webcal://your-private-calendar-url</code></pre>
+      <p><code>import</code>, <code>sync</code>, <code>link</code>, <code>ical</code>, <code>webcal</code>은 같은 import action으로 처리됩니다.</p>
+
+      <h2>내 Roster 조회</h2>
+      <pre><code>/my-roster
+/my-roster HNL
+/my-roster HNL 2026-07-22 14</code></pre>
+      <p>마지막 예시는 2026-07-22부터 14일 동안 HNL이 포함된 본인 roster를 조회합니다.</p>
+
+      <h2>공유 Layover 조회</h2>
+      <pre><code>/layover HNL
+/layover HNL 2026-07-22 14</code></pre>
+      <p><code>/layover</code>는 본인 roster, 공유받은 roster, 같은 Slack team에 등록된 owner들의 roster를 함께 조회합니다.</p>
+      <p>검색은 <code>roster</code> collection을 먼저 사용하고, 해당 owner의 roster rows가 없을 때만 <code>pdc/{uid}/events</code>로 fallback합니다.</p>
+
+      <h2>Roster Share 초대</h2>
+      <pre><code>/roster-share
+/roster-share friend@example.com</code></pre>
+      <p>초대를 받은 사용자가 수락하면 <code>roster_shares</code>에 공유 관계가 저장됩니다.</p>
+
+      <h2>PerDiem Report</h2>
+      <pre><code>/perdiem-report
+/perdiem-report user@example.com jul
+/perdiem-report set-email user@example.com
+/perdiem-report jul
+/perdiem-report 2026-07</code></pre>
+      <p><code>/perdiem-report</code>는 <code>Perdiem/{uid}/events</code> data를 기준으로 계산합니다.</p>
+      <p>email을 지정한 report는 Firestore <code>pdc</code> 또는 <code>users</code>에서 owner를 찾습니다. <code>slack_team_roster_owners</code>는 PerDiem report 대상자를 정할 때 직접 사용되지 않습니다.</p>
+
+      <h2>문제가 있을 때</h2>
+      <ul>
+        <li>Slack user가 연결되어 있지 않으면 <code>/roster-share link-me</code>를 먼저 실행합니다.</li>
+        <li>Roster import 후 layover에 보이지 않으면 import 성공 여부, Slack team, owner data, 조회 날짜 범위를 확인합니다.</li>
+        <li>PerDiem report owner를 못 찾으면 <code>/perdiem-report user@example.com jul</code>처럼 email을 지정합니다.</li>
+      </ul>
+
+      <h2>개인정보 주의</h2>
+      <p class="note">iCal roster link는 개인 roster 전체에 접근할 수 있는 private URL입니다. 가능하면 개인 DM이나 제한된 private channel에서 import 명령을 실행하세요. 앱은 원본 calendar URL을 Firestore에 저장하지 않습니다.</p>
+    </main>
+  </body>
+</html>
