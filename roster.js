@@ -885,18 +885,6 @@ function sleep(ms) {
       console.error("❌ Google Sheets 업로드 실패:",err);
     }
 
-    // ------------------- Google Calendar 업로드 -------------------
-    console.log("🚀 Google Calendar 업로드 시작 (gcal.js)");
-    const gcalPath = path.join(process.cwd(),"gcal.js");
-    exec(`node "${gcalPath}"`, (error, stdout, stderr) => {
-      if(error){
-        console.error("❌ gcal.js 실행 실패:", error.message);
-        return;
-      }
-      if(stderr) console.error("stderr:", stderr);
-      console.log(stdout);
-      console.log("✅ Google Calendar 처리 완료");
-    });
   } else {
     console.log("⏭ Google Sheets Roster1 / Google Calendar 업로드 건너뜀");
   }
