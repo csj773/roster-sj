@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   group: update-pilot-logbook
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   update-logbook:
