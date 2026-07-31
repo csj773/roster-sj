@@ -59,7 +59,8 @@ async function runMonthlySalaryReport({year, month, force = false}) {
     await db.runTransaction(async (transaction) => {
       const runDoc = await transaction.get(runRef);
       if (runDoc.exists && runDoc.get("status") === "sent") {
-        throw new Error(`Salary report ${reportKey} was already sent. Use --force to send again.`);
+        console.log(`Salary report ${reportKey} was already sent; skipping. Use --force to send again.`);
+        return;
       }
 
       transaction.set(runRef, {
@@ -68,6 +69,18 @@ async function runMonthlySalaryReport({year, month, force = false}) {
         runner: "github-actions",
       }, {merge: true});
     });
+
+    const runDoc = await runRef.get();
+    if (runDoc.exists && runDoc.get("status") === "sent") {
+      return {
+        reportKey,
+        skipped: true,
+        reason: "already_sent",
+        fileName: runDoc.get("fileName") || "",
+        rowCount: runDoc.get("rowCount") || 0,
+        totalPay: runDoc.get("totalPay") || 0,
+      };
+    }
   }
 
   try {
