@@ -84,11 +84,23 @@ const flutterflowUid = process.env.INPUT_FIREBASE_UID || process.env.FIREBASE_UI
 const firestoreAdminUid = process.env.INPUT_ADMIN_FIREBASE_UID || process.env.ADMIN_FIREBASE_UID;
 const firestoreCollection = process.env.INPUT_FIRESTORE_COLLECTION || "roster";
 const rosterByUserCollection = process.env.INPUT_ROSTER_BY_USER_COLLECTION || "rosterByUser";
+const runUserEmail = String(process.env.USER_ID || process.env.USER_EMAIL || "").trim().toLowerCase();
+const googleOutputAllowedEmails = String(
+  process.env.GOOGLE_OUTPUT_ALLOWED_EMAILS || "sjchoi787@gmail.com"
+)
+  .split(",")
+  .map((email) => email.trim().toLowerCase())
+  .filter(Boolean);
+const canWritePersonalGoogleOutputs = googleOutputAllowedEmails.includes(runUserEmail);
 if (!flutterflowUid || !firestoreAdminUid) {
   console.error("❌ Firebase UID 또는 Admin UID 없음");
   process.exit(1);
 }
 console.log("✅ UID 및 Config 로드 완료");
+console.log(
+  `🔐 Google Sheets/Calendar output ${canWritePersonalGoogleOutputs ? "enabled" : "skipped"} ` +
+  `(USER_ID=${runUserEmail || "none"})`
+);
 
 const spreadsheetId="1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
 
@@ -850,39 +862,43 @@ function sleep(ms) {
 
   console.log("✅ Roster Firestore 업로드 완료");
 
-  // ------------------- Google Sheets 업로드 -------------------
-  console.log("🚀 Google Sheets 업로드 시작");
-  const sheetName="Roster1";
-  const sheetValues = values.map((row,idx)=>{
-    if(idx===0) return row.slice(0,15); 
-    const newRow=[...row.slice(0,15)];
-    newRow[0] = resolvedDateForRow(row) || convertDate(row[0]);
-    return newRow;
-  });
-
-  try {
-    await sheetsApi.spreadsheets.values.update({
-      spreadsheetId,
-      range:`${sheetName}!A1`,
-      valueInputOption:"RAW",
-      requestBody:{values:sheetValues}
+  if (canWritePersonalGoogleOutputs) {
+    // ------------------- Google Sheets 업로드 -------------------
+    console.log("🚀 Google Sheets 업로드 시작");
+    const sheetName="Roster1";
+    const sheetValues = values.map((row,idx)=>{
+      if(idx===0) return row.slice(0,15); 
+      const newRow=[...row.slice(0,15)];
+      newRow[0] = resolvedDateForRow(row) || convertDate(row[0]);
+      return newRow;
     });
-    console.log("✅ Google Sheets 업로드 완료");
-  } catch(err) {
-    console.error("❌ Google Sheets 업로드 실패:",err);
-  }
 
-  // ------------------- Google Calendar 업로드 -------------------
-  console.log("🚀 Google Calendar 업로드 시작 (gcal.js)");
-  const gcalPath = path.join(process.cwd(),"gcal.js");
-  exec(`node "${gcalPath}"`, (error, stdout, stderr) => {
-    if(error){
-      console.error("❌ gcal.js 실행 실패:", error.message);
-      return;
+    try {
+      await sheetsApi.spreadsheets.values.update({
+        spreadsheetId,
+        range:`${sheetName}!A1`,
+        valueInputOption:"RAW",
+        requestBody:{values:sheetValues}
+      });
+      console.log("✅ Google Sheets 업로드 완료");
+    } catch(err) {
+      console.error("❌ Google Sheets 업로드 실패:",err);
     }
-    if(stderr) console.error("stderr:", stderr);
-    console.log(stdout);
-    console.log("✅ Google Calendar 처리 완료");
-  });
+
+    // ------------------- Google Calendar 업로드 -------------------
+    console.log("🚀 Google Calendar 업로드 시작 (gcal.js)");
+    const gcalPath = path.join(process.cwd(),"gcal.js");
+    exec(`node "${gcalPath}"`, (error, stdout, stderr) => {
+      if(error){
+        console.error("❌ gcal.js 실행 실패:", error.message);
+        return;
+      }
+      if(stderr) console.error("stderr:", stderr);
+      console.log(stdout);
+      console.log("✅ Google Calendar 처리 완료");
+    });
+  } else {
+    console.log("⏭ Google Sheets Roster1 / Google Calendar 업로드 건너뜀");
+  }
 
 })();

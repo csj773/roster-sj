@@ -30,6 +30,8 @@ permissions:
 env:
   # firestoreAdminUid secrets 자동 주입
   firestoreAdminUid: ${{ secrets.FIRESTORE_ADMIN_UID }}
+  RUN_USER_EMAIL: ${{ github.event.inputs.current_user_email || secrets.USER_ID }}
+  GOOGLE_OUTPUT_ALLOWED_EMAIL: sjchoi787@gmail.com
 
 jobs:
   build:
@@ -62,6 +64,7 @@ jobs:
           INPUT_ADMIN_FIREBASE_UID: ${{ github.event.inputs.current_user_uid || secrets.FIREBASE_UID || secrets.FIRESTORE_ADMIN_UID }}
           GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
           USER_ID: ${{ github.event.inputs.current_user_email || secrets.USER_ID }}
+          GOOGLE_OUTPUT_ALLOWED_EMAILS: ${{ env.GOOGLE_OUTPUT_ALLOWED_EMAIL }}
         run: node -r dotenv/config roster.js
 
       # 5. PerDiem 계산 및 CSV 저장 + Firestore 업로드
@@ -83,7 +86,12 @@ jobs:
 
       # 7. gcal.js 실행 (Google Calendar 업데이트)
       - name: Run gcal.js
+        if: ${{ env.RUN_USER_EMAIL == env.GOOGLE_OUTPUT_ALLOWED_EMAIL }}
         env:
           GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
           GOOGLE_CALENDAR_CREDENTIALS: ${{ secrets.GOOGLE_CALENDAR_CREDENTIALS }}
         run: node -r dotenv/config gcal.js
+
+      - name: Skip Google Calendar for non-primary user
+        if: ${{ env.RUN_USER_EMAIL != env.GOOGLE_OUTPUT_ALLOWED_EMAIL }}
+        run: echo "Skipping Google Calendar because RUN_USER_EMAIL=${RUN_USER_EMAIL} is not ${GOOGLE_OUTPUT_ALLOWED_EMAIL}."
