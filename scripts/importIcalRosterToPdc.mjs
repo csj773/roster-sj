@@ -40,9 +40,28 @@ function cleanText(value, maxLength = 200) {
 function displayNameForEmail(email) {
   const normalizedEmail = cleanText(email, 240).toLowerCase();
   const displayNames = {
+    "csj773@yahoo.co.kr": "최상준",
     "cutecsj773@gmail.com": "최상준",
+    "sjchoi787@gmail.com": "최상준",
   };
   return displayNames[normalizedEmail] || "";
+}
+
+async function enrichOwnerFromUsersDoc(db, owner) {
+  const uid = cleanText(owner?.uid || "", 500);
+  if (!uid || uid.startsWith("guest_")) return owner;
+
+  const snap = await db.collection("users").doc(uid).get();
+  const data = snap.exists ? snap.data() || {} : {};
+  const email = cleanText(data.email || owner.email, 240).toLowerCase();
+  return {
+    ...owner,
+    email,
+    displayName:
+      cleanText(data.display_name || data.displayName || data.name, 200) ||
+      cleanText(owner.displayName, 200) ||
+      displayNameForEmail(email),
+  };
 }
 
 function hashText(value) {
@@ -1024,10 +1043,11 @@ async function main() {
   }
 
   const db = admin.firestore();
-  const owner = await resolveOrCreateFirebaseOwner(
+  let owner = await resolveOrCreateFirebaseOwner(
     admin.auth(),
     requestedOwner,
   );
+  owner = await enrichOwnerFromUsersDoc(db, owner);
 
   console.log(`OWNER_MODE=FIREBASE_AUTH_AUTO_CREATE`);
   console.log(`OWNER_RESOLUTION=${owner.resolvedBy}`);

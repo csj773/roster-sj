@@ -347,9 +347,27 @@ function guestInviteUid(inviteCodeValue) {
 function displayNameForEmail(email) {
   const normalizedEmail = cleanText(email, 240).toLowerCase();
   const displayNames = {
+    "csj773@yahoo.co.kr": "최상준",
     "cutecsj773@gmail.com": "최상준",
+    "sjchoi787@gmail.com": "최상준",
   };
   return displayNames[normalizedEmail] || "";
+}
+
+async function enrichOwnerFromUsersDoc(owner, email = "") {
+  const uid = cleanText(owner?.uid || "", 160);
+  if (!uid || uid.startsWith("guest_")) return owner;
+
+  const user = await publicUser(uid);
+  const normalizedEmail = cleanText(email || owner.email || user.email, 240).toLowerCase();
+  return {
+    ...owner,
+    email: cleanText(user.email || owner.email || normalizedEmail, 240).toLowerCase(),
+    displayName:
+      cleanText(user.displayName, 200) ||
+      cleanText(owner.displayName, 200) ||
+      displayNameForEmail(normalizedEmail),
+  };
 }
 
 async function acceptedInviteForEmail(email) {
@@ -543,6 +561,8 @@ async function resolveImportOwnerForEmail(command, email) {
       `Invalid Firebase owner UID resolved: ${owner.uid || "(empty)"}`
     );
   }
+
+  owner = await enrichOwnerFromUsersDoc(owner, normalizedEmail);
 
   const linkId = slackLinkId(command.teamId, command.userId);
 
