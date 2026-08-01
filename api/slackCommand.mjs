@@ -360,14 +360,13 @@ async function enrichOwnerFromUsersDoc(owner, email = "") {
 
   const user = await publicUser(uid);
   const normalizedEmail = cleanText(email || owner.email || user.email, 240).toLowerCase();
-  const mappedDisplayName = displayNameForEmail(normalizedEmail);
   return {
     ...owner,
     email: cleanText(user.email || owner.email || normalizedEmail, 240).toLowerCase(),
     displayName:
-      mappedDisplayName ||
       cleanText(user.displayName, 200) ||
-      cleanText(owner.displayName, 200),
+      cleanText(owner.displayName, 200) ||
+      displayNameForEmail(normalizedEmail),
   };
 }
 
@@ -1525,11 +1524,11 @@ function importedPdcDocToRosterRow(doc) {
 }
 
 function rosterCsvOwnerLabel(value) {
+  const displayName = cleanText(value.display_name || value.pdc_user_name || value.ownerDisplayName || value.crewName, 80);
+  if (displayName) return displayName;
   const email = cleanText(value.email || value.ownerEmail, 120).toLowerCase();
   const mappedDisplayName = displayNameForEmail(email);
   if (mappedDisplayName) return mappedDisplayName;
-  const displayName = cleanText(value.display_name || value.pdc_user_name || value.ownerDisplayName || value.crewName, 80);
-  if (displayName) return displayName;
   if (email) return email.includes("@") ? cleanText(email.split("@")[0], 80) : email;
   return cleanText(value.owner || value.uid || value.ownerUid, 80);
 }
