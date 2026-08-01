@@ -2383,6 +2383,19 @@ async function uploadMyRosterCsv(command, parsed, items, csvRows = []) {
   });
 }
 
+async function uploadLayoverCsv(command, parsed, items) {
+  if (!items.length) return false;
+  const stationPart = safeFilePart(parsed.station, "station");
+  const filename = `layover_${stationPart}_${safeFilePart(parsed.startDate, "date")}_${parsed.days}days.csv`;
+  return uploadSlackCsv({
+    command,
+    filename,
+    title: filename,
+    csv: myRosterCsv({ items }),
+    initialComment: `${parsed.station} layover CSV (${parsed.startDate}, ${parsed.days} day(s))`,
+  });
+}
+
 async function handleLayover(command) {
   const parsed = parseLayoverText(command.text);
   if (!parsed.station) {
@@ -2411,6 +2424,15 @@ async function handleLayover(command) {
     days: parsed.days,
     itemCount: items.length,
   });
+
+  try {
+    await uploadLayoverCsv(command, parsed, items);
+  } catch (error) {
+    console.warn("LAYOVER_CSV_UPLOAD_FAILED", {
+      message: error.message,
+      channelId: command.channelId || "",
+    });
+  }
 
   return {
     response_type: "ephemeral",
