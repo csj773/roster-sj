@@ -54,13 +54,14 @@ async function enrichOwnerFromUsersDoc(db, owner) {
   const snap = await db.collection("users").doc(uid).get();
   const data = snap.exists ? snap.data() || {} : {};
   const email = cleanText(data.email || owner.email, 240).toLowerCase();
+  const mappedDisplayName = displayNameForEmail(email);
   return {
     ...owner,
     email,
     displayName:
+      mappedDisplayName ||
       cleanText(data.display_name || data.displayName || data.name, 200) ||
-      cleanText(owner.displayName, 200) ||
-      displayNameForEmail(email),
+      cleanText(owner.displayName, 200),
   };
 }
 
@@ -791,9 +792,11 @@ function pdcDocToRosterRow(doc) {
 }
 
 function rosterCsvOwnerLabel(value) {
+  const email = cleanText(value.email || value.ownerEmail, 120).toLowerCase();
+  const mappedDisplayName = displayNameForEmail(email);
+  if (mappedDisplayName) return mappedDisplayName;
   const displayName = cleanText(value.display_name || value.pdc_user_name || value.ownerDisplayName || value.crewName, 80);
   if (displayName) return displayName;
-  const email = cleanText(value.email || value.ownerEmail, 120);
   if (email) return email.includes("@") ? cleanText(email.split("@")[0], 80) : email;
   return cleanText(value.owner || value.uid || value.ownerUid, 80);
 }
