@@ -30,7 +30,7 @@ const DEFAULT_GITHUB_REF = "main";
 const ICAL_IMPORT_WORKFLOW_FILE = "import-ical-roster-to-pdc.yml";
 const PERDIEM_SLACK_WORKFLOW_FILE = "monthly-perdiem-slack-report.yml";
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const ROSTER_HEADERS = ["Date", "D/C", "C/I(L)", "C/O(L)", "Activity", "F", "From", "STD(L)", "STD(Z)", "To", "STA(L)", "STA(Z)", "BLH", "AcReg", "Crew"];
+const ROSTER_HEADERS = ["Date", "DC", "C/I(L)", "C/O(L)", "Activity", "F", "From", "STD(L)", "STD(Z)", "To", "STA(L)", "STA(Z)", "BLH", "AcReg", "Crew"];
 const FULL_MONTH_NAMES = [
   "january",
   "february",
@@ -1145,6 +1145,15 @@ async function deleteExistingOwnerPdcDocs(docs) {
     refs.set(doc.ref.path, doc.ref);
   }
 
+  const csvRowsSnapshot = await db()
+    .collection(PDC_COLLECTION)
+    .doc(ownerPdcDocId(owner))
+    .collection("csvRows")
+    .get();
+  for (const doc of csvRowsSnapshot.docs) {
+    refs.set(doc.ref.path, doc.ref);
+  }
+
   for (const ref of refs.values()) {
     await ref.delete();
   }
@@ -1448,6 +1457,7 @@ async function uploadImportedRosterToPdc(docs) {
   for (const { id: eventId, data: docData } of docEntries) {
     const batch = db().batch();
     const eventRef = ownerRef.collection("events").doc(eventId);
+    const csvRowRef = ownerRef.collection("csvRows").doc(eventId);
     const mirrorRef = db().collection(PDC_FLAT_MIRROR_COLLECTION).doc(eventId);
     batch.set(ownerRef, {
       owner: docData.owner,
@@ -1462,6 +1472,7 @@ async function uploadImportedRosterToPdc(docs) {
       updatedAt: nowTimestamp(),
     }, { merge: true });
     batch.set(eventRef, docData, { merge: false });
+    batch.set(csvRowRef, importedPdcDocToCsvRowDoc(docData, eventId), { merge: false });
     batch.set(mirrorRef, docData, { merge: false });
     await batch.commit();
     imported += 1;
@@ -1488,6 +1499,20 @@ function importedPdcDocToRosterRow(doc) {
     cleanText(doc.AcReg || doc.ACReg || doc.REG || doc.Reg, 40),
     cleanText(doc.Crew, 1000),
   ];
+}
+
+function importedPdcDocToCsvRowDoc(doc, eventId = "") {
+  const row = importedPdcDocToRosterRow(doc);
+  const data = Object.fromEntries(ROSTER_HEADERS.map((header, index) => [header, row[index] || ""]));
+  return {
+    ...data,
+    owner: cleanText(doc.owner || doc.uid, 500),
+    uid: cleanText(doc.uid || doc.owner, 500),
+    eventId,
+    sortKey: dateSortKey(row[0]),
+    source: SLACK_ICAL_SOURCE,
+    updatedAt: nowTimestamp(),
+  };
 }
 
 function writeImportedRosterJson(docs, ownerUid) {
@@ -2312,11 +2337,40 @@ function myRosterCsv({ items }) {
     .join("\n");
 }
 
+function csvRowsToCsv(rows) {
+  return [ROSTER_HEADERS, ...rows.map((row) => ROSTER_HEADERS.map((header) => row[header] ?? ""))]
+    .map((row) => row.map(csvEscape).join(","))
+    .join("\n");
+}
+
+async function myRosterCsvRowsFor(uid, { station, startDate, days }) {
+  const endDate = addDays(startDate, days - 1);
+  const startKey = dateSortKey(startDate);
+  const endKey = dateSortKey(endDate);
+  const snapshot = await db()
+    .collection(PDC_COLLECTION)
+    .doc(ownerPdcDocId(uid))
+    .collection("csvRows")
+    .get();
+  return snapshot.docs
+    .map((doc) => ({ eventId: doc.id, ...doc.data() }))
+    .filter((row) => {
+      const key = dateSortKey(row.sortKey || row.Date);
+      return key >= startKey && key <= endKey;
+    })
+    .filter((row) => !station || upper(row.From) === station || upper(row.To) === station)
+    .sort((a, b) => {
+      const left = `${dateSortKey(a.sortKey || a.Date)}_${cleanText(a["STD(Z)"] || a["STD(L)"], 40)}_${cleanText(a.Activity, 80)}`;
+      const right = `${dateSortKey(b.sortKey || b.Date)}_${cleanText(b["STD(Z)"] || b["STD(L)"], 40)}_${cleanText(b.Activity, 80)}`;
+      return left.localeCompare(right);
+    });
+}
+
 function safeFilePart(value, fallback = "my-roster") {
   return cleanText(value, 120).replace(/[^A-Za-z0-9_.-]+/g, "_").replace(/^_+|_+$/g, "") || fallback;
 }
 
-async function uploadMyRosterCsv(command, parsed, items) {
+async function uploadMyRosterCsv(command, parsed, items, csvRows = []) {
   if (!items.length) return false;
   const stationPart = parsed.station ? `_${safeFilePart(parsed.station, "station")}` : "";
   const filename = `my-roster_${safeFilePart(parsed.startDate, "date")}_${parsed.days}days${stationPart}.csv`;
@@ -2324,7 +2378,7 @@ async function uploadMyRosterCsv(command, parsed, items) {
     command,
     filename,
     title: filename,
-    csv: myRosterCsv({ items }),
+    csv: csvRows.length ? csvRowsToCsv(csvRows) : myRosterCsv({ items }),
     initialComment: `My roster CSV (${parsed.startDate}, ${parsed.days} day(s))`,
   });
 }
@@ -2392,7 +2446,8 @@ async function handleMyRoster(command) {
   });
 
   try {
-    await uploadMyRosterCsv(command, parsed, items);
+    const csvRows = await myRosterCsvRowsFor(firebaseUid, parsed);
+    await uploadMyRosterCsv(command, parsed, items, csvRows);
   } catch (error) {
     console.warn("MY_ROSTER_CSV_UPLOAD_FAILED", {
       message: error.message,

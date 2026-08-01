@@ -9,7 +9,7 @@ const PDC_COLLECTION = "pdc";
 const PDC_FLAT_MIRROR_COLLECTION = "PdcEvents";
 const PERDIEM_COLLECTION = "Perdiem";
 const SLACK_ICAL_SOURCE = "slack_ical";
-const ROSTER_HEADERS = ["Date", "D/C", "C/I(L)", "C/O(L)", "Activity", "F", "From", "STD(L)", "STD(Z)", "To", "STA(L)", "STA(Z)", "BLH", "Crew"];
+const ROSTER_HEADERS = ["Date", "DC", "C/I(L)", "C/O(L)", "Activity", "F", "From", "STD(L)", "STD(Z)", "To", "STA(L)", "STA(Z)", "BLH", "AcReg", "Crew"];
 
 function requiredEnv(name) {
   const value = String(process.env[name] || "").trim();
@@ -244,6 +244,9 @@ async function deleteExistingOwnerPdcDocs(db, ownerUid) {
   const ownerRef = db.collection(PDC_COLLECTION).doc(ownerPdcDocId(owner));
   const eventsSnapshot = await ownerRef.collection("events").get();
   for (const doc of eventsSnapshot.docs) refs.set(doc.ref.path, doc.ref);
+
+  const csvRowsSnapshot = await ownerRef.collection("csvRows").get();
+  for (const doc of csvRowsSnapshot.docs) refs.set(doc.ref.path, doc.ref);
 
   // 다른 사용자의 pdc 자료는 건드리지 않습니다.
   await commitInChunks(db, [...refs.values()].map((ref) => (batch) => batch.delete(ref)));
@@ -763,8 +766,23 @@ function pdcDocToRosterRow(doc) {
     cleanText(doc.STAL || doc["STA(L)"], 40),
     cleanText(doc.STAZ || doc["STA(Z)"], 40),
     cleanText(doc.BLH, 40),
+    cleanText(doc.AcReg || doc.ACReg || doc.REG || doc.Reg, 40),
     cleanText(doc.Crew, 1000),
   ];
+}
+
+function pdcDocToCsvRowDoc(doc, eventId = "") {
+  const row = pdcDocToRosterRow(doc);
+  const data = Object.fromEntries(ROSTER_HEADERS.map((header, index) => [header, row[index] || ""]));
+  return {
+    ...data,
+    owner: cleanText(doc.owner || doc.uid, 500),
+    uid: cleanText(doc.uid || doc.owner, 500),
+    eventId,
+    sortKey: dateSortKey(row[0]),
+    source: SLACK_ICAL_SOURCE,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
 }
 
 function writeImportedRosterJson(docs, ownerUid) {
@@ -851,9 +869,11 @@ async function uploadPdcDocs(db, owner, docs) {
 
   for (const { id: eventId, data: docData } of docEntries) {
     const eventRef = ownerRef.collection("events").doc(eventId);
+    const csvRowRef = ownerRef.collection("csvRows").doc(eventId);
     const mirrorRef = db.collection(PDC_FLAT_MIRROR_COLLECTION).doc(eventId);
     // owner별 하위 컬렉션을 원본으로 유지하고, FlutterFlow용 최상위 mirror도 같이 저장합니다.
     operations.push((batch) => batch.set(eventRef, docData, { merge: false }));
+    operations.push((batch) => batch.set(csvRowRef, pdcDocToCsvRowDoc(docData, eventId), { merge: false }));
     operations.push((batch) => batch.set(mirrorRef, docData, { merge: false }));
   }
 
