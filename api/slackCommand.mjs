@@ -2347,8 +2347,11 @@ function myRosterCsv({ items }) {
     .join("\n");
 }
 
-function csvRowsToCsv(rows) {
-  return [ROSTER_HEADERS, ...rows.map((row) => ROSTER_HEADERS.map((header) => row[header] ?? ""))]
+function csvRowsToCsv(rows, ownerLabel = "") {
+  return [ROSTER_HEADERS, ...rows.map((row) => ROSTER_HEADERS.map((header) => {
+    if (header === "DC") return cleanText(row[header] || ownerLabel || rosterCsvOwnerLabel(row), 80);
+    return row[header] ?? "";
+  }))]
     .map((row) => row.map(csvEscape).join(","))
     .join("\n");
 }
@@ -2388,7 +2391,7 @@ async function uploadMyRosterCsv(command, parsed, items, csvRows = []) {
     command,
     filename,
     title: filename,
-    csv: csvRows.length ? csvRowsToCsv(csvRows) : myRosterCsv({ items }),
+    csv: csvRows.length ? csvRowsToCsv(csvRows, rosterCsvOwnerLabel(items[0] || {})) : myRosterCsv({ items }),
     initialComment: `My roster CSV (${parsed.startDate}, ${parsed.days} day(s))`,
   });
 }
