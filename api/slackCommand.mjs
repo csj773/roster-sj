@@ -80,11 +80,13 @@ async function uploadSlackCsv({ command, filename, title, csv, initialComment })
   const token = process.env.SLACK_BOT_TOKEN || "";
   const channelId = command.channelId || process.env.SLACK_CHANNEL_ID || "";
   if (!token || !channelId) {
-    console.log("MY_ROSTER_CSV_UPLOAD_SKIPPED", {
+    const reason = !token ? "SLACK_BOT_TOKEN is missing on Vercel" : "Slack channel_id is missing";
+    console.log("SLACK_CSV_UPLOAD_SKIPPED", {
+      reason,
       hasSlackBotToken: Boolean(token),
       channelId: channelId || "",
     });
-    return false;
+    return { ok: false, skipped: true, reason };
   }
 
   const file = Buffer.from(`\uFEFF${csv}`, "utf8");
@@ -129,7 +131,7 @@ async function uploadSlackCsv({ command, filename, title, csv, initialComment })
   if (!completeResult.ok) {
     throw new Error(`Slack files.completeUploadExternal failed: ${completeResult.error}`);
   }
-  return true;
+  return { ok: true, skipped: false, reason: "" };
 }
 
 async function postCommandResult(command) {
@@ -2371,7 +2373,7 @@ function safeFilePart(value, fallback = "my-roster") {
 }
 
 async function uploadMyRosterCsv(command, parsed, items, csvRows = []) {
-  if (!items.length) return false;
+  if (!items.length) return { ok: false, skipped: true, reason: "no roster rows" };
   const stationPart = parsed.station ? `_${safeFilePart(parsed.station, "station")}` : "";
   const filename = `my-roster_${safeFilePart(parsed.startDate, "date")}_${parsed.days}days${stationPart}.csv`;
   return uploadSlackCsv({
@@ -2384,7 +2386,7 @@ async function uploadMyRosterCsv(command, parsed, items, csvRows = []) {
 }
 
 async function uploadLayoverCsv(command, parsed, items) {
-  if (!items.length) return false;
+  if (!items.length) return { ok: false, skipped: true, reason: "no layover rows" };
   const stationPart = safeFilePart(parsed.station, "station");
   const filename = `layover_${stationPart}_${safeFilePart(parsed.startDate, "date")}_${parsed.days}days.csv`;
   return uploadSlackCsv({
@@ -2394,6 +2396,13 @@ async function uploadLayoverCsv(command, parsed, items) {
     csv: myRosterCsv({ items }),
     initialComment: `${parsed.station} layover CSV (${parsed.startDate}, ${parsed.days} day(s))`,
   });
+}
+
+function csvUploadStatusText(result, label = "CSV") {
+  if (!result) return "";
+  if (result.ok) return `\n\n${label}: uploaded.`;
+  if (result.skipped) return `\n\n${label}: skipped (${result.reason}).`;
+  return `\n\n${label}: failed (${result.reason || "unknown error"}).`;
 }
 
 async function handleLayover(command) {
@@ -2425,18 +2434,20 @@ async function handleLayover(command) {
     itemCount: items.length,
   });
 
+  let csvUploadResult = null;
   try {
-    await uploadLayoverCsv(command, parsed, items);
+    csvUploadResult = await uploadLayoverCsv(command, parsed, items);
   } catch (error) {
     console.warn("LAYOVER_CSV_UPLOAD_FAILED", {
       message: error.message,
       channelId: command.channelId || "",
     });
+    csvUploadResult = { ok: false, skipped: false, reason: error.message };
   }
 
   return {
     response_type: "ephemeral",
-    text: layoverResponseText({ ...parsed, items }),
+    text: `${layoverResponseText({ ...parsed, items })}${csvUploadStatusText(csvUploadResult)}`,
   };
 }
 
@@ -2467,19 +2478,21 @@ async function handleMyRoster(command) {
     itemCount: items.length,
   });
 
+  let csvUploadResult = null;
   try {
     const csvRows = await myRosterCsvRowsFor(firebaseUid, parsed);
-    await uploadMyRosterCsv(command, parsed, items, csvRows);
+    csvUploadResult = await uploadMyRosterCsv(command, parsed, items, csvRows);
   } catch (error) {
     console.warn("MY_ROSTER_CSV_UPLOAD_FAILED", {
       message: error.message,
       channelId: command.channelId || "",
     });
+    csvUploadResult = { ok: false, skipped: false, reason: error.message };
   }
 
   return {
     response_type: "ephemeral",
-    text: myRosterResponseText({ ...parsed, items }),
+    text: `${myRosterResponseText({ ...parsed, items })}${csvUploadStatusText(csvUploadResult)}`,
   };
 }
 
