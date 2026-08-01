@@ -30,7 +30,7 @@ const DEFAULT_GITHUB_REF = "main";
 const ICAL_IMPORT_WORKFLOW_FILE = "import-ical-roster-to-pdc.yml";
 const PERDIEM_SLACK_WORKFLOW_FILE = "monthly-perdiem-slack-report.yml";
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const ROSTER_HEADERS = ["Date", "D/C", "C/I(L)", "C/O(L)", "Activity", "F", "From", "STD(L)", "STD(Z)", "To", "STA(L)", "STA(Z)", "BLH", "Crew"];
+const ROSTER_HEADERS = ["Date", "D/C", "C/I(L)", "C/O(L)", "Activity", "F", "From", "STD(L)", "STD(Z)", "To", "STA(L)", "STA(Z)", "BLH", "AcReg", "Crew"];
 const FULL_MONTH_NAMES = [
   "january",
   "february",
@@ -68,6 +68,68 @@ async function postSlackResponse(responseUrl, body) {
   if (!response.ok) {
     throw new Error(`Slack response_url failed (${response.status})`);
   }
+}
+
+function csvEscape(value) {
+  const text = String(value ?? "");
+  if (/[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+  return text;
+}
+
+async function uploadSlackCsv({ command, filename, title, csv, initialComment }) {
+  const token = process.env.SLACK_BOT_TOKEN || "";
+  const channelId = command.channelId || process.env.SLACK_CHANNEL_ID || "";
+  if (!token || !channelId) {
+    console.log("MY_ROSTER_CSV_UPLOAD_SKIPPED", {
+      hasSlackBotToken: Boolean(token),
+      channelId: channelId || "",
+    });
+    return false;
+  }
+
+  const file = Buffer.from(`\uFEFF${csv}`, "utf8");
+  const urlResponse = await fetch("https://slack.com/api/files.getUploadURLExternal", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      filename,
+      length: String(file.length),
+    }),
+  });
+  const urlResult = await urlResponse.json();
+  if (!urlResult.ok) {
+    throw new Error(`Slack files.getUploadURLExternal failed: ${urlResult.error}`);
+  }
+
+  const binaryResponse = await fetch(urlResult.upload_url, {
+    method: "POST",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: file,
+  });
+  if (!binaryResponse.ok) {
+    throw new Error(`Slack binary upload failed: HTTP ${binaryResponse.status}`);
+  }
+
+  const completeResponse = await fetch("https://slack.com/api/files.completeUploadExternal", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      files: [{ id: urlResult.file_id, title }],
+      channel_id: channelId,
+      initial_comment: initialComment,
+    }),
+  });
+  const completeResult = await completeResponse.json();
+  if (!completeResult.ok) {
+    throw new Error(`Slack files.completeUploadExternal failed: ${completeResult.error}`);
+  }
+  return true;
 }
 
 async function postCommandResult(command) {
@@ -1423,6 +1485,7 @@ function importedPdcDocToRosterRow(doc) {
     cleanText(doc.STAL || doc["STA(L)"], 40),
     cleanText(doc.STAZ || doc["STA(Z)"], 40),
     cleanText(doc.BLH, 40),
+    cleanText(doc.AcReg || doc.ACReg || doc.REG || doc.Reg, 40),
     cleanText(doc.Crew, 1000),
   ];
 }
@@ -1634,6 +1697,15 @@ function rosterItem(doc, owner) {
     to: upper(data.To),
     stdl: cleanText(data.STDL || data["STD(L)"], 20),
     stal: cleanText(data.STAL || data["STA(L)"], 20),
+    stdz: cleanText(data.STDZ || data["STD(Z)"], 20),
+    staz: cleanText(data.STAZ || data["STA(Z)"], 20),
+    dc: cleanText(data.DC || data["D/C"], 20),
+    cil: cleanText(data.CIL || data["C/I(L)"], 20),
+    col: cleanText(data.COL || data["C/O(L)"], 20),
+    f: cleanText(data.F || activity, 80),
+    blh: cleanText(data.BLH, 40),
+    acReg: cleanText(data.AcReg || data.ACReg || data.REG || data.Reg, 40),
+    crew: cleanText(data.Crew, 1000),
     crewArray,
     type: isOffDuty(activity) ? "day_off" : "flight",
   };
@@ -2212,6 +2284,51 @@ function myRosterResponseText({ station, startDate, days, items }) {
   return `*My roster${stationText}* (${startDate}, ${days} day(s))\n${lines.join("\n")}${suffix}`;
 }
 
+function rosterItemCrewText(item) {
+  const crewList = Array.isArray(item.crewArray) ? item.crewArray.filter(Boolean) : [];
+  return item.crew || crewList.join(", ");
+}
+
+function myRosterCsv({ items }) {
+  const rows = items.map((item) => [
+    dateSortKey(item.date),
+    item.dc,
+    item.cil,
+    item.col,
+    item.activity,
+    item.f || item.activity,
+    item.from,
+    formatCalendarTime(item.stdl),
+    formatCalendarTime(item.stdz),
+    item.to,
+    formatCalendarTime(item.stal),
+    formatCalendarTime(item.staz),
+    item.blh,
+    item.acReg,
+    rosterItemCrewText(item),
+  ]);
+  return [ROSTER_HEADERS, ...rows]
+    .map((row) => row.map(csvEscape).join(","))
+    .join("\n");
+}
+
+function safeFilePart(value, fallback = "my-roster") {
+  return cleanText(value, 120).replace(/[^A-Za-z0-9_.-]+/g, "_").replace(/^_+|_+$/g, "") || fallback;
+}
+
+async function uploadMyRosterCsv(command, parsed, items) {
+  if (!items.length) return false;
+  const stationPart = parsed.station ? `_${safeFilePart(parsed.station, "station")}` : "";
+  const filename = `my-roster_${safeFilePart(parsed.startDate, "date")}_${parsed.days}days${stationPart}.csv`;
+  return uploadSlackCsv({
+    command,
+    filename,
+    title: filename,
+    csv: myRosterCsv({ items }),
+    initialComment: `My roster CSV (${parsed.startDate}, ${parsed.days} day(s))`,
+  });
+}
+
 async function handleLayover(command) {
   const parsed = parseLayoverText(command.text);
   if (!parsed.station) {
@@ -2273,6 +2390,15 @@ async function handleMyRoster(command) {
     days: parsed.days,
     itemCount: items.length,
   });
+
+  try {
+    await uploadMyRosterCsv(command, parsed, items);
+  } catch (error) {
+    console.warn("MY_ROSTER_CSV_UPLOAD_FAILED", {
+      message: error.message,
+      channelId: command.channelId || "",
+    });
+  }
 
   return {
     response_type: "ephemeral",
