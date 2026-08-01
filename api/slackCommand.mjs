@@ -1749,6 +1749,7 @@ function rosterItem(doc, owner) {
     eventId: doc.id,
     sourceCollection,
     crewName: owner.displayName || data.ownerDisplayName || "",
+    email: cleanText(owner.email || data.email || data.ownerEmail, 120).toLowerCase(),
     date: cleanText(data.Date, 20),
     activity,
     from: upper(data.From),
@@ -2372,7 +2373,7 @@ function myRosterCsv({ items }) {
 
 function csvRowsToCsv(rows, ownerLabel = "") {
   return [ROSTER_HEADERS, ...rows.map((row) => ROSTER_HEADERS.map((header) => {
-    if (header === "DC") return cleanText(row[header] || ownerLabel || rosterCsvOwnerLabel(row), 80);
+    if (header === "DC") return cleanText(ownerLabel || rosterCsvOwnerLabel(row) || row[header], 80);
     return row[header] ?? "";
   }))]
     .map((row) => row.map(csvEscape).join(","))
