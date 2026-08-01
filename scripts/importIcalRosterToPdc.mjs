@@ -754,7 +754,7 @@ function icsEventToPdcDoc(event, owner) {
 function pdcDocToRosterRow(doc) {
   return [
     cleanText(doc.DateRaw || doc.Date, 20),
-    cleanText(doc.DC || doc["D/C"], 20),
+    rosterCsvOwnerLabel(doc),
     cleanText(doc.CIL || doc["C/I(L)"], 20),
     cleanText(doc.COL || doc["C/O(L)"], 20),
     cleanText(doc.Activity, 80),
@@ -769,6 +769,14 @@ function pdcDocToRosterRow(doc) {
     cleanText(doc.AcReg || doc.ACReg || doc.REG || doc.Reg, 40),
     cleanText(doc.Crew, 1000),
   ];
+}
+
+function rosterCsvOwnerLabel(value) {
+  const displayName = cleanText(value.display_name || value.pdc_user_name || value.ownerDisplayName || value.crewName, 80);
+  if (displayName) return displayName;
+  const email = cleanText(value.email || value.ownerEmail, 120);
+  if (email) return email.includes("@") ? cleanText(email.split("@")[0], 80) : email;
+  return cleanText(value.owner || value.uid || value.ownerUid, 80);
 }
 
 function pdcDocToCsvRowDoc(doc, eventId = "") {

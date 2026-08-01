@@ -1486,7 +1486,7 @@ async function uploadImportedRosterToPdc(docs) {
 function importedPdcDocToRosterRow(doc) {
   return [
     cleanText(doc.DateRaw || doc.Date, 20),
-    cleanText(doc.DC || doc["D/C"], 20),
+    rosterCsvOwnerLabel(doc),
     cleanText(doc.CIL || doc["C/I(L)"], 20),
     cleanText(doc.COL || doc["C/O(L)"], 20),
     cleanText(doc.Activity, 80),
@@ -1501,6 +1501,14 @@ function importedPdcDocToRosterRow(doc) {
     cleanText(doc.AcReg || doc.ACReg || doc.REG || doc.Reg, 40),
     cleanText(doc.Crew, 1000),
   ];
+}
+
+function rosterCsvOwnerLabel(value) {
+  const displayName = cleanText(value.display_name || value.pdc_user_name || value.ownerDisplayName || value.crewName, 80);
+  if (displayName) return displayName;
+  const email = cleanText(value.email || value.ownerEmail, 120);
+  if (email) return email.includes("@") ? cleanText(email.split("@")[0], 80) : email;
+  return cleanText(value.owner || value.uid || value.ownerUid, 80);
 }
 
 function importedPdcDocToCsvRowDoc(doc, eventId = "") {
@@ -1726,7 +1734,7 @@ function rosterItem(doc, owner) {
     stal: cleanText(data.STAL || data["STA(L)"], 20),
     stdz: cleanText(data.STDZ || data["STD(Z)"], 20),
     staz: cleanText(data.STAZ || data["STA(Z)"], 20),
-    dc: cleanText(data.DC || data["D/C"], 20),
+    dc: rosterCsvOwnerLabel({ ...data, ...owner }),
     cil: cleanText(data.CIL || data["C/I(L)"], 20),
     col: cleanText(data.COL || data["C/O(L)"], 20),
     f: cleanText(data.F || activity, 80),
@@ -2319,7 +2327,7 @@ function rosterItemCrewText(item) {
 function myRosterCsv({ items }) {
   const rows = items.map((item) => [
     dateSortKey(item.date),
-    item.dc,
+    rosterCsvOwnerLabel(item),
     item.cil,
     item.col,
     item.activity,
