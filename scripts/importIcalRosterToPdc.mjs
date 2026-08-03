@@ -808,7 +808,8 @@ function pdcDocToCsvRowDoc(doc, eventId = "") {
     owner: cleanText(doc.owner || doc.uid, 500),
     uid: cleanText(doc.uid || doc.owner, 500),
     eventId,
-    sortKey: dateSortKey(row[0]),
+    sortKey: String(doc.DateRaw || doc.Date || "").replace(/[^\d]/g, ""),
+    //sortKey: dateSortKey(row[0]),
     source: SLACK_ICAL_SOURCE,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
