@@ -645,7 +645,14 @@ function sleep(ms) {
   const mapByKey = new Map();
   for (let i = 0; i < values.length; i++) {
     const row = values[i];
-    const key = `${normalizeDate(row)}||${row[dcIdx]}||${row[flightIdx]}||${row[fromIdx]}||${row[toIdx]}`;
+    const key = [
+    resolvedDateForRow(row),
+    row[dcIdx],
+    row[flightIdx],
+    row[fromIdx],
+    row[toIdx]
+     ].join("|");
+   // const key = `${normalizeDate(row)}||${row[dcIdx]}||${row[flightIdx]}||${row[fromIdx]}||${row[toIdx]}`;
     mapByKey.set(key, row); // 나중 항목 덮어쓰기 -> 최신 유지
   }
   const dedupedRows = Array.from(mapByKey.values());
