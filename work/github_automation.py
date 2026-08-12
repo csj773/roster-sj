@@ -26,7 +26,7 @@ OUT = ROOT / "outputs"
 SUMMARY_JSON = WORK / "github_automation_summary.json"
 
 PILOTLOG_SPREADSHEET_ID = os.environ.get("PILOTLOG_SPREADSHEET_ID", "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc")
-AUTHORITATIVE_SPREADSHEET_ID = os.environ.get("AUTHORITATIVE_SPREADSHEET_ID", "1tRvMJQeoqpGvekJ3xzs_Z80e9QnXoGsIEdIuchY7Wqw")
+AUTHORITATIVE_SPREADSHEET_ID = os.environ.get("AUTHORITATIVE_SPREADSHEET_ID", "1ZasXUvOP8jl8lpNZVFp5CENFNZc-o1sIiWURJ2mSmWg")
 SHEET_NAME = os.environ.get("LOGBOOK_SHEET_NAME", "flt_log")
 CHECKPOINT_SHEET_NAME = os.environ.get("PILOTLOG_CHECKPOINT_SHEET_NAME", "_pilotlog_checkpoint")
 CHECKPOINT_FILE = WORK / "pilotlog_checkpoint_rows.json"
