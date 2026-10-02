@@ -453,6 +453,77 @@ function buildPerDiemDedupeKey(item) {
   ].join("|");
 }
 
+// ------------------- 이번 달 판별 -------------------
+// [MINIMAL PATCH]
+// Firestore rewrite/delete 범위를 현재 서울시간 기준 월로 제한한다.
+function getCurrentSeoulMonthYear() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(new Date());
+
+  const year = parts.find(p => p.type === "year")?.value;
+  const month = Number(parts.find(p => p.type === "month")?.value);
+
+  return {
+    year: String(year),
+    month,
+    monthName: MONTH_NAMES[month - 1],
+  };
+}
+
+function normalizeMonthNumber(month) {
+  if (typeof month === "number") return month;
+
+  const value = String(month || "").trim();
+
+  if (/^\d+$/.test(value)) {
+    const num = Number(value);
+    return num >= 1 && num <= 12 ? num : null;
+  }
+
+  return MONTH_NAME_TO_NUMBER[value.toLowerCase()] || null;
+}
+
+function getItemYearMonth(item) {
+  const year = String(item?.Year || "").trim();
+  let month = normalizeMonthNumber(item?.Month);
+
+  if (!month && item?.Date) {
+    const match = String(item.Date).match(/^(\d{4})\.(\d{1,2})\./);
+
+    if (match) {
+      return {
+        year: match[1],
+        month: Number(match[2]),
+      };
+    }
+  }
+
+  if (!year || !month) return null;
+
+  return {
+    year,
+    month,
+  };
+}
+
+function isCurrentMonthPerDiem(item, currentMonthInfo) {
+  const itemMonth = getItemYearMonth(item);
+
+  if (!itemMonth) return false;
+
+  return (
+    itemMonth.year === currentMonthInfo.year &&
+    itemMonth.month === currentMonthInfo.month
+  );
+}
+
+function isCurrentMonthFirestoreDoc(data, currentMonthInfo) {
+  return isCurrentMonthPerDiem(data, currentMonthInfo);
+}
+
 const PERDIEM_HASH_SKIP_FIELDS = new Set([
   "createdAt",
   "importedAt",
@@ -576,17 +647,43 @@ async function commitDeleteRefs(db, refs) {
   return deleted;
 }
 
-async function deleteFlatPerDiemRowsForOwner(db, owner) {
+// [MINIMAL PATCH]
+// 기존에는 owner의 모든 flat rows를 삭제했지만,
+// 이제 현재 월에 해당하는 rows만 삭제한다.
+async function deleteFlatPerDiemRowsForOwner(db, owner, currentMonthInfo) {
   const snapshot = await db.collection("Perdiem").where("owner", "==", owner).get();
+
   const refs = snapshot.docs
-    .filter((doc) => doc.data()?.Date && doc.data()?.Activity)
+    .filter((doc) => {
+      const data = doc.data();
+
+      return (
+        data?.Date &&
+        data?.Activity &&
+        isCurrentMonthFirestoreDoc(data, currentMonthInfo)
+      );
+    })
     .map((doc) => doc.ref);
+
   return commitDeleteRefs(db, refs);
 }
 
-async function deletePerDiemMirrorRowsForOwner(db, owner) {
-  const snapshot = await db.collection(PERDIEM_FLAT_MIRROR_COLLECTION).where("owner", "==", owner).get();
-  return commitDeleteRefs(db, snapshot.docs.map((doc) => doc.ref));
+// [MINIMAL PATCH]
+// PerdiemEvents도 현재 월 데이터만 삭제한다.
+async function deletePerDiemMirrorRowsForOwner(db, owner, currentMonthInfo) {
+  const snapshot = await db.collection(PERDIEM_FLAT_MIRROR_COLLECTION)
+    .where("owner", "==", owner)
+    .get();
+
+  const refs = snapshot.docs
+    .filter((doc) => {
+      const data = doc.data();
+
+      return isCurrentMonthFirestoreDoc(data, currentMonthInfo);
+    })
+    .map((doc) => doc.ref);
+
+  return commitDeleteRefs(db, refs);
 }
 
 async function commitPerDiemRewrite(ref, docs) {
@@ -605,7 +702,16 @@ async function commitPerDiemRewrite(ref, docs) {
 }
 
 // ------------------- Firestore 업로드 -------------------
-// pdc 저장처럼 owner 단위로 기존 events를 지운 뒤 새 목록으로 재작성한다.
+// [MINIMAL PATCH]
+// 기존 전체 rewrite 방식에서:
+// 1) 이번 달 입력만 추출
+// 2) 이번 달 입력 중복 제거
+// 3) events의 이번 달 데이터만 삭제
+// 4) legacy event의 이번 달 데이터만 삭제
+// 5) Perdiem flat의 이번 달 데이터만 삭제
+// 6) PerdiemEvents의 이번 달 데이터만 삭제
+// 7) 이번 달 데이터만 새로 작성
+// 지난달 및 이전 데이터는 그대로 유지한다.
 export async function uploadPerDiemFirestore(perdiemList, ownerOverride = "") {
   const owner = resolvePerDiemOwner(ownerOverride);
   if (!Array.isArray(perdiemList) || !owner) return;
@@ -620,20 +726,42 @@ export async function uploadPerDiemFirestore(perdiemList, ownerOverride = "") {
   const legacyEventRef = ownerRef.collection("event");
   const now = admin.firestore.FieldValue.serverTimestamp();
 
-  // 입력 목록 자체의 중복을 먼저 제거한다.
+  const currentMonthInfo = getCurrentSeoulMonthYear();
+
+  console.log(
+    `📅 PerDiem 현재 월: ${currentMonthInfo.year}-${String(currentMonthInfo.month).padStart(2, "0")} (${currentMonthInfo.monthName})`
+  );
+
+  // ===== 이번 달 입력만 대상으로 한다 =====
+  const currentMonthItems = perdiemList
+    .map(rawItem => normalizePerDiemItem(rawItem))
+    .filter(item => isCurrentMonthPerDiem(item, currentMonthInfo));
+
+  // ===== 입력 목록 자체의 중복 제거 =====
   const uniqueItems = new Map();
-  for (const rawItem of perdiemList) {
-    const item = normalizePerDiemItem(rawItem);
+
+  for (const item of currentMonthItems) {
     const normalized = {
       ...item,
       To: item.To || item.Destination,
       owner,
       uid: owner,
     };
-    uniqueItems.set(buildPerDiemDedupeKey(normalized), normalized);
+
+    const key = buildPerDiemDedupeKey(normalized);
+
+    if (!uniqueItems.has(key)) {
+      uniqueItems.set(key, normalized);
+    }
   }
 
-  const writes = [...uniqueItems.values()].map((item) => ({
+  const uniqueCurrentMonthItems = [...uniqueItems.values()];
+
+  console.log(
+    `🔎 이번 달 중복 제거: ${currentMonthItems.length}건 → ${uniqueCurrentMonthItems.length}건`
+  );
+
+  const writes = uniqueCurrentMonthItems.map((item) => ({
     id: buildPerDiemDocId(item),
     data: {
       ...item,
@@ -649,53 +777,103 @@ export async function uploadPerDiemFirestore(perdiemList, ownerOverride = "") {
     data,
   }));
 
-  const sourceHash = sourceHashForDocEntries(writes);
-  const ownerSnapshot = await ownerRef.get();
-  if (ownerSnapshot.exists && ownerSnapshot.get("sourceHash") === sourceHash) {
-    console.log(
-      `✅ Firestore PerDiem rewrite skip ` +
-      `(owner=${owner}, 입력 ${perdiemList.length}건, 고유 ${uniqueItems.size}건, sourceHash 동일)`
-    );
-    console.log(`PERDIEM_STORAGE_PATH=Perdiem/${owner}/events`);
-    console.log(`PERDIEM_FLAT_MIRROR_PATH=${PERDIEM_FLAT_MIRROR_COLLECTION}`);
-    return { skipped: true, written: writes.length, skippedDuplicates: perdiemList.length - uniqueItems.size };
-  }
-
+  // ===== 기존 events에서 이번 달만 삭제 =====
   const existingSnapshot = await eventsRef.get();
+
+  const currentMonthExistingRefs = existingSnapshot.docs
+    .filter((doc) => isCurrentMonthFirestoreDoc(doc.data(), currentMonthInfo))
+    .map((doc) => doc.ref);
+
+  // ===== legacy event에서도 이번 달만 삭제 =====
   const legacySnapshot = await legacyEventRef.get();
+
+  const currentMonthLegacyRefs = legacySnapshot.docs
+    .filter((doc) => isCurrentMonthFirestoreDoc(doc.data(), currentMonthInfo))
+    .map((doc) => doc.ref);
+
+  // ===== Perdiem flat collection: 이번 달만 삭제 =====
+  const deletedFlat = await deleteFlatPerDiemRowsForOwner(
+    db,
+    owner,
+    currentMonthInfo
+  );
+
+  // ===== PerdiemEvents mirror: 이번 달만 삭제 =====
+  const deletedMirror = await deletePerDiemMirrorRowsForOwner(
+    db,
+    owner,
+    currentMonthInfo
+  );
+
+  // ===== events + legacy: 이번 달만 삭제 =====
   const deleted = await commitDeleteRefs(db, [
-    ...existingSnapshot.docs,
-    ...legacySnapshot.docs,
-  ].map((doc) => doc.ref));
-  const deletedFlat = await deleteFlatPerDiemRowsForOwner(db, owner);
-  const deletedMirror = await deletePerDiemMirrorRowsForOwner(db, owner);
+    ...currentMonthExistingRefs,
+    ...currentMonthLegacyRefs,
+  ]);
+
+  // ===== 이번 달 데이터만 새로 작성 =====
+  const saved = await commitPerDiemRewrite(eventsRef, writes);
+
+  // ===== PerdiemEvents mirror 새로 작성 =====
+  const savedMirror = await commitPerDiemRewrite(
+    db.collection(PERDIEM_FLAT_MIRROR_COLLECTION),
+    mirrorWrites
+  );
+
+  // ===== Owner metadata =====
+  const sourceHash = sourceHashForDocEntries(writes);
 
   await ownerRef.set({
     owner,
     uid: owner,
     source: "roster_perdiem",
-    sourceHash,
-    sourceHashUpdatedAt: now,
-    rewrittenAt: now,
-    updatedAt: now,
-  }, { merge: true });
 
-  const saved = await commitPerDiemRewrite(eventsRef, writes);
-  await commitPerDiemRewrite(db.collection(PERDIEM_FLAT_MIRROR_COLLECTION), mirrorWrites);
+    // 기존 sourceHash와 구분하여 현재 월 데이터의 hash만 기록
+    currentMonthSourceHash: sourceHash,
+    currentMonthYear: currentMonthInfo.year,
+    currentMonth: currentMonthInfo.monthName,
 
-  await ownerRef.set({
-    eventCount: saved,
+    currentMonthEventCount: saved,
+    currentMonthMirrorCount: savedMirror,
+
     lastImportSourceRows: perdiemList.length,
-    skippedDuplicates: perdiemList.length - uniqueItems.size,
+    currentMonthInputRows: currentMonthItems.length,
+    currentMonthSkippedDuplicates:
+      currentMonthItems.length - uniqueCurrentMonthItems.length,
+
+    currentMonthRewrittenAt: now,
+
     storagePath: `Perdiem/${owner}/events`,
     flatMirror: PERDIEM_FLAT_MIRROR_COLLECTION,
+
     updatedAt: now,
   }, { merge: true });
 
   console.log(
-    `✅ Firestore PerDiem rewrite 완료 ` +
-    `(입력 ${perdiemList.length}건, 고유 ${uniqueItems.size}건, 저장 ${saved}건, 기존 events 삭제 ${deleted}건, flat 삭제 ${deletedFlat}건, mirror 삭제 ${deletedMirror}건)`
+    `✅ Firestore PerDiem 이번 달 rewrite 완료 ` +
+    `(입력 ${perdiemList.length}건, 이번 달 ${currentMonthItems.length}건, ` +
+    `고유 ${uniqueCurrentMonthItems.length}건, 저장 ${saved}건, ` +
+    `events 삭제 ${deleted}건, flat 삭제 ${deletedFlat}건, ` +
+    `mirror 삭제 ${deletedMirror}건, mirror 저장 ${savedMirror}건)`
   );
+
   console.log(`PERDIEM_STORAGE_PATH=Perdiem/${owner}/events`);
   console.log(`PERDIEM_FLAT_MIRROR_PATH=${PERDIEM_FLAT_MIRROR_COLLECTION}`);
+
+  return {
+    skipped: false,
+    owner,
+    year: currentMonthInfo.year,
+    month: currentMonthInfo.monthName,
+    inputRows: perdiemList.length,
+    currentMonthRows: currentMonthItems.length,
+    uniqueRows: uniqueCurrentMonthItems.length,
+    skippedDuplicates:
+      currentMonthItems.length - uniqueCurrentMonthItems.length,
+    deletedEvents: deleted,
+    deletedFlat,
+    deletedMirror,
+    written: saved,
+    writtenMirror: savedMirror,
+  };
 }
