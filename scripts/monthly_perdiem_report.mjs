@@ -1,20 +1,34 @@
-import admin from "firebase-admin";
-import fs from "node:fs/promises";
-import path from "node:path";
+import fs from "fs";
+import path from "path";
+import crypto from "crypto";
 import { google } from "googleapis";
-const PERDIEM_EVENTS_COLLECTION =
-  process.env.PERDIEM_EVENTS_COLLECTION || "PerdiemEvents";
+import admin from "firebase-admin";
+
 const SPREADSHEET_ID =
   process.env.GOOGLE_SHEETS_SPREADSHEET_ID ||
   "1mKjEd__zIoMJaa6CLmDE-wALGhtlG-USLTAiQBZnioc";
-const SHEET_NAME =
-  process.env.PERDIEM_SHEET_NAME || "Perdiem";
-const OUTPUT_DIR =
-  process.env.PERDIEM_OUTPUT_DIR || "outputs";
+
+const SHEET_NAME = process.env.PERDIEM_SHEET_NAME || "Perdiem";
+const OUTPUT_DIR = process.env.PERDIEM_REPORT_DIR || "outputs";
+
+const PERDIEM_EVENTS_COLLECTION =
+  process.env.PERDIEM_EVENTS_COLLECTION || "PerdiemEvents";
+
 const MONTH_NAMES = [
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
 ];
+
 const SHEET_HEADER = [
   "ID",
   "Date",
@@ -31,806 +45,939 @@ const SHEET_HEADER = [
   "Year",
   "Taxi",
   "Car",
-  "Owner"
+  "Owner",
 ];
-// ============================================================
-// Environment helpers
-// ============================================================
-function env(name) {
-  return String(process.env[name] || "").trim();
-}
-function requiredEnv(name) {
-  const value = env(name);
-  if (!value) {
+
+function requiredJsonEnv(name) {
+  const raw = String(process.env[name] || "")
+    .trim()
+    .replace(/^\uFEFF/, "")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'");
+
+  if (!raw) {
     throw new Error(`${name} is required`);
   }
-  return value;
-}
-// ============================================================
-// JSON environment variable
-// ============================================================
-function parseJsonEnv(name) {
-  const raw = requiredEnv(name)
-    .replace(/^\uFEFF/, "")
-    .trim();
+
   let parsed;
+
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
     throw new Error(
-      `${name} contains invalid JSON: ${error.message}`
+      `${name} contains invalid JSON: ${error.message}`,
     );
   }
+
   if (parsed.private_key) {
-    parsed.private_key = String(parsed.private_key)
-      .replace(/\\n/g, "\n")
-      .replace(/\r\n/g, "\n");
+    parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
   }
+
   return parsed;
 }
-// ============================================================
-// Month
-// ============================================================
+
+function optionalEnv(name) {
+  return String(process.env[name] || "").trim();
+}
+
+function kstNow() {
+  return new Date(Date.now() + 9 * 60 * 60 * 1000);
+}
+
+function defaultTargetMonthYear() {
+  const now = kstNow();
+
+  let year = now.getUTCFullYear();
+  let month = now.getUTCMonth() + 1;
+
+  // 매월 1일에는 직전 달 보고서 생성
+  if (now.getUTCDate() === 1) {
+    month -= 1;
+
+    if (month === 0) {
+      month = 12;
+      year -= 1;
+    }
+  }
+
+  return { year, month };
+}
+
+function isKstMonthCloseRun() {
+  return kstNow().getUTCDate() === 1;
+}
+
 function monthToNumber(value) {
-  const text = String(value ?? "").trim();
-  if (!text) {
-    return null;
+  const normalized = String(value ?? "").trim();
+
+  if (!normalized) return null;
+
+  const numeric = Number(normalized);
+
+  if (
+    Number.isFinite(numeric) &&
+    numeric >= 1 &&
+    numeric <= 12
+  ) {
+    return numeric;
   }
-  // 1 ~ 12
-  if (/^\d+$/.test(text)) {
-    const number = Number(text);
-    return number >= 1 && number <= 12
-      ? number
-      : null;
-  }
-  // Jan, January, Feb, February ...
+
   const index = MONTH_NAMES.findIndex(
-    (month) =>
-      month.toLowerCase() ===
-      text.slice(0, 3).toLowerCase()
+    (name) =>
+      name.toLowerCase() === normalized.toLowerCase(),
   );
-  return index >= 0
-    ? index + 1
-    : null;
+
+  return index >= 0 ? index + 1 : null;
 }
-// ============================================================
-// Target period
-//
-// PERDIEM_TARGET_MONTH / PERDIEM_TARGET_YEAR가 있으면 사용
-// 없으면 서울시간 기준 "전월" 사용
-// ============================================================
-function targetPeriod() {
-  const now = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Seoul",
-    year: "numeric",
-    month: "numeric"
-  }).formatToParts(new Date());
-  const currentYear = Number(
-    now.find((part) => part.type === "year")?.value
-  );
-  const currentMonth = Number(
-    now.find((part) => part.type === "month")?.value
-  );
-  const monthInput = env("PERDIEM_TARGET_MONTH");
-  const yearInput = env("PERDIEM_TARGET_YEAR");
-  // Explicit target
-  if (monthInput || yearInput) {
-    const month =
-      monthToNumber(monthInput) || currentMonth;
-    const year =
-      Number(yearInput) || currentYear;
-    if (
-      !Number.isInteger(month) ||
-      month < 1 ||
-      month > 12
-    ) {
-      throw new Error(
-        `Invalid PERDIEM_TARGET_MONTH: ${monthInput}`
-      );
-    }
-    if (
-      !Number.isInteger(year) ||
-      year < 2000 ||
-      year > 2200
-    ) {
-      throw new Error(
-        `Invalid PERDIEM_TARGET_YEAR: ${yearInput}`
-      );
-    }
-    return {
-      year,
-      month,
-      monthName: MONTH_NAMES[month - 1]
-    };
-  }
-  // Default = previous month
-  const previous = new Date(
-    Date.UTC(currentYear, currentMonth - 2, 1)
-  );
-  const month =
-    previous.getUTCMonth() + 1;
-  return {
-    year: previous.getUTCFullYear(),
-    month,
-    monthName: MONTH_NAMES[month - 1]
-  };
+
+function parseMoney(value) {
+  const normalized = String(value ?? "")
+    .replace(/,/g, "")
+    .replace(/[^0-9.+-]/g, "")
+    .trim();
+
+  const parsed = Number(normalized);
+
+  return Number.isFinite(parsed) ? parsed : 0;
 }
-// ============================================================
-// CSV
-// ============================================================
+
 function csvEscape(value) {
   const text = String(value ?? "");
-  return /[",\r\n]/.test(text)
-    ? `"${text.replaceAll('"', '""')}"`
-    : text;
+
+  if (/[",\n\r]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+
+  return text;
 }
-// ============================================================
-// Number
-// ============================================================
-function numberValue(value) {
-  const number = Number(
-    String(value ?? "").replace(/,/g, "")
+
+function toCsv(rows) {
+  return rows
+    .map((row) =>
+      row.map(csvEscape).join(","),
+    )
+    .join("\n");
+}
+
+function normalizeIdentity(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase();
+}
+
+function sanitizeFilePart(
+  value,
+  fallback = "user",
+) {
+  const normalized = String(value || fallback)
+    .normalize("NFKD")
+    .replace(
+      /[^a-zA-Z0-9가-힣._-]+/g,
+      "_",
+    )
+    .replace(/^_+|_+$/g, "");
+
+  return normalized || fallback;
+}
+
+function ownerReportKey(owner) {
+  const visible =
+    owner.displayName ||
+    owner.email ||
+    owner.owner ||
+    owner.uid ||
+    owner.userId;
+
+  if (visible) {
+    return sanitizeFilePart(visible);
+  }
+
+  const hash = crypto
+    .createHash("sha256")
+    .update(JSON.stringify(owner))
+    .digest("hex")
+    .slice(0, 10);
+
+  return `user_${hash}`;
+}
+
+function reportOwner() {
+  return {
+    owner:
+      optionalEnv("PERDIEM_OWNER") ||
+      optionalEnv("REPORT_OWNER_UID") ||
+      optionalEnv("FIREBASE_UID"),
+
+    uid:
+      optionalEnv("PERDIEM_UID") ||
+      optionalEnv("REPORT_OWNER_UID") ||
+      optionalEnv("FIREBASE_UID"),
+
+    userId:
+      optionalEnv("PERDIEM_USER_ID") ||
+      optionalEnv("REPORT_OWNER_UID") ||
+      optionalEnv("FIREBASE_UID") ||
+      optionalEnv("USER_ID"),
+
+    email:
+      optionalEnv("PERDIEM_USER_EMAIL") ||
+      optionalEnv("USER_EMAIL") ||
+      (/^[^@\s]+@[^@\s]+$/.test(
+        optionalEnv("USER_ID"),
+      )
+        ? optionalEnv("USER_ID")
+        : ""),
+
+    displayName:
+      optionalEnv("PDC_USER_NAME") ||
+      optionalEnv("USER_NAME") ||
+      optionalEnv("PERDIEM_USER_NAME"),
+  };
+}
+
+function hasRequestedIdentity(owner) {
+  return Boolean(
+    owner.owner ||
+      owner.uid ||
+      owner.userId ||
+      owner.email,
   );
-  return Number.isFinite(number)
-    ? number
-    : 0;
 }
-// ============================================================
-// Normalization
-// ============================================================
+
+function eventOwnerMatches(event, owner) {
+  const candidates = [
+    event.owner,
+    event.uid,
+    event.userId,
+    event.firebaseUid,
+    event.email,
+    event.userEmail,
+  ]
+    .map(normalizeIdentity)
+    .filter(Boolean);
+
+  const expected = [
+    owner.owner,
+    owner.uid,
+    owner.userId,
+    owner.email,
+  ]
+    .map(normalizeIdentity)
+    .filter(Boolean);
+
+  if (!candidates.length || !expected.length) {
+    return false;
+  }
+
+  return expected.some((value) =>
+    candidates.includes(value),
+  );
+}
+
+function valueFromEvent(event, names) {
+  for (const name of names) {
+    if (
+      event[name] !== undefined &&
+      event[name] !== null &&
+      String(event[name]).trim() !== ""
+    ) {
+      return event[name];
+    }
+  }
+
+  return "";
+}
+
 function normalizeDate(value) {
   const text = String(value ?? "").trim();
+
   const match = text.match(
-    /^(\d{4})[-.](\d{1,2})[-.](\d{1,2})$/
+    /^(\d{4})[-.](\d{1,2})[-.](\d{1,2})$/,
   );
-  return match
-    ? `${match[1]}.${match[2].padStart(2, "0")}.${match[3].padStart(2, "0")}`
-    : text;
+
+  if (!match) return text;
+
+  return `${match[1]}.${match[2].padStart(
+    2,
+    "0",
+  )}.${match[3].padStart(2, "0")}`;
 }
+
 function normalizeAirport(value) {
   return String(value ?? "")
     .trim()
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, "");
 }
+
 function normalizeActivity(value) {
   return String(value ?? "")
     .trim()
     .toUpperCase()
     .replace(/\s+/g, "");
 }
+
 function normalizedTimestamp(value) {
-  const text = String(value ?? "").trim();
-  if (!text) {
-    return "";
+  if (!value) return "";
+
+  if (
+    typeof value === "object" &&
+    typeof value.toDate === "function"
+  ) {
+    return value.toDate().toISOString();
   }
-  const timestamp = Date.parse(text);
-  return Number.isNaN(timestamp)
+
+  const text = String(value).trim();
+
+  if (!text) return "";
+
+  const parsed = Date.parse(text);
+
+  return Number.isNaN(parsed)
     ? text
-    : new Date(timestamp).toISOString();
+    : new Date(parsed).toISOString();
 }
-// ============================================================
-// Dedupe
-// ============================================================
-function dedupeRows(rows) {
-  const map = new Map();
+
+function rowCompleteness(row) {
+  return row.reduce(
+    (score, value) =>
+      score +
+      (String(value ?? "").trim() ? 1 : 0),
+    0,
+  );
+}
+
+function perDiemDuplicateKey(row) {
+  return [
+    normalizeDate(row[1]),
+    normalizeActivity(row[2]),
+    normalizeAirport(row[3]),
+    normalizeAirport(row[4]),
+    normalizedTimestamp(row[5]),
+    normalizedTimestamp(row[6]),
+  ].join("|");
+}
+
+function dedupePerDiemRows(rows) {
+  const selected = new Map();
+
   for (const row of rows) {
-    const key = [
-      normalizeDate(row.Date),
-      normalizeActivity(row.Activity),
-      normalizeAirport(row.From),
-      normalizeAirport(
-        row.Destination || row.To
-      ),
-      normalizedTimestamp(row.RI),
-      normalizedTimestamp(row.RO)
-    ].join("|");
-    const existing = map.get(key);
-    if (!existing) {
-      map.set(key, row);
-      continue;
-    }
-    const score = (item) =>
-      [
-        item.RI,
-        item.RO,
-        item.StayHours,
-        item.Total
-      ].filter(
-        (value) =>
-          String(value ?? "").trim() !== ""
-      ).length;
-    if (score(row) >= score(existing)) {
-      map.set(key, row);
+    const key = perDiemDuplicateKey(row);
+
+    const current = selected.get(key);
+
+    if (
+      !current ||
+      rowCompleteness(row) >
+        rowCompleteness(current)
+    ) {
+      selected.set(key, row);
     }
   }
-  return [...map.values()].sort(
-    (a, b) =>
-      `${normalizeDate(a.Date)}|${a.Activity || ""}`
-        .localeCompare(
-          `${normalizeDate(b.Date)}|${b.Activity || ""}`
-        )
-  );
-}
-// ============================================================
-// Owner
-// ============================================================
-function ownerUid() {
-  return (
-    env("PERDIEM_OWNER") ||
-    env("REPORT_OWNER_UID") ||
-    env("FIREBASE_UID") ||
-    env("PERDIEM_USER_ID")
-  );
-}
-function reportUserName() {
-  return (
-    env("PERDIEM_USER_NAME") ||
-    env("PDC_USER_NAME") ||
-    env("USER_NAME")
-  );
-}
-// ============================================================
-// Safe filename
-// ============================================================
-function safeFilePart(value) {
-  const text = String(value || "user");
-  return (
-    text
-      .replace(/[^a-zA-Z0-9._-]+/g, "_")
-      .replace(/^_+|_+$/g, "") ||
-    "user"
-  );
-}
-// ============================================================
-// Slack response
-// ============================================================
-async function postSlackResponse(text) {
-  const url = env("SLACK_RESPONSE_URL");
-  if (!url) {
-    return;
-  }
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json"
-    },
-    body: JSON.stringify({
-      response_type: "ephemeral",
-      replace_original: false,
-      text
-    })
-  });
-  if (!response.ok) {
-    console.warn(
-      `Slack response_url failed: HTTP ${response.status}`
-    );
-  }
-}
-// ============================================================
-// Slack file upload
-// ============================================================
-async function uploadSlackFile(
-  filePath,
-  title,
-  comment
-) {
-  const token = env("SLACK_BOT_TOKEN");
-  const channelId = env("SLACK_CHANNEL_ID");
-  if (!token || !channelId) {
-    console.log(
-      "Slack file upload skipped: SLACK_BOT_TOKEN or SLACK_CHANNEL_ID is missing."
-    );
-    return;
-  }
-  const file = await fs.readFile(filePath);
-  const filename = path.basename(filePath);
-  // Step 1: get upload URL
-  const urlResponse = await fetch(
-    "https://slack.com/api/files.getUploadURLExternal",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type":
-          "application/x-www-form-urlencoded"
-      },
-      body: new URLSearchParams({
-        filename,
-        length: String(file.length)
-      })
-    }
-  );
-  const urlResult = await urlResponse.json();
-  if (!urlResult.ok) {
-    throw new Error(
-      `Slack files.getUploadURLExternal failed: ${urlResult.error}`
-    );
-  }
-  // Step 2: upload binary
-  const upload = await fetch(
-    urlResult.upload_url,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/octet-stream"
-      },
-      body: file
-    }
-  );
-  if (!upload.ok) {
-    throw new Error(
-      `Slack binary upload failed: HTTP ${upload.status}`
-    );
-  }
-  // Step 3: complete upload
-  const complete = await fetch(
-    "https://slack.com/api/files.completeUploadExternal",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        files: [
-          {
-            id: urlResult.file_id,
-            title
-          }
-        ],
-        channel_id: channelId,
-        initial_comment: comment
-      })
-    }
-  );
-  const result = await complete.json();
-  if (!result.ok) {
-    throw new Error(
-      `Slack files.completeUploadExternal failed: ${result.error}`
-    );
-  }
-}
-// ============================================================
-// Firestore → PerdiemEvents
-// ============================================================
-async function getFirestoreRows(
-  db,
-  uid,
-  period
-) {
-  let query =
-    db.collection(PERDIEM_EVENTS_COLLECTION);
-  if (uid) {
-    query = query.where(
-      "owner",
-      "==",
-      uid
-    );
-  }
-  const snapshot = await query.get();
-  return snapshot.docs
-    .map((doc) => ({
-      id: doc.id,
-      ...doc.data()
-    }))
-    .filter((row) => {
-      const rowYear = Number(row.Year);
-      const rowMonth = monthToNumber(row.Month);
-      return (
-        rowYear === period.year &&
-        rowMonth === period.month &&
-        (
-          !uid ||
-          String(
-            row.owner ||
-            row.uid ||
-            ""
-          ).trim() === uid
-        )
+
+  return [...selected.values()].sort(
+    (left, right) => {
+      const leftDate = normalizeDate(left[1]);
+      const rightDate = normalizeDate(right[1]);
+
+      const dateCompare =
+        leftDate.localeCompare(rightDate);
+
+      if (dateCompare !== 0) {
+        return dateCompare;
+      }
+
+      return normalizeActivity(
+        left[2],
+      ).localeCompare(
+        normalizeActivity(right[2]),
       );
-    });
+    },
+  );
 }
-// ============================================================
-// Firestore → Google Sheets
-// ============================================================
-async function writeMonthToSheet(
-  sheets,
-  rows
+
+function eventToSheetRow(
+  event,
+  documentId,
+  targetMonth,
+  targetYear,
 ) {
-  const values = rows.map((row) => [
-    row.id || "",
-    row.Date || "",
-    row.Activity || "",
-    row.From || "",
-    row.Destination || row.To || "",
-    row.RI || "",
-    row.RO || "",
-    row.StayHours || "",
-    row.Rate ?? "",
-    row.Total ?? "",
-    row.TransportFee ?? "",
-    monthToNumber(row.Month) ||
-      row.Month ||
-      "",
-    row.Year || "",
-    row.Taxi ?? "",
-    row.Car ?? "",
-    row.owner ||
-      row.uid ||
-      ""
+  const date = valueFromEvent(event, [
+    "Date",
+    "date",
   ]);
-  // 기존 Perdiem Sheet 삭제
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A:P`
-  });
-  // 선택된 월만 다시 기록
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A1`,
-    valueInputOption: "RAW",
-    requestBody: {
-      values: [
-        SHEET_HEADER,
-        ...values
-      ]
-    }
-  });
-  return values.length;
+
+  const activity = valueFromEvent(event, [
+    "Activity",
+    "activity",
+    "FLT",
+    "flight",
+  ]);
+
+  const from = valueFromEvent(event, [
+    "From",
+    "from",
+  ]);
+
+  const destination = valueFromEvent(event, [
+    "Destination",
+    "destination",
+    "To",
+    "to",
+  ]);
+
+  const ri = valueFromEvent(event, [
+    "RI",
+    "ri",
+  ]);
+
+  const ro = valueFromEvent(event, [
+    "RO",
+    "ro",
+  ]);
+
+  const stayHours = valueFromEvent(event, [
+    "StayHours",
+    "stayHours",
+  ]);
+
+  const rate = valueFromEvent(event, [
+    "Rate",
+    "rate",
+  ]);
+
+  const total = valueFromEvent(event, [
+    "Total",
+    "total",
+  ]);
+
+  const transportFee =
+    valueFromEvent(event, [
+      "TransportFee",
+      "transportFee",
+      "Transport Fee",
+    ]);
+
+  const taxi = valueFromEvent(event, [
+    "Taxi",
+    "taxi",
+  ]);
+
+  const car = valueFromEvent(event, [
+    "Car",
+    "car",
+  ]);
+
+  const owner =
+    valueFromEvent(event, [
+      "Owner",
+      "owner",
+      "uid",
+      "userId",
+      "firebaseUid",
+    ]) || "";
+
+  return [
+    documentId,
+    normalizeDate(date),
+    activity,
+    from,
+    destination,
+    ri,
+    ro,
+    stayHours,
+    rate,
+    total,
+    transportFee,
+    MONTH_NAMES[targetMonth - 1],
+    targetYear,
+    taxi,
+    car,
+    owner,
+  ];
 }
-// ============================================================
-// Google Sheets → Report
-// ============================================================
-async function readMonthBackFromSheet(
-  sheets,
-  period,
-  uid
-) {
-  const response =
-    await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A:P`
-    });
-  const values =
-    response.data.values || [];
-  if (!values.length) {
-    return [];
-  }
-  const rows = values
-    .slice(1)
-    .map((row) => ({
-      id: row[0] || "",
-      Date: row[1] || "",
-      Activity: row[2] || "",
-      From: row[3] || "",
-      Destination: row[4] || "",
-      RI: row[5] || "",
-      RO: row[6] || "",
-      StayHours: row[7] || "",
-      Rate: row[8] || "",
-      Total: row[9] || "",
-      TransportFee: row[10] || "",
-      Month: row[11] || "",
-      Year: row[12] || "",
-      Taxi: row[13] || "",
-      Car: row[14] || "",
-      owner: row[15] || ""
-    }));
-  return rows.filter((row) => {
-    return (
-      Number(row.Year) === period.year &&
-      monthToNumber(row.Month) === period.month &&
-      (
-        !uid ||
-        row.owner === uid
-      )
+
+async function initializeFirebase() {
+  const credentials =
+    requiredJsonEnv(
+      "FIREBASE_SERVICE_ACCOUNT",
     );
-  });
-}
-// ============================================================
-// MAIN
-// ============================================================
-async function main() {
-  // ----------------------------------------------------------
-  // Firebase
-  // ----------------------------------------------------------
+
   if (!admin.apps.length) {
     admin.initializeApp({
       credential:
-        admin.credential.cert(
-          parseJsonEnv(
-            "FIREBASE_SERVICE_ACCOUNT"
-          )
-        )
+        admin.credential.cert(credentials),
     });
   }
-  const db = admin.firestore();
-  // ----------------------------------------------------------
-  // Owner
-  // ----------------------------------------------------------
-  const uid = ownerUid();
-  if (!uid) {
-    throw new Error(
-      "PERDIEM_OWNER / REPORT_OWNER_UID / FIREBASE_UID / PERDIEM_USER_ID is required"
+
+  return admin.firestore();
+}
+
+async function readPerdiemEvents({
+  db,
+  owner,
+  targetMonth,
+  targetYear,
+}) {
+  const collection =
+    db.collection(
+      PERDIEM_EVENTS_COLLECTION,
+    );
+
+  const snapshot = await collection.get();
+
+  const rows = [];
+
+  for (const doc of snapshot.docs) {
+    const data = doc.data() || {};
+
+    if (!eventOwnerMatches(data, owner)) {
+      continue;
+    }
+
+    const monthValue = valueFromEvent(
+      data,
+      ["Month", "month"],
+    );
+
+    const yearValue = valueFromEvent(
+      data,
+      ["Year", "year"],
+    );
+
+    let eventMonth =
+      monthToNumber(monthValue);
+
+    let eventYear =
+      Number(yearValue);
+
+    /*
+     * Month / Year 필드가 없는 오래된 문서에 대해서는
+     * Date에서 자동으로 계산한다.
+     */
+    if (
+      !eventMonth ||
+      !Number.isInteger(eventYear)
+    ) {
+      const dateValue = valueFromEvent(
+        data,
+        ["Date", "date"],
+      );
+
+      const match = String(
+        dateValue || "",
+      ).match(
+        /^(\d{4})[-.](\d{1,2})[-.](\d{1,2})/,
+      );
+
+      if (match) {
+        eventYear = Number(match[1]);
+        eventMonth = Number(match[2]);
+      }
+    }
+
+    if (
+      eventMonth !== targetMonth ||
+      eventYear !== targetYear
+    ) {
+      continue;
+    }
+
+    rows.push(
+      eventToSheetRow(
+        data,
+        doc.id,
+        targetMonth,
+        targetYear,
+      ),
     );
   }
-  // ----------------------------------------------------------
-  // Period
-  // ----------------------------------------------------------
-  const period = targetPeriod();
+
+  return rows;
+}
+
+async function replacePerdiemSheet({
+  sheets,
+  sourceRows,
+}) {
+  /*
+   * Google Sheets는 보고서 표시용으로만 사용.
+   * Firestore PerdiemEvents가 원본(Source of Truth)이다.
+   */
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${SHEET_NAME}!A:P`,
+  });
+
+  const rows = [
+    SHEET_HEADER,
+    ...sourceRows,
+  ];
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${SHEET_NAME}!A1:P${rows.length}`,
+    valueInputOption: "RAW",
+    requestBody: {
+      values: rows,
+    },
+  });
+
   console.log(
-    `Target period: ${period.monthName} ${period.year}`
+    `PERDIEM_SHEET_WRITTEN_ROWS=${sourceRows.length}`,
   );
-  console.log(
-    `Owner: ${uid}`
-  );
-  // ----------------------------------------------------------
-  // Google Sheets
-  // ----------------------------------------------------------
-  const credentials =
-    parseJsonEnv(
-      "GOOGLE_SHEETS_CREDENTIALS"
+
+  return sourceRows.length;
+}
+
+async function main() {
+  const force =
+    process.env.FORCE_PERDIEM_REPORT ===
+      "true" ||
+    process.env.GITHUB_EVENT_NAME ===
+      "workflow_dispatch";
+
+  if (
+    !force &&
+    !isKstMonthCloseRun()
+  ) {
+    console.log(
+      "Not KST month-close day; skipping report.",
     );
+    return;
+  }
+
+  const target =
+    defaultTargetMonthYear();
+
+  const targetYear = Number(
+    process.env.PERDIEM_TARGET_YEAR ||
+      target.year,
+  );
+
+  const targetMonth = monthToNumber(
+    process.env.PERDIEM_TARGET_MONTH ||
+      target.month,
+  );
+
+  const monthName =
+    MONTH_NAMES[targetMonth - 1];
+
+  if (
+    !monthName ||
+    !Number.isInteger(targetYear) ||
+    targetYear < 2000
+  ) {
+    throw new Error(
+      `Invalid target month/year: ${targetMonth}/${targetYear}`,
+    );
+  }
+
+  const owner = reportOwner();
+
+  if (!hasRequestedIdentity(owner)) {
+    throw new Error(
+      "User identity is required. Set PERDIEM_OWNER, REPORT_OWNER_UID, FIREBASE_UID, PERDIEM_USER_ID, or PERDIEM_USER_EMAIL.",
+    );
+  }
+
+  console.log(
+    `PERDIEM_TARGET=${targetYear}-${String(
+      targetMonth,
+    ).padStart(2, "0")}`,
+  );
+
+  console.log(
+    `PERDIEM_OWNER=${
+      owner.owner ||
+      owner.uid ||
+      owner.userId ||
+      owner.email
+    }`,
+  );
+
+  /*
+   * ---------------------------------------------------------
+   * 1. Firestore 초기화
+   * ---------------------------------------------------------
+   */
+
+  const db =
+    await initializeFirebase();
+
+  /*
+   * ---------------------------------------------------------
+   * 2. PerdiemEvents에서 해당 사용자 + 월 데이터 조회
+   * ---------------------------------------------------------
+   */
+
+  const firestoreRows =
+    await readPerdiemEvents({
+      db,
+      owner,
+      targetMonth,
+      targetYear,
+    });
+
+  console.log(
+    `PERDIEM_FIRESTORE_ROWS=${firestoreRows.length}`,
+  );
+
+  /*
+   * ---------------------------------------------------------
+   * 3. 중복 제거
+   * ---------------------------------------------------------
+   */
+
+  const filteredRows =
+    dedupePerDiemRows(
+      firestoreRows,
+    );
+
+  const duplicatesRemoved =
+    firestoreRows.length -
+    filteredRows.length;
+
+  console.log(
+    `PERDIEM_DUPLICATES_REMOVED=${duplicatesRemoved}`,
+  );
+
+  /*
+   * ---------------------------------------------------------
+   * 4. Google Sheets 인증
+   * ---------------------------------------------------------
+   */
+
+  const googleCredentials =
+    requiredJsonEnv(
+      "GOOGLE_SHEETS_CREDENTIALS",
+    );
+
   const auth =
     new google.auth.GoogleAuth({
-      credentials,
+      credentials: googleCredentials,
       scopes: [
-        "https://www.googleapis.com/auth/spreadsheets"
-      ]
+        "https://www.googleapis.com/auth/spreadsheets",
+      ],
     });
+
   const sheets =
     google.sheets({
       version: "v4",
-      auth
+      auth,
     });
-  // ----------------------------------------------------------
-  // 1. Firestore
-  // ----------------------------------------------------------
-  const sourceRows =
-    await getFirestoreRows(
-      db,
-      uid,
-      period
-    );
-  const dedupedSourceRows =
-    dedupeRows(sourceRows);
-  console.log(
-    `Firestore source rows: ${sourceRows.length}`
-  );
-  console.log(
-    `Firestore deduped rows: ${dedupedSourceRows.length}`
-  );
-  // ----------------------------------------------------------
-  // 2. Firestore → Google Sheets
-  // ----------------------------------------------------------
-  const written =
-    await writeMonthToSheet(
-      sheets,
-      dedupedSourceRows
-    );
-  console.log(
-    `Google Sheets rows written: ${written}`
-  );
-  // ----------------------------------------------------------
-  // 3. Google Sheets → Report
-  // ----------------------------------------------------------
-  const reportRows =
-    await readMonthBackFromSheet(
-      sheets,
-      period,
-      uid
-    );
-  const rows =
-    dedupeRows(reportRows);
-  console.log(
-    `Report rows: ${rows.length}`
-  );
-  // ----------------------------------------------------------
-  // 4. Totals
-  // ----------------------------------------------------------
-  const totalPerDiem =
-    rows.reduce(
+
+  /*
+   * ---------------------------------------------------------
+   * 5. Firestore → Google Sheets
+   * ---------------------------------------------------------
+   */
+
+  await replacePerdiemSheet({
+    sheets,
+    sourceRows: filteredRows,
+  });
+
+  /*
+   * ---------------------------------------------------------
+   * 6. 금액 계산
+   * ---------------------------------------------------------
+   */
+
+  const totalPerdiem =
+    filteredRows.reduce(
       (sum, row) =>
-        sum + numberValue(row.Total),
-      0
+        sum + parseMoney(row[9]),
+      0,
     );
-  const transportFeeTotal =
-    rows.reduce(
+
+  const totalTransportFee =
+    filteredRows.reduce(
       (sum, row) =>
-        sum + numberValue(
-          row.TransportFee
-        ),
-      0
+        sum + parseMoney(row[10]),
+      0,
     );
+
   const grandTotal =
-    totalPerDiem +
-    transportFeeTotal;
-  // ----------------------------------------------------------
-  // 5. Output directory
-  // ----------------------------------------------------------
-  await fs.mkdir(
+    totalPerdiem +
+    totalTransportFee;
+
+  /*
+   * ---------------------------------------------------------
+   * 7. CSV / JSON 생성
+   * ---------------------------------------------------------
+   */
+
+  fs.mkdirSync(
     OUTPUT_DIR,
-    { recursive: true }
+    { recursive: true },
   );
-  const userPart =
-    safeFilePart(
-      reportUserName() || uid
-    );
+
+  const userKey =
+    ownerReportKey(owner);
+
   const baseName =
-    `Perdiem_${userPart}_${period.monthName}_${period.year}`;
+    `Perdiem_${userKey}_${monthName}_${targetYear}`;
+
   const csvPath =
     path.join(
       OUTPUT_DIR,
-      `${baseName}.csv`
+      `${baseName}.csv`,
     );
-  const jsonPath =
+
+  const summaryPath =
     path.join(
       OUTPUT_DIR,
-      `${baseName}.json`
+      `${baseName}.json`,
     );
-  // ----------------------------------------------------------
-  // 6. CSV
-  // ----------------------------------------------------------
-  const csvData =
-    rows.map((row) => [
-      row.id,
-      row.Date,
-      row.Activity,
-      row.From,
-      row.Destination,
-      row.RI,
-      row.RO,
-      row.StayHours,
-      row.Rate,
-      row.Total,
-      row.TransportFee,
-      row.Month,
-      row.Year,
-      row.Taxi,
-      row.Car,
-      row.owner
-    ]);
-  const duplicatesRemoved =
-    sourceRows.length -
-    dedupedSourceRows.length;
-  const summary = [
+
+  const summaryRows = [
     [],
     ["Summary"],
-    ["Owner", uid],
-    ["User", reportUserName()],
-    ["Month", period.monthName],
-    ["Year", period.year],
-    ["Firestore Rows", sourceRows.length],
-    ["Firestore Deduped Rows", dedupedSourceRows.length],
-    ["Sheet Rows", written],
-    ["Report Rows", rows.length],
-    ["Duplicates Removed", duplicatesRemoved],
-    ["Total Perdiem", totalPerDiem.toFixed(2)],
-    ["Transport Fee Total", transportFeeTotal.toFixed(2)],
-    ["Grand Total", grandTotal.toFixed(2)]
+    [
+      "User",
+      owner.displayName ||
+        owner.email ||
+        owner.owner ||
+        owner.uid ||
+        owner.userId,
+    ],
+    ["Month", monthName],
+    ["Year", targetYear],
+    [
+      "Firestore Rows",
+      firestoreRows.length,
+    ],
+    ["Rows", filteredRows.length],
+    [
+      "Duplicates Removed",
+      duplicatesRemoved,
+    ],
+    [
+      "Total Perdiem",
+      totalPerdiem.toFixed(2),
+    ],
+    [
+      "Transport Fee Total",
+      totalTransportFee.toFixed(2),
+    ],
+    [
+      "Grand Total",
+      grandTotal.toFixed(2),
+    ],
   ];
-  const csvContent = [
-    SHEET_HEADER,
-    ...csvData,
-    ...summary
-  ]
-    .map((row) =>
-      row.map(csvEscape).join(",")
-    )
-    .join("\n");
-  await fs.writeFile(
+
+  fs.writeFileSync(
     csvPath,
-    `\uFEFF${csvContent}\n`,
-    "utf8"
+    `${toCsv([
+      SHEET_HEADER,
+      ...filteredRows,
+      ...summaryRows,
+    ])}\n`,
+    "utf-8",
   );
-  // ----------------------------------------------------------
-  // 7. JSON
-  // ----------------------------------------------------------
-  await fs.writeFile(
-    jsonPath,
+
+  fs.writeFileSync(
+    summaryPath,
     JSON.stringify(
       {
-        owner: uid,
-        month: period.monthName,
-        monthNumber: period.month,
-        year: period.year,
+        source:
+          PERDIEM_EVENTS_COLLECTION,
+
+        sourceOfTruth:
+          "Firestore",
+
+        owner: {
+          owner: owner.owner,
+          uid: owner.uid,
+          userId: owner.userId,
+          email: owner.email,
+          displayName:
+            owner.displayName,
+        },
+
+        month: monthName,
+        monthNumber: targetMonth,
+        year: targetYear,
+
         firestoreRows:
-          sourceRows.length,
-        firestoreDedupedRows:
-          dedupedSourceRows.length,
-        sheetRows:
-          written,
-        reportRows:
-          rows.length,
+          firestoreRows.length,
+
+        rows:
+          filteredRows.length,
+
         duplicatesRemoved,
-        totalPerDiem,
-        transportFeeTotal,
+
+        totalPerdiem,
+        totalTransportFee,
         grandTotal,
-        csvPath
+
+        csvPath,
+        fileBaseName: baseName,
       },
       null,
-      2
+      2,
     ),
-    "utf8"
+    "utf-8",
   );
-  // ----------------------------------------------------------
-  // 8. Slack message
-  // ----------------------------------------------------------
-  const slackText = [
-    `PerDiem Monthly Report: ${period.monthName} ${period.year}`,
-    `User: ${reportUserName() || uid}`,
-    `Firestore → Google Sheets: ${written} rows`,
-    `Report rows: ${rows.length}`,
-    `Total PerDiem: ${totalPerDiem.toFixed(2)}`,
-    `Transport Fee: ₩${transportFeeTotal.toLocaleString("ko-KR")}`,
-    `Grand Total: ${grandTotal.toFixed(2)}`
-  ].join("\n");
-  // ----------------------------------------------------------
-  // 9. Console logs
-  // ----------------------------------------------------------
+
+  /*
+   * ---------------------------------------------------------
+   * 8. GitHub Actions 로그
+   * ---------------------------------------------------------
+   */
+
   console.log(
-    `PERDIEM_SOURCE=Firestore:${PERDIEM_EVENTS_COLLECTION}`
+    `PERDIEM_REPORT_CSV=${csvPath}`,
   );
+
   console.log(
-    `PERDIEM_TARGET=${period.monthName} ${period.year}`
+    `PERDIEM_REPORT_SUMMARY=${summaryPath}`,
   );
+
   console.log(
-    `PERDIEM_FIRESTORE_ROWS=${sourceRows.length}`
+    `PERDIEM_REPORT_FILE_BASE=${baseName}`,
   );
+
   console.log(
-    `PERDIEM_FIRESTORE_DEDUPED_ROWS=${dedupedSourceRows.length}`
+    `PERDIEM_REPORT_OWNER=${
+      owner.owner ||
+      owner.uid ||
+      owner.userId ||
+      owner.email
+    }`,
   );
+
   console.log(
-    `PERDIEM_SHEET_ROWS=${written}`
+    `PERDIEM_REPORT_FIRESTORE_ROWS=${firestoreRows.length}`,
   );
+
   console.log(
-    `PERDIEM_REPORT_ROWS=${rows.length}`
+    `PERDIEM_REPORT_ROWS=${filteredRows.length}`,
   );
+
   console.log(
-    `PERDIEM_TOTAL=${totalPerDiem.toFixed(2)}`
+    `PERDIEM_DUPLICATES_REMOVED=${duplicatesRemoved}`,
   );
+
   console.log(
-    `TRANSPORT_FEE_TOTAL=${transportFeeTotal.toFixed(2)}`
+    `PERDIEM_TOTAL=${totalPerdiem.toFixed(2)}`,
   );
+
   console.log(
-    `GRAND_TOTAL=${grandTotal.toFixed(2)}`
+    `TRANSPORT_FEE_TOTAL=${totalTransportFee.toFixed(2)}`,
   );
+
   console.log(
-    `PERDIEM_REPORT_CSV=${csvPath}`
-  );
-  // ----------------------------------------------------------
-  // 10. Slack CSV upload
-  // ----------------------------------------------------------
-  await uploadSlackFile(
-    csvPath,
-    `${period.monthName} ${period.year} PerDiem`,
-    slackText
-  );
-  // ----------------------------------------------------------
-  // 11. Slack response_url
-  // ----------------------------------------------------------
-  await postSlackResponse(
-    slackText
+    `GRAND_TOTAL=${grandTotal.toFixed(2)}`,
   );
 }
-// ============================================================
-// Error handler
-// ============================================================
-main().catch(
-  async (error) => {
-    console.error(
-      `Monthly PerDiem report failed: ${
-        error.stack || error.message
-      }`
-    );
-    try {
-      await postSlackResponse(
-        `PerDiem report failed: ${error.message}`
-      );
-    } catch {
-      // Ignore Slack response failure
-    }
-    process.exit(1);
-  }
-);
+
+main().catch((error) => {
+  console.error(
+    "Monthly PerDiem report failed:",
+    error,
+  );
+
+  process.exit(1);
+});
