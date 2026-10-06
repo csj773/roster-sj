@@ -487,19 +487,22 @@ function normalizeMonthNumber(month) {
 }
 
 function getItemYearMonth(item) {
-  const year = String(item?.Year || "").trim();
-  let month = normalizeMonthNumber(item?.Month);
+  // Date(YYYY.MM.DD)를 최우선으로 사용한다.
+  // 기존 데이터의 Month/Year가 잘못되어 있어도
+  // 실제 날짜 기준으로만 현재 월을 판별한다.
+  const dateText = String(item?.Date || "").trim();
+  const dateMatch = dateText.match(/^(\d{4})\.(\d{1,2})\.(\d{1,2})/);
 
-  if (!month && item?.Date) {
-    const match = String(item.Date).match(/^(\d{4})\.(\d{1,2})\./);
-
-    if (match) {
-      return {
-        year: match[1],
-        month: Number(match[2]),
-      };
-    }
+  if (dateMatch) {
+    return {
+      year: dateMatch[1],
+      month: Number(dateMatch[2]),
+    };
   }
+
+  // Date가 없는 아주 오래된 데이터에 한해서만 Year + Month를 fallback으로 사용한다.
+  const year = String(item?.Year || "").trim();
+  const month = normalizeMonthNumber(item?.Month);
 
   if (!year || !month) return null;
 
@@ -675,29 +678,62 @@ async function deletePerDiemMirrorRowsForOwner(db, owner, currentMonthInfo) {
     .where("owner", "==", owner)
     .get();
 
-  const refs = snapshot.docs
-    .filter((doc) => {
-      const data = doc.data();
+  const refs = [];
 
-      return isCurrentMonthFirestoreDoc(data, currentMonthInfo);
-    })
-    .map((doc) => doc.ref);
+  for (const doc of snapshot.docs) {
+    const data = doc.data();
 
-  return commitDeleteRefs(db, refs);
+    // Date(YYYY.MM.DD) 기준으로 현재 월인 문서만 삭제한다.
+    // 9월 등 이전 월 데이터는 절대 삭제하지 않는다.
+    if (isCurrentMonthFirestoreDoc(data, currentMonthInfo)) {
+      refs.push(doc.ref);
+    }
+  }
+
+  if (refs.length === 0) {
+    console.log(
+      `ℹ️ PerdiemEvents 삭제 대상 없음: ${currentMonthInfo.year}-${String(currentMonthInfo.month).padStart(2, "0")}`
+    );
+    return 0;
+  }
+
+  const deleted = await commitDeleteRefs(db, refs);
+
+  console.log(
+    `🗑️ PerdiemEvents 현재 월 데이터 ${deleted}건 삭제: ${currentMonthInfo.year}-${String(currentMonthInfo.month).padStart(2, "0")}`
+  );
+
+  return deleted;
 }
 
-async function commitPerDiemRewrite(ref, docs) {
+async function commitPerDiemRewrite(ref, docs, currentMonthInfo, collectionName = "PerDiem") {
   const db = ref.firestore;
+
+  // 최종 WRITE 단계에서도 현재 월만 허용한다.
+  const safeDocs = docs.filter(({ data }) => {
+    const ok = isCurrentMonthFirestoreDoc(data, currentMonthInfo);
+
+    if (!ok) {
+      console.error(
+        `🚫 ${collectionName} WRITE 차단: ${data?.Date || ""} / ${data?.Activity || ""} / ${data?.Month || ""} / ${data?.Year || ""}`
+      );
+    }
+
+    return ok;
+  });
+
   let written = 0;
-  for (let index = 0; index < docs.length; index += 400) {
+  for (let index = 0; index < safeDocs.length; index += 400) {
     const batch = db.batch();
-    const chunk = docs.slice(index, index + 400);
+    const chunk = safeDocs.slice(index, index + 400);
     for (const { id, data } of chunk) {
       batch.set(ref.doc(id), data, { merge: false });
     }
     await batch.commit();
     written += chunk.length;
   }
+
+  console.log(`✍️ ${collectionName} WRITE: ${written}건`);
   return written;
 }
 
@@ -772,10 +808,23 @@ export async function uploadPerDiemFirestore(perdiemList, ownerOverride = "") {
     },
   }));
 
-  const mirrorWrites = writes.map(({ id, data }) => ({
-    id: `${safeDocIdPart(owner)}_${id}`,
-    data,
-  }));
+  // PerdiemEvents에는 현재 월 데이터만 전달한다.
+  const mirrorWrites = writes
+    .filter(({ data }) => {
+      const ok = isCurrentMonthFirestoreDoc(data, currentMonthInfo);
+
+      if (!ok) {
+        console.warn(
+          `⚠️ PerdiemEvents WRITE 제외: ${data.Date} / ${data.Activity} / ${data.Month} / ${data.Year}`
+        );
+      }
+
+      return ok;
+    })
+    .map(({ id, data }) => ({
+      id: `${safeDocIdPart(owner)}_${id}`,
+      data,
+    }));
 
   // ===== 기존 events에서 이번 달만 삭제 =====
   const existingSnapshot = await eventsRef.get();
@@ -812,12 +861,19 @@ export async function uploadPerDiemFirestore(perdiemList, ownerOverride = "") {
   ]);
 
   // ===== 이번 달 데이터만 새로 작성 =====
-  const saved = await commitPerDiemRewrite(eventsRef, writes);
+  const saved = await commitPerDiemRewrite(
+    eventsRef,
+    writes,
+    currentMonthInfo,
+    "Perdiem/events"
+  );
 
   // ===== PerdiemEvents mirror 새로 작성 =====
   const savedMirror = await commitPerDiemRewrite(
     db.collection(PERDIEM_FLAT_MIRROR_COLLECTION),
-    mirrorWrites
+    mirrorWrites,
+    currentMonthInfo,
+    "PerdiemEvents"
   );
 
   // ===== Owner metadata =====
