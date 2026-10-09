@@ -85,13 +85,27 @@ jobs:
           echo "Generated roster files are available only inside this workflow run."
 
       # 7. gcal.js 실행 (Google Calendar 업데이트)
+      - name: Check Google Calendar permission
+        id: gcal_permission
+        env:
+          RUN_USER_EMAIL: ${{ github.event.inputs.current_user_email || secrets.USER_ID }}
+          GOOGLE_OUTPUT_ALLOWED_EMAIL: sjchoi787@gmail.com
+        run: |
+          if [ -n "$RUN_USER_EMAIL" ] && \
+             [ "$RUN_USER_EMAIL" = "$GOOGLE_OUTPUT_ALLOWED_EMAIL" ]; then
+            echo "allowed=true" >> "$GITHUB_OUTPUT"
+            echo "Google Calendar permission: MATCH"
+          else
+            echo "allowed=false" >> "$GITHUB_OUTPUT"
+            echo "Google Calendar permission: MISMATCH or EMPTY"
+          fi
       - name: Run gcal.js
-        if: ${{ env.RUN_USER_EMAIL == env.GOOGLE_OUTPUT_ALLOWED_EMAIL }}
+        if: ${{ steps.gcal_permission.outputs.allowed == 'true' }}
         env:
           GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
           GOOGLE_CALENDAR_CREDENTIALS: ${{ secrets.GOOGLE_CALENDAR_CREDENTIALS }}
         run: node -r dotenv/config gcal.js
-
       - name: Skip Google Calendar for non-primary user
-        if: ${{ env.RUN_USER_EMAIL != env.GOOGLE_OUTPUT_ALLOWED_EMAIL }}
-        run: echo "Skipping Google Calendar because RUN_USER_EMAIL=${RUN_USER_EMAIL} is not ${GOOGLE_OUTPUT_ALLOWED_EMAIL}."
+        if: ${{ steps.gcal_permission.outputs.allowed != 'true' }}
+        run: echo "Skipping Google Calendar because the user is not authorized."
+
