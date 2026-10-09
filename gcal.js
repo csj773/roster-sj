@@ -1,4 +1,4 @@
-// ==================== gcal.js 10.18 (DST 자동적용 버전) ====================
+// ==================== gcal.js 10.09 (DST 자동적용 버전) ====================
 import fs from "fs";
 import path from "path";
 import { google } from "googleapis";
@@ -210,26 +210,52 @@ function eventStartDate(ev) {
 }
 
 // ------------------- 기존 gcal.js 이벤트 삭제 -------------------
-async function deleteExistingGcalEvents(targetDates){
-  console.log("🗑 기존 gcal.js 이벤트 삭제 시작...");
-  if(targetDates?.size) {
-    console.log(`🗓 삭제 대상 날짜 ${targetDates.size}개로 제한`);
-  }
+
+/**
+ * CREATED_BY_GCALJS 표시가 있는 기존 생성 일정 전체 삭제
+ * roster 날짜와 관계없이 매번 전체 재작성
+ */
+async function deleteExistingGcalEvents() {
+  console.log("🗑 기존 gcal.js 생성 일정 전체 삭제 시작...");
+
   let pageToken;
+  let deletedCount = 0;
+
   do {
-    const res = await calendar.events.list({ calendarId: CALENDAR_ID, singleEvents:true, orderBy:"startTime", pageToken });
+    const res = await calendar.events.list({
+      calendarId: CALENDAR_ID,
+      singleEvents: true,
+      maxResults: 2500,
+      pageToken,
+    });
+
     const events = res.data.items || [];
-    for(const ev of events){
-      if((ev.description||"").includes("CREATED_BY_GCALJS")){
-        const startDate = eventStartDate(ev);
-        if(targetDates?.size && !targetDates.has(startDate)) continue;
-        try{ await calendar.events.delete({calendarId:CALENDAR_ID,eventId:ev.id}); console.log(`🗑 삭제: ${ev.summary}`); }
-        catch(e){ if(e.code!==410) console.error("❌ 삭제 실패:",e.message); }
+
+    for (const ev of events) {
+      if (!(ev.description || "").includes("CREATED_BY_GCALJS")) {
+        continue;
+      }
+
+      try {
+        await calendar.events.delete({
+          calendarId: CALENDAR_ID,
+          eventId: ev.id,
+        });
+
+        deletedCount++;
+        console.log(`🗑 삭제: ${ev.summary}`);
+      } catch (e) {
+        if (e.code !== 410 && e.code !== 404) {
+          console.error(`❌ 삭제 실패: ${ev.summary}`, e.message);
+          throw e;
+        }
       }
     }
+
     pageToken = res.data.nextPageToken;
-  }while(pageToken);
-  console.log("✅ 기존 gcal.js 이벤트 삭제 완료");
+  } while (pageToken);
+
+  console.log(`✅ 기존 생성 일정 삭제 완료: ${deletedCount}개`);
 }
 
 // ------------------- Event Insert Retry & Throttle -------------------
@@ -248,31 +274,6 @@ async function insertEventWithRetry(eventBody,retries=5){
 }
 function delay(ms){ return new Promise(res=>setTimeout(res,ms)); }
 
-// ------------------- 사후 중복 제거 -------------------
-async function removeDuplicates() {
-  console.log("🗑 사후 중복 제거 시작...");
-  let pageToken;
-  const allEvents = [];
-  do {
-    const res = await calendar.events.list({ calendarId: CALENDAR_ID, singleEvents:true, orderBy:"startTime", pageToken });
-    allEvents.push(...(res.data.items||[]));
-    pageToken = res.data.nextPageToken;
-  } while(pageToken);
-
-  const seen = new Map();
-  for(const ev of allEvents){
-    if(!(ev.description||"").includes("CREATED_BY_GCALJS")) continue;
-    const startDate = eventStartDate(ev);
-    const [from,to] = ev.location?.split(" → ") || ["",""];
-    const key = `${startDate}|${ev.summary}|${from}|${to}`;
-    if(seen.has(key)){
-      try{ await calendar.events.delete({calendarId:CALENDAR_ID,eventId:ev.id}); console.log(`🗑 중복 제거: ${ev.summary} (${startDate})`); }
-      catch(e){ if(e.code!==410) console.error("❌ 중복 삭제 실패:",e.message); }
-    } else seen.set(key,ev.id);
-  }
-  console.log("✅ 사후 중복 제거 완료");
-}
-
 // ------------------- Main -------------------
 (async()=>{
   console.log("🚀 Google Calendar 업로드 시작 (DST 자동적용 버전 10.18)");
@@ -283,21 +284,45 @@ async function removeDuplicates() {
   const values = rosterRaw.values;
   if(!Array.isArray(values) || values.length<2){ console.error("❌ 데이터 없음"); process.exit(1); }
 
-  const headers = values[0];
-  const idx = {};
-  headers.forEach((h,i)=>idx[h]=i);
-  const resolvedDates = resolveRosterDateSequence(values.slice(1), idx["Date"]);
-  const targetDates = new Set();
-  for(let r=1;r<values.length;r++){
-    const row = values[r];
-    const activity = row[idx["Activity"]];
-    if(!activity||!activity.trim()) continue;
-    const convDate = resolvedDates.get(row) || convertDate(row[idx["Date"]]);
-    if(convDate) targetDates.add(convDate);
-  }
-  await deleteExistingGcalEvents(targetDates);
+  
+const headers = values[0];
+const idx = {};
+headers.forEach((h, i) => {
+  idx[String(h).trim()] = i;
+});
 
-  for(let r=1;r<values.length;r++){
+const requiredHeaders = [
+  "Date", "Activity", "From", "To", "STD(L)", "STA(L)"
+];
+
+const missingHeaders = requiredHeaders.filter(
+  h => idx[h] === undefined
+);
+
+if (missingHeaders.length > 0) {
+  throw new Error(
+    `❌ 필수 헤더 누락: ${missingHeaders.join(", ")} — 기존 일정 삭제 중단`
+  );
+}
+
+const resolvedDates = resolveRosterDateSequence(
+  values.slice(1),
+  idx["Date"]
+);
+
+const validActivityCount = values.slice(1).filter(row =>
+  String(row[idx["Activity"]] || "").trim() !== ""
+).length;
+
+if (validActivityCount === 0) {
+  throw new Error("❌ 유효한 일정이 없어 기존 일정 삭제를 중단합니다.");
+}
+
+console.log(`📋 등록 대상 일정: ${validActivityCount}개`);
+await deleteExistingGcalEvents();
+
+
+for(let r=1;r<values.length;r++){
     const row = values[r];
     const activity = row[idx["Activity"]];
     if(!activity||!activity.trim()) continue;
@@ -321,8 +346,12 @@ async function removeDuplicates() {
         calendarId: CALENDAR_ID,
         requestBody:{
           summary: activity,
-          start:{date: convDate},
-          end:{date: convDate},
+          start: { date: convDate },
+          end: {
+          date: new Date(
+           Date.parse(convDate + "T00:00:00Z") + 86400000
+          ).toISOString().slice(0, 10),
+        },
           description:`CREATED_BY_GCALJS\nCrew: ${row[idx["Crew"]]||""}`
         }
       });
@@ -335,7 +364,36 @@ async function removeDuplicates() {
     const startLocal = parseHHMMOffset(stdLStr, convDate, from);
     const endLocal   = parseHHMMOffset(staLStr, convDate, to);
     if(!startLocal || !endLocal) continue;
-    if(endLocal<=startLocal) endLocal.setDate(endLocal.getDate()+1);
+    
+if (endLocal <= startLocal) {
+  const hasDayOffset = /[+-]\d+$/.test(String(staLStr));
+
+  // STA에 이미 날짜 오프셋이 지정되어 있으면
+  // 중복으로 하루를 더하지 않습니다.
+  if (!hasDayOffset) {
+    const nextDay = new Date(`${convDate}T00:00:00Z`);
+    nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+    const nextDateStr = nextDay.toISOString().slice(0, 10);
+
+    const correctedEnd = parseHHMMOffset(
+      staLStr,
+      nextDateStr,
+      to
+    );
+
+    if (!correctedEnd || correctedEnd <= startLocal) {
+      console.warn(`⚠️ 도착 시각 오류: ${activity} (${convDate})`);
+      continue;
+    }
+
+    endLocal.setTime(correctedEnd.getTime());
+  } else {
+    console.warn(
+      `⚠️ STA 날짜 오프셋 확인 필요: ${activity} (${staLStr})`
+    );
+    continue;
+  }
+}
 
     const description = `
 Activity: ${activity}
@@ -363,6 +421,5 @@ CREATED_BY_GCALJS
     await delay(200);
   }
 
-  await removeDuplicates();
   console.log("✅ Google Calendar 업로드 완료 (DST 자동적용)");
 })();
