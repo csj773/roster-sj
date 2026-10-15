@@ -1,4 +1,4 @@
-// ========================= perdiem.js (from PilotLog) =========================
+// ========================= perdiem.js (from PilotLog) 2026.10.15=========================
 
 import fs from "fs";
 import path from "path";
@@ -7,7 +7,7 @@ import admin from "firebase-admin";
 import { hourToTimeStr } from "./flightTimeUtils.js";
 
 // ============================================================
-// 설정
+// 1. 설정
 // ============================================================
 
 export const PERDIEM_RATE = {
@@ -39,7 +39,7 @@ const MONTH_NAMES = [
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-const MONTH_NUMBER = Object.fromEntries(
+const MONTH_NAME_TO_NUMBER = Object.fromEntries(
   MONTH_NAMES.map((month, index) => [month.toLowerCase(), index + 1])
 );
 
@@ -48,16 +48,30 @@ const QUICK_TURN_THRESHOLD_HOURS = 12;
 const QUICK_TURN_MINIMUM_TOTAL = 33;
 const FLIGHT_ACTIVITY_RE = /^YP\d+/i;
 
-const PERDIEM_COLLECTION = "PerdiemEvents";
+const PERDIEM_FLAT_MIRROR_COLLECTION = "PerdiemEvents";
+const PERDIEM_COLLECTION = "Perdiem";
 
 const PERDIEM_SHEET_HEADER = [
-  "ID", "Date", "Activity", "From", "Destination",
-  "RI", "RO", "StayHours", "Rate", "Total",
-  "TransportFee", "Month", "Year", "Taxi", "Car", "Owner",
+  "ID",
+  "Date",
+  "Activity",
+  "From",
+  "Destination",
+  "RI",
+  "RO",
+  "StayHours",
+  "Rate",
+  "Total",
+  "TransportFee",
+  "Month",
+  "Year",
+  "Taxi",
+  "Car",
+  "Owner",
 ];
 
 // ============================================================
-// Firebase
+// 2. Firebase 초기화
 // ============================================================
 
 function getDb() {
@@ -70,22 +84,8 @@ function getDb() {
   return admin.firestore();
 }
 
-function resolvePerDiemOwner(ownerOverride = "") {
-  return String(
-    ownerOverride ||
-    process.env.PERDIEM_OWNER ||
-    process.env.INPUT_FIREBASE_UID ||
-    process.env.FIREBASE_UID ||
-    process.env.PERDIEM_USER_ID ||
-    process.env.INPUT_ADMIN_FIREBASE_UID ||
-    process.env.FIRESTORE_ADMIN_UID ||
-    process.env.firestoreAdminUid ||
-    ""
-  ).trim();
-}
-
 // ============================================================
-// 기본 유틸리티
+// 3. 공통 유틸리티
 // ============================================================
 
 function normalizeAirportCode(value) {
@@ -96,65 +96,82 @@ function normalizeAirportCode(value) {
 }
 
 function safeDocIdPart(value) {
-  return String(value ?? "")
+  return String(value || "")
     .trim()
-    .replace(/[^A-Za-z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "blank";
+    .replace(/[\/\\?#\[\]*]/g, "_")
+    .replace(/\s+/g, "_");
+}
+
+function sha256(value) {
+  return crypto
+    .createHash("sha256")
+    .update(String(value))
+    .digest("hex");
 }
 
 function monthNumber(value) {
-  if (typeof value === "number") {
-    return value >= 1 && value <= 12 ? value : null;
+  if (value === null || value === undefined || value === "") {
+    return 0;
   }
 
-  const text = String(value || "").trim();
+  const numeric = Number(value);
 
-  if (/^\d+$/.test(text)) {
-    const number = Number(text);
-    return number >= 1 && number <= 12 ? number : null;
+  if (Number.isInteger(numeric) && numeric >= 1 && numeric <= 12) {
+    return numeric;
   }
 
-  return MONTH_NUMBER[text.toLowerCase()] || null;
+  const normalized = String(value).trim().slice(0, 3).toLowerCase();
+
+  return MONTH_NAME_TO_NUMBER[normalized] || 0;
+}
+
+function getAirportRate(airport) {
+  return Number(PERDIEM_RATE[normalizeAirportCode(airport)] || 0);
 }
 
 function getCurrentSeoulMonthYear() {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "Asia/Seoul",
     year: "numeric",
-    month: "2-digit",
+    month: "numeric",
   }).formatToParts(new Date());
 
-  const year = parts.find(part => part.type === "year")?.value;
-  const month = Number(
-    parts.find(part => part.type === "month")?.value
-  );
+  const year = Number(parts.find((part) => part.type === "year")?.value);
+  const month = Number(parts.find((part) => part.type === "month")?.value);
 
-  return {
-    year: String(year),
-    month,
-    monthName: MONTH_NAMES[month - 1],
-  };
+  return { year, month };
 }
 
 function toValidDate(value) {
   if (!value) return null;
 
-  let date;
-
   if (value instanceof Date) {
-    date = value;
-  } else if (typeof value.toDate === "function") {
-    date = value.toDate();
-  } else if (typeof value === "string" || typeof value === "number") {
-    date = new Date(value);
-  } else {
-    return null;
+    return Number.isNaN(value.getTime()) ? null : value;
   }
 
-  return Number.isNaN(date.getTime()) ? null : date;
+  if (typeof value.toDate === "function") {
+    const date = value.toDate();
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  if (typeof value === "number") {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  if (typeof value === "string") {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  return null;
 }
 
-function formatDateDots(date) {
+function formatDateDots(value) {
+  const date = toValidDate(value);
+
+  if (!date) return "";
+
   return [
     date.getUTCFullYear(),
     String(date.getUTCMonth() + 1).padStart(2, "0"),
@@ -162,9 +179,9 @@ function formatDateDots(date) {
   ].join(".");
 }
 
-function getDateParts(dateText) {
-  const match = String(dateText || "").match(
-    /^(\d{4})[.-](\d{1,2})[.-](\d{1,2})/
+function getDateParts(value) {
+  const match = String(value || "").match(
+    /^(\d{4})[./-](\d{1,2})[./-](\d{1,2})$/
   );
 
   if (!match) return null;
@@ -176,108 +193,151 @@ function getDateParts(dateText) {
   };
 }
 
-function getItemYearMonth(item) {
-  const parts = getDateParts(item?.Date);
+function monthYearFromRecord(record) {
+  const dateParts = getDateParts(record.Date);
 
-  if (parts) {
-    return {
-      year: String(parts.year),
-      month: parts.month,
-    };
-  }
+  const month =
+    monthNumber(record.Month) ||
+    dateParts?.month ||
+    0;
 
-  const year = String(item?.Year || "").trim();
-  const month = monthNumber(item?.Month);
+  const year =
+    Number(record.Year) ||
+    dateParts?.year ||
+    0;
 
-  if (!year || !month) return null;
-
-  return { year, month };
+  return { month, year };
 }
 
-function isCurrentMonth(item, currentMonthInfo) {
-  const itemMonth = getItemYearMonth(item);
+function isRecordInMonth(record, targetMonthYear) {
+  const recordMonthYear = monthYearFromRecord(record);
 
-  return Boolean(
-    itemMonth &&
-    itemMonth.year === currentMonthInfo.year &&
-    itemMonth.month === currentMonthInfo.month
+  return (
+    recordMonthYear.month === targetMonthYear.month &&
+    recordMonthYear.year === targetMonthYear.year
+  );
+}
+
+function formatMonthName(month) {
+  return MONTH_NAMES[month - 1] || "";
+}
+
+function resolvePerDiemOwner(ownerOverride) {
+  const owner = String(
+    ownerOverride ||
+      process.env.PERDIEM_OWNER ||
+      process.env.INPUT_FIREBASE_UID ||
+      process.env.FIREBASE_UID ||
+      process.env.PERDIEM_USER_ID ||
+      process.env.FIRESTORE_ADMIN_UID ||
+      ""
+  ).trim();
+
+  if (!owner) {
+    throw new Error(
+      "PerDiem owner를 확인할 수 없습니다. " +
+      "ownerOverride 또는 PERDIEM_OWNER / INPUT_FIREBASE_UID 환경변수를 확인하세요."
+    );
+  }
+
+  return owner;
+}
+
+// ============================================================
+// 4. Pilotlog UTC 시각 처리
+//
+// 예시:
+// Date  = 2024-07-01 (UTC 기준 날짜)
+// STDz  = "1746-1" -> 2024-06-30 17:46 UTC
+// STAz  = "645"    -> 2024-07-01 06:45 UTC
+//
+// +/- 숫자는 기준 날짜로부터의 날짜 이동으로 처리합니다.
+// ============================================================
+
+function parseUTCClock(value, baseDate) {
+  const date = toValidDate(baseDate);
+
+  if (!date || value === null || value === undefined) {
+    return null;
+  }
+
+  const text = String(value).trim();
+
+  if (!text) return null;
+
+  const match = text.match(/^(\d{1,2})(\d{2})(?:([+-])(\d+))?$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+
+  if (hour > 23 || minute > 59) {
+    return null;
+  }
+
+  const sign = match[3] || "";
+  const offsetDays = Number(match[4] || 0);
+
+  const result = new Date(Date.UTC(
+    date.getUTCFullYear(),
+    date.getUTCMonth(),
+    date.getUTCDate(),
+    hour,
+    minute,
+    0,
+    0
+  ));
+
+  if (sign === "+") {
+    result.setUTCDate(result.getUTCDate() + offsetDays);
+  } else if (sign === "-") {
+    result.setUTCDate(result.getUTCDate() - offsetDays);
+  }
+
+  return result;
+}
+
+function calculateStayHours(startDate, endDate) {
+  const start = toValidDate(startDate);
+  const end = toValidDate(endDate);
+
+  if (!start || !end || end < start) {
+    return null;
+  }
+
+  return (end.getTime() - start.getTime()) / 3600000;
+}
+
+function formatISODateTime(value) {
+  const date = toValidDate(value);
+  return date ? date.toISOString() : "";
+}
+
+function calculateQuickTurnTotal(rate) {
+  return Math.max(
+    QUICK_TURN_MINIMUM_TOTAL,
+    Math.round(Number(rate || 0) * 100) / 100
   );
 }
 
 // ============================================================
-// UTC 시각 파싱
+// 5. Firestore Pilotlog 전체 기록 조회
 //
-// 예:
-//   1746-1 -> 기준 날짜의 전날 17:46 UTC
-//   0645   -> 기준 날짜 06:45 UTC
-//   645    -> 기준 날짜 06:45 UTC
+// 중요:
+// - 현재 월만 조회하지 않습니다.
+// - 지난달 출국편이 이번 달 귀국편과 연결될 수 있도록
+//   해당 owner의 Pilotlog 전체 기록을 가져옵니다.
 // ============================================================
 
-function parseUTCClock(value, baseDateText) {
-  const text = String(value || "").trim();
-  const parts = getDateParts(baseDateText);
-
-  if (!text || !parts) return null;
-
-  const match = text.match(/^(\d{1,2})(\d{2})([+-]\d+)?$/);
-
-  if (!match) return null;
-
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  const dayOffset = match[3] ? Number(match[3]) : 0;
-
-  if (
-    hour < 0 || hour > 23 ||
-    minute < 0 || minute > 59 ||
-    !Number.isInteger(dayOffset)
-  ) {
-    return null;
-  }
-
-  return new Date(Date.UTC(
-    parts.year,
-    parts.month - 1,
-    parts.day + dayOffset,
-    hour,
-    minute
-  ));
-}
-
-function getAirportRate(airport) {
-  const code = normalizeAirportCode(airport);
-
-  if (code === "ICN") return 0;
-
-  return PERDIEM_RATE[code] ?? 3;
-}
-
-function calculateQuickTurnTotal(rate) {
-  return Math.round(
-    Math.max(rate * 24 * 0.5, QUICK_TURN_MINIMUM_TOTAL) * 100
-  ) / 100;
-}
-
-function calculateStayHours(ri, ro) {
-  if (!(ri instanceof Date) || !(ro instanceof Date)) return null;
-  if (Number.isNaN(ri.getTime()) || Number.isNaN(ro.getTime())) return null;
-
-  const hours = (ro.getTime() - ri.getTime()) / 3600000;
-
-  return hours > 0 ? hours : null;
-}
-
-// ============================================================
-// Pilotlog 조회 및 필드 정규화
-//
-// 실제 Pilotlog 필드:
-// Date, FLT, FROM, TO, STDz, STAz, Month, Year, owner
-// ============================================================
-
-async function loadPilotlogFromFirestore(owner) {
+export async function loadPilotlogFromFirestore(ownerOverride) {
   const db = getDb();
+  const owner = resolvePerDiemOwner(ownerOverride);
 
-  const snapshot = await db.collection("Pilotlog")
+  const snapshot = await db
+    .collection("Pilotlog")
     .where("owner", "==", owner)
     .get();
 
@@ -286,83 +346,100 @@ async function loadPilotlogFromFirestore(owner) {
   for (const doc of snapshot.docs) {
     const data = doc.data();
 
-    const timestampDate = toValidDate(data.Date);
-
-    if (!timestampDate) {
-      console.warn(`⚠️ Pilotlog Date 오류: ${doc.id}`);
-      continue;
-    }
-
-    const dateText = formatDateDots(timestampDate);
-
-    const activity = String(data.FLT || "").trim().toUpperCase();
     const from = normalizeAirportCode(data.FROM);
-    const to = normalizeAirportCode(data.TO);
+    const destination = normalizeAirportCode(data.TO);
+    const activity = String(data.FLT || "").trim();
 
-    // 비행편만 처리
     if (!FLIGHT_ACTIVITY_RE.test(activity)) continue;
-    if (!from || !to || from === to) continue;
+    if (!from || !destination || from === destination) continue;
 
-    const stdz = String(data.STDz || "").trim();
-    const staz = String(data.STAz || "").trim();
+    const dateObject = toValidDate(data.Date);
 
-    const departureUTC = parseUTCClock(stdz, dateText);
-    const arrivalUTC = parseUTCClock(staz, dateText);
-
-    if (!departureUTC || !arrivalUTC) {
+    if (!dateObject) {
       console.warn(
-        `⚠️ Pilotlog 시각 오류: ${doc.id}, ` +
-        `Date=${dateText}, STDz=${stdz}, STAz=${staz}`
+        `⚠️ Pilotlog Date가 유효하지 않아 제외합니다: ${doc.id}`
       );
       continue;
     }
 
+    const departureUTC = parseUTCClock(data.STDz, dateObject);
+    const arrivalUTC = parseUTCClock(data.STAz, dateObject);
+
+    if (!departureUTC || !arrivalUTC) {
+      console.warn(
+        `⚠️ Pilotlog UTC 시각을 해석하지 못했습니다: ` +
+        `${activity}, ${from} → ${destination}, ` +
+        `STDz=${data.STDz}, STAz=${data.STAz}`
+      );
+      continue;
+    }
+
+    const dateText = formatDateDots(dateObject);
+    const dateParts = getDateParts(dateText);
+
     records.push({
-      id: doc.id,
+      pilotlogDocId: doc.id,
       Date: dateText,
       Activity: activity,
       From: from,
-      Destination: to,
-
-      STDz: stdz,
-      STAz: staz,
+      Destination: destination,
 
       DepartureUTC: departureUTC,
       ArrivalUTC: arrivalUTC,
 
-      Month: data.Month || MONTH_NAMES[timestampDate.getUTCMonth()],
-      Year: String(data.Year || timestampDate.getUTCFullYear()),
+      STDz: String(data.STDz || ""),
+      STAz: String(data.STAz || ""),
+
+      // Pilotlog에 저장된 월/년 정보를 우선 보존합니다.
+      Month:
+        String(data.Month || "").trim() ||
+        formatMonthName(dateParts?.month || 0),
+
+      Year:
+        String(data.Year || "").trim() ||
+        String(dateParts?.year || ""),
 
       owner,
+      uid: owner,
     });
   }
 
-  // 실제 출발 UTC 시각을 기준으로 정렬
-  records.sort((a, b) =>
-    a.DepartureUTC.getTime() - b.DepartureUTC.getTime()
-  );
+  records.sort((a, b) => {
+    const timeDifference =
+      a.DepartureUTC.getTime() - b.DepartureUTC.getTime();
+
+    if (timeDifference !== 0) return timeDifference;
+
+    return a.Activity.localeCompare(b.Activity);
+  });
 
   console.log(
-    `📥 Pilotlog 조회 완료: ${records.length}건, owner=${owner}`
+    `✈️ Pilotlog 조회 완료: owner=${owner}, ` +
+    `전체 ${snapshot.size}건, 계산 대상 ${records.length}건`
   );
 
   return records;
 }
 
 // ============================================================
-// Pilotlog → Per Diem 계산
+// 6. Per Diem 계산
 //
-// - ICN → 해외: 도착 시각을 RI로 사용
-// - 해외 → ICN: 출발 시각을 RO로 사용
-// - 해외 → ICN: 가장 최근의 ICN → 동일 해외 공항 기록을 연결
-// - 과거 Pilotlog 기록은 체류 연결 계산에 활용
+// ICN -> 해외:
+//   해외 도착 시각을 RI로 저장해 귀국편과 연결합니다.
+//
+// 해외 -> ICN:
+//   해외 출발 시각을 RO로 사용합니다.
+//   같은 해외공항의 이전 ICN 출발편과 연결해 체류시간을 계산합니다.
+//
+// 지난달 출국편도 records에 포함되어 있다면 이번 달 귀국편에
+// 연결할 수 있습니다.
 // ============================================================
 
-function calculatePerDiemList(records, owner) {
-  const results = [];
+export function calculatePerDiemList(records, ownerOverride) {
+  const owner = resolvePerDiemOwner(ownerOverride);
 
-  // 각 해외 공항에 도착한 가장 최근 출국편을 보관한다.
-  const latestOutboundByDestination = new Map();
+  const results = [];
+  const pendingOutboundByDestination = new Map();
 
   for (const flight of records) {
     const {
@@ -376,68 +453,98 @@ function calculatePerDiemList(records, owner) {
       Year,
     } = flight;
 
+    const from = normalizeAirportCode(From);
+    const destination = normalizeAirportCode(Destination);
+
     let RI = "";
     let RO = "";
     let StayHours = "0:00";
-    let Rate = getAirportRate(From);
+    let Rate = getAirportRate(from);
     let Total = 0;
 
-    // 출국편: ICN → 해외
-    if (From === "ICN" && Destination !== "ICN") {
-      // 해외 도착 시각부터 체류 시작
-      RI = ArrivalUTC.toISOString();
+    const isOutbound = from === "ICN" && destination !== "ICN";
+    const isInbound = destination === "ICN" && from !== "ICN";
 
-      latestOutboundByDestination.set(Destination, {
+    if (isOutbound) {
+      // ICN 출발편의 해외 도착 시각을 귀국편 계산용으로 보관합니다.
+      pendingOutboundByDestination.set(destination, {
         RI: ArrivalUTC,
-        outboundDeparture: DepartureUTC,
         outboundDate: Date,
+        outboundMonth: Month,
+        outboundYear: Year,
+        outboundFlight: Activity,
+        outboundFrom: from,
+        outboundDestination: destination,
       });
 
       Rate = 0;
       Total = 0;
-    }
+    } else if (isInbound) {
+      // 귀국편은 해외공항에서 출발한 UTC 시각을 RO로 사용합니다.
+      RO = formatISODateTime(DepartureUTC);
 
-    // 귀국편: 해외 → ICN
-    else if (Destination === "ICN" && From !== "ICN") {
-      RO = DepartureUTC.toISOString();
+      const outbound = pendingOutboundByDestination.get(from);
 
-      const outbound = latestOutboundByDestination.get(From);
+      if (outbound && outbound.RI instanceof Date) {
+        RI = formatISODateTime(outbound.RI);
 
-      if (outbound) {
-        RI = outbound.RI.toISOString();
-
-        const hours = calculateStayHours(outbound.RI, DepartureUTC);
+        const hours = calculateStayHours(
+          outbound.RI,
+          DepartureUTC
+        );
 
         if (hours !== null) {
           StayHours = hourToTimeStr(hours);
-
-          Rate = getAirportRate(From);
+          Rate = getAirportRate(from);
 
           if (hours < QUICK_TURN_THRESHOLD_HOURS) {
             Total = calculateQuickTurnTotal(Rate);
           } else {
             Total = Math.round(hours * Rate * 100) / 100;
           }
+
+          console.log(
+            `✈️ PerDiem 연결: ` +
+            `${outbound.outboundFlight} (${outbound.outboundDate}) → ` +
+            `${Activity} (${Date}), 공항=${from}, ` +
+            `체류=${StayHours}, Rate=${Rate}, Total=${Total}`
+          );
+        } else {
+          console.warn(
+            `⚠️ 체류시간을 계산할 수 없습니다: ` +
+            `${outbound.outboundFlight} → ${Activity}`
+          );
         }
+
+        pendingOutboundByDestination.delete(from);
       } else {
         console.warn(
-          `⚠️ 연결할 출국편 없음: ${Activity}, ${From} → ICN, ${Date}`
+          `⚠️ 연결할 ICN 출발편을 찾지 못했습니다: ` +
+          `${Activity}, ${from} → ICN, Date=${Date}`
         );
       }
+    } else {
+      // 해외-해외 등 ICN 출발/귀국편이 아닌 구간은
+      // 이 계산에서는 체류 Per Diem을 연결하지 않습니다.
+      Rate = getAirportRate(from);
+      Total = 0;
     }
 
-    // 해외 → 해외: 이 버전에서는 별도 체류 연결을 하지 않는다.
-    // 해외 경유 구간의 정확한 정산 규칙이 필요하면 별도 규칙을 추가한다.
-
     const dateParts = getDateParts(Date);
-    const monthNumberValue = dateParts?.month || monthNumber(Month) || 1;
-    const yearValue = String(dateParts?.year || Year);
+    const monthNum =
+      monthNumber(Month) ||
+      dateParts?.month ||
+      1;
+
+    const yearValue =
+      String(Year || "").trim() ||
+      String(dateParts?.year || "");
 
     results.push({
       Date,
       Activity,
-      From,
-      Destination,
+      From: from,
+      Destination: destination,
 
       RI,
       RO,
@@ -446,8 +553,7 @@ function calculatePerDiemList(records, owner) {
       Total,
 
       TransportFee: TRANSPORT_FEE_PER_FLIGHT,
-
-      Month: MONTH_NAMES[monthNumberValue - 1] || Month,
+      Month: formatMonthName(monthNum),
       Year: yearValue,
 
       Taxi: "",
@@ -458,36 +564,53 @@ function calculatePerDiemList(records, owner) {
     });
   }
 
+  for (const [airport, outbound] of pendingOutboundByDestination) {
+    console.log(
+      `ℹ️ 아직 연결할 귀국편이 없는 출국편: ` +
+      `${airport}, ${outbound.outboundFlight}, ${outbound.outboundDate}`
+    );
+  }
+
   return results;
 }
 
 // ============================================================
-// 기존 함수 이름 유지
+// 7. 기존 roster.js와의 호환 함수
 //
-// roster.js에서 generatePerDiemList(path, owner)를 호출하더라도
-// 첫 번째 인자는 더 이상 사용하지 않고 Pilotlog에서 조회한다.
+// 기존 호출:
+// generatePerDiemList(path.join(publicDir, "roster.json"), uid)
+//
+// 첫 번째 인자는 더 이상 사용하지 않습니다.
 // ============================================================
 
-export async function generatePerDiemList(_unusedRosterJsonPath, ownerOverride = "") {
+export async function generatePerDiemList(
+  _unusedRosterJsonPath,
+  ownerOverride
+) {
   const owner = resolvePerDiemOwner(ownerOverride);
 
-  if (!owner) {
-    throw new Error(
-      "PerDiem 실행 중단: 사용자 UID를 확인할 수 없습니다."
-    );
-  }
+  const pilotlogRecords = await loadPilotlogFromFirestore(owner);
 
-  const records = await loadPilotlogFromFirestore(owner);
+  const perdiemList = calculatePerDiemList(
+    pilotlogRecords,
+    owner
+  );
 
-  return calculatePerDiemList(records, owner);
+  console.log(
+    `✅ Pilotlog 기반 PerDiem 계산 완료: ${perdiemList.length}건`
+  );
+
+  return perdiemList;
 }
 
 // ============================================================
-// CSV 저장
+// 8. CSV 저장
 // ============================================================
 
-function csvEscape(value) {
-  const text = String(value ?? "");
+function escapeCsvValue(value) {
+  if (value === null || value === undefined) return "";
+
+  const text = String(value);
 
   if (/[",\r\n]/.test(text)) {
     return `"${text.replace(/"/g, '""')}"`;
@@ -496,16 +619,26 @@ function csvEscape(value) {
   return text;
 }
 
-export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
-  if (!Array.isArray(perdiemList)) return;
-
+export function savePerDiemCSV(perdiemList, outputPath) {
   const header = [
-    "Date", "Activity", "From", "Destination", "RI", "RO",
-    "StayHours", "Rate", "Total", "TransportFee",
-    "Month", "Year", "Owner",
+    "Date",
+    "Activity",
+    "From",
+    "Destination",
+    "RI",
+    "RO",
+    "StayHours",
+    "Rate",
+    "Total",
+    "TransportFee",
+    "Month",
+    "Year",
+    "Taxi",
+    "Car",
+    "Owner",
   ];
 
-  const rows = perdiemList.map(item => [
+  const rows = (perdiemList || []).map((item) => [
     item.Date,
     item.Activity,
     item.From,
@@ -518,47 +651,39 @@ export function savePerDiemCSV(perdiemList, outputPath = "public/perdiem.csv") {
     item.TransportFee,
     item.Month,
     item.Year,
-    item.owner || item.Owner || "",
+    item.Taxi,
+    item.Car,
+    item.owner || item.uid,
   ]);
 
-  const csv = [
-    header.map(csvEscape).join(","),
-    ...rows.map(row => row.map(csvEscape).join(",")),
-  ].join("\n");
+  const csv = [header, ...rows]
+    .map((row) => row.map(escapeCsvValue).join(","))
+    .join("\r\n");
 
-  const fullPath = path.join(process.cwd(), outputPath);
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  fs.writeFileSync(outputPath, `\uFEFF${csv}\r\n`, "utf-8");
 
-  fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-  fs.writeFileSync(fullPath, csv, "utf8");
+  console.log(`✅ PerDiem CSV 저장: ${outputPath}`);
 
-  console.log(`✅ PerDiem CSV 저장: ${fullPath}`);
+  return outputPath;
 }
 
 // ============================================================
-// PerdiemEvents 저장
-//
-// - owner의 현재 서울 월 데이터만 삭제 후 재작성
-// - 이전 월 데이터는 삭제하거나 다시 쓰지 않음
-// - 다른 owner의 데이터는 건드리지 않음
+// 9. Firestore 쓰기 보조 함수
 // ============================================================
 
 function buildPerDiemDocId(item) {
-  return [
-    item.owner,
-    item.Date,
-    item.Activity,
-    item.From,
-    item.Destination,
-  ].map(safeDocIdPart).join("_");
+  return sha256([
+    item.owner || item.uid || "",
+    item.Date || "",
+    item.Activity || "",
+    item.From || "",
+    item.Destination || "",
+  ].join("|")).slice(0, 40);
 }
 
-function buildPerDiemKey(item) {
-  return [
-    String(item.Date || "").trim(),
-    String(item.Activity || "").trim().toUpperCase(),
-    normalizeAirportCode(item.From),
-    normalizeAirportCode(item.Destination),
-  ].join("|");
+function isCurrentMonthFirestoreDoc(data, targetMonthYear) {
+  return isRecordInMonth(data, targetMonthYear);
 }
 
 async function commitDeleteRefs(db, refs) {
@@ -579,145 +704,246 @@ async function commitDeleteRefs(db, refs) {
   return deleted;
 }
 
-export async function uploadPerDiemFirestore(perdiemList, ownerOverride = "") {
-  const owner = resolvePerDiemOwner(ownerOverride);
-
-  if (!owner) {
-    throw new Error(
-      "PerdiemEvents 저장 중단: 사용자 UID가 없습니다."
-    );
-  }
-
-  if (!Array.isArray(perdiemList)) {
-    throw new Error("PerdiemEvents 저장 중단: 입력 데이터가 배열이 아닙니다.");
-  }
-
-  const db = getDb();
-  const currentMonthInfo = getCurrentSeoulMonthYear();
-
-  console.log(
-    `📅 PerdiemEvents 갱신 월: ${currentMonthInfo.year}-` +
-    `${String(currentMonthInfo.month).padStart(2, "0")}`
-  );
-
-  // 이번 달에 속하는 데이터만 저장 대상으로 선택
-  const currentItems = perdiemList.filter(item =>
-    isCurrentMonth(item, currentMonthInfo)
-  );
-
-  // 입력 목록 중복 제거
-  const uniqueItems = new Map();
-
-  for (const item of currentItems) {
-    const normalized = {
-      ...item,
-      owner,
-      uid: owner,
-    };
-
-    const key = buildPerDiemKey(normalized);
-
-    if (!uniqueItems.has(key)) {
-      uniqueItems.set(key, normalized);
-    }
-  }
-
-  const uniqueCurrentItems = [...uniqueItems.values()];
-
-  const collectionRef = db.collection(PERDIEM_COLLECTION);
-
-  // 소유자 문서만 조회
-  const existingSnapshot = await collectionRef
-    .where("owner", "==", owner)
-    .get();
-
-  // 기존 데이터 중 현재 월인 문서만 삭제
-  const refsToDelete = existingSnapshot.docs
-    .filter(doc => isCurrentMonth(doc.data(), currentMonthInfo))
-    .map(doc => doc.ref);
-
-  const deleted = await commitDeleteRefs(db, refsToDelete);
-
-  // 현재 월 데이터만 작성
+async function commitPerDiemRewrite(db, collectionName, writes) {
   let written = 0;
 
-  for (let index = 0; index < uniqueCurrentItems.length; index += 400) {
+  for (let index = 0; index < writes.length; index += 400) {
     const batch = db.batch();
-    const chunk = uniqueCurrentItems.slice(index, index + 400);
+    const chunk = writes.slice(index, index + 400);
 
     for (const item of chunk) {
-      const id = buildPerDiemDocId(item);
-
-      batch.set(collectionRef.doc(id), {
-        ...item,
-        owner,
-        uid: owner,
-        source: "Pilotlog",
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: false });
+      batch.set(
+        db.collection(collectionName).doc(item.id),
+        item.data,
+        { merge: false }
+      );
     }
 
     await batch.commit();
     written += chunk.length;
   }
 
+  return written;
+}
+
+// ============================================================
+// 10. PerdiemEvents 및 Perdiem/{owner}/events 저장
+//
+// 정책:
+// - 현재 서울 기준 월의 데이터만 삭제 후 다시 작성합니다.
+// - 이전 달 데이터는 삭제하지 않습니다.
+// - 이전 달 출국편은 계산에만 사용하며, 현재 월의 귀국편
+//   결과에 반영됩니다.
+// ============================================================
+
+export async function uploadPerDiemFirestore(
+  perdiemList,
+  ownerOverride
+) {
+  const db = getDb();
+  const owner = resolvePerDiemOwner(ownerOverride);
+  const now = admin.firestore.FieldValue.serverTimestamp();
+
+  const currentMonthInfo = getCurrentSeoulMonthYear();
+
+  const currentMonthItems = (perdiemList || [])
+    .filter((item) => {
+      const itemOwner = String(item.owner || item.uid || "").trim();
+
+      return (
+        itemOwner === owner &&
+        isCurrentMonthFirestoreDoc(item, currentMonthInfo)
+      );
+    });
+
+  // 같은 ID의 중복 입력을 제거합니다.
+  const uniqueById = new Map();
+
+  for (const item of currentMonthItems) {
+    const id = buildPerDiemDocId({ ...item, owner });
+    uniqueById.set(id, { ...item, owner, uid: owner });
+  }
+
+  const uniqueCurrentMonthItems = [...uniqueById.values()];
+
+  const nestedEventsRef = db
+    .collection(PERDIEM_COLLECTION)
+    .doc(owner)
+    .collection("events");
+
+  const nestedSnapshot = await nestedEventsRef.get();
+
+  const nestedRefsToDelete = nestedSnapshot.docs
+    .filter((doc) =>
+      isCurrentMonthFirestoreDoc(doc.data(), currentMonthInfo)
+    )
+    .map((doc) => doc.ref);
+
+  const mirrorCollectionRef = db.collection(
+    PERDIEM_FLAT_MIRROR_COLLECTION
+  );
+
+  const mirrorSnapshot = await mirrorCollectionRef
+    .where("owner", "==", owner)
+    .get();
+
+  const mirrorRefsToDelete = mirrorSnapshot.docs
+    .filter((doc) =>
+      isCurrentMonthFirestoreDoc(doc.data(), currentMonthInfo)
+    )
+    .map((doc) => doc.ref);
+
+  const nestedWrites = uniqueCurrentMonthItems.map((item) => {
+    const id = buildPerDiemDocId(item);
+
+    return {
+      id,
+      data: {
+        ...item,
+        owner,
+        uid: owner,
+        updatedAt: now,
+        importedAt: now,
+      },
+    };
+  });
+
+  const mirrorWrites = nestedWrites.map((item) => ({
+    id: `${safeDocIdPart(owner)}_${item.id}`,
+    data: {
+      ...item.data,
+      owner,
+      uid: owner,
+      updatedAt: now,
+      importedAt: now,
+    },
+  }));
+
+  const deletedNested = await commitDeleteRefs(
+    db,
+    nestedRefsToDelete
+  );
+
+  const deletedMirror = await commitDeleteRefs(
+    db,
+    mirrorRefsToDelete
+  );
+
+  const savedNested = await commitPerDiemRewrite(
+    db,
+    `Perdiem/${owner}/events`,
+    nestedWrites
+  );
+
+  const savedMirror = await commitPerDiemRewrite(
+    db,
+    PERDIEM_FLAT_MIRROR_COLLECTION,
+    mirrorWrites
+  );
+
+  // 소유자별 메타데이터는 병합하여 보관합니다.
+  await db
+    .collection(PERDIEM_COLLECTION)
+    .doc(owner)
+    .set({
+      owner,
+      uid: owner,
+      source: "Pilotlog",
+
+      currentMonth: formatMonthName(currentMonthInfo.month),
+      currentMonthNumber: currentMonthInfo.month,
+      currentMonthYear: currentMonthInfo.year,
+
+      currentMonthInputRows: currentMonthItems.length,
+      currentMonthSavedRows: savedNested,
+      currentMonthMirrorRows: savedMirror,
+
+      currentMonthRewrittenAt: now,
+      storagePath: `Perdiem/${owner}/events`,
+      flatMirror: PERDIEM_FLAT_MIRROR_COLLECTION,
+
+      updatedAt: now,
+    }, { merge: true });
+
   console.log(
-    `✅ PerdiemEvents 저장 완료: ` +
-    `입력 ${perdiemList.length}건, ` +
-    `이번 달 대상 ${currentItems.length}건, ` +
-    `중복 제거 후 ${uniqueCurrentItems.length}건, ` +
-    `기존 이번 달 삭제 ${deleted}건, ` +
-    `저장 ${written}건`
+    `✅ Firestore PerDiem 저장 완료: ` +
+    `${currentMonthInfo.year}-${String(currentMonthInfo.month).padStart(2, "0")}, ` +
+    `입력=${currentMonthItems.length}, ` +
+    `고유=${uniqueCurrentMonthItems.length}, ` +
+    `events 삭제=${deletedNested}, ` +
+    `events 저장=${savedNested}, ` +
+    `PerdiemEvents 삭제=${deletedMirror}, ` +
+    `PerdiemEvents 저장=${savedMirror}`
   );
 
   return {
     owner,
+    month: currentMonthInfo.month,
     year: currentMonthInfo.year,
-    month: currentMonthInfo.monthName,
-    inputRows: perdiemList.length,
-    currentMonthRows: currentItems.length,
-    uniqueRows: uniqueCurrentItems.length,
-    deleted,
-    written,
+    inputRows: currentMonthItems.length,
+    uniqueRows: uniqueCurrentMonthItems.length,
+    deletedNested,
+    savedNested,
+    deletedMirror,
+    savedMirror,
   };
 }
 
 // ============================================================
-// Google Sheets 동기화
+// 11. Google Sheets 업데이트
 //
-// 이전 달 기록과 다른 owner의 기록은 유지한다.
-// 현재 owner의 현재 월 행만 교체한다.
+// - 기존 행을 먼저 읽습니다.
+// - 해당 owner의 현재 월 행만 교체합니다.
+// - 다른 owner 및 과거 월의 행은 보존합니다.
 // ============================================================
 
-function buildPerDiemSheetKey(item) {
+function normalizeSheetCell(value) {
+  return String(value ?? "").trim();
+}
+
+function rowToPerDiemObject(row, headerIndex) {
+  const get = (name) => {
+    const index = headerIndex[name];
+
+    return index === undefined || index < 0
+      ? ""
+      : row[index] ?? "";
+  };
+
+  return {
+    ID: get("ID"),
+    Date: get("Date"),
+    Activity: get("Activity"),
+    From: get("From"),
+    Destination: get("Destination"),
+    RI: get("RI"),
+    RO: get("RO"),
+    StayHours: get("StayHours"),
+    Rate: get("Rate"),
+    Total: get("Total"),
+    TransportFee: get("TransportFee"),
+    Month: get("Month"),
+    Year: get("Year"),
+    Taxi: get("Taxi"),
+    Car: get("Car"),
+    Owner: get("Owner"),
+  };
+}
+
+function sheetRowMatchesOwner(row, headerIndex, owner) {
+  const ownerColumn =
+    headerIndex.Owner ??
+    headerIndex.owner ??
+    -1;
+
+  if (ownerColumn < 0) return false;
+
+  return normalizeSheetCell(row[ownerColumn]) === owner;
+}
+
+function itemToSheetRow(item, owner) {
   return [
-    item.Date,
-    item.Activity,
-    item.From,
-    item.Destination,
-    item.RI,
-    item.RO,
-  ].join("||");
-}
-
-function randomSheetId() {
-  return crypto.randomBytes(4).toString("hex");
-}
-
-function uniqueSheetId(usedIds) {
-  let id = randomSheetId();
-
-  while (usedIds.has(id)) {
-    id = randomSheetId();
-  }
-
-  usedIds.add(id);
-  return id;
-}
-
-function buildPerDiemSheetRow(item, id, owner) {
-  return [
-    id,
+    buildPerDiemDocId({ ...item, owner }),
     item.Date || "",
     item.Activity || "",
     item.From || "",
@@ -728,10 +954,10 @@ function buildPerDiemSheetRow(item, id, owner) {
     item.Rate ?? 0,
     item.Total ?? 0,
     item.TransportFee ?? 0,
-    monthNumber(item.Month) || item.Month || "",
+    item.Month || "",
     item.Year || "",
-    item.Taxi ?? "",
-    item.Car ?? "",
+    item.Taxi || "",
+    item.Car || "",
     owner,
   ];
 }
@@ -741,108 +967,122 @@ export async function appendPerDiemGoogleSheet(
   sheetsApi,
   spreadsheetId,
   sheetName = "Perdiem",
-  ownerOverride = ""
+  ownerOverride
 ) {
-  if (!Array.isArray(perdiemList) || !sheetsApi || !spreadsheetId) return;
-
-  const owner = resolvePerDiemOwner(ownerOverride);
-
-  if (!owner) {
-    throw new Error("Google Sheets 저장 중단: owner UID가 없습니다.");
+  if (!sheetsApi || !spreadsheetId) {
+    console.warn(
+      "⚠️ Google Sheets API 또는 spreadsheetId가 없어 Sheet 업데이트를 건너뜁니다."
+    );
+    return;
   }
 
+  const owner = resolvePerDiemOwner(ownerOverride);
   const currentMonthInfo = getCurrentSeoulMonthYear();
+
+  const range = `${sheetName}!A:P`;
 
   const response = await sheetsApi.spreadsheets.values.get({
     spreadsheetId,
-    range: `${sheetName}!A:P`,
+    range,
   });
 
-  const existingRows = response.data.values || [];
-  const hasHeader = existingRows[0]?.[0] === "ID";
-  const dataRows = hasHeader ? existingRows.slice(1) : existingRows;
+  const existingValues = response.data.values || [];
+  const existingHeader = existingValues[0] || [];
 
-  const usedIds = new Set(
-    dataRows.map(row => String(row[0] || "").trim()).filter(Boolean)
+  const header = PERDIEM_SHEET_HEADER;
+
+  const headerIndex = {};
+
+  existingHeader.forEach((name, index) => {
+    headerIndex[String(name).trim()] = index;
+  });
+
+  const hasCompatibleHeader =
+    existingHeader.length > 0 &&
+    existingHeader.includes("Date") &&
+    existingHeader.includes("Activity") &&
+    (
+      existingHeader.includes("Owner") ||
+      existingHeader.includes("owner")
+    );
+
+  if (existingValues.length > 0 && !hasCompatibleHeader) {
+    throw new Error(
+      `Google Sheet ${sheetName}의 헤더가 예상 형식과 다릅니다. ` +
+      "기존 데이터를 덮어쓰지 않도록 업데이트를 중단했습니다."
+    );
+  }
+
+  const existingRows = existingValues.slice(1);
+
+  const rowsToPreserve = existingRows.filter((row) => {
+    const belongsToOwner = sheetRowMatchesOwner(
+      row,
+      headerIndex,
+      owner
+    );
+
+    if (!belongsToOwner) return true;
+
+    const existingObject = rowToPerDiemObject(row, headerIndex);
+
+    // 같은 owner의 현재 월 행만 교체합니다.
+    return !isCurrentMonthFirestoreDoc(
+      existingObject,
+      currentMonthInfo
+    );
+  });
+
+  const currentMonthItems = (perdiemList || []).filter((item) => {
+    const itemOwner = String(item.owner || item.uid || "").trim();
+
+    return (
+      itemOwner === owner &&
+      isCurrentMonthFirestoreDoc(item, currentMonthInfo)
+    );
+  });
+
+  const uniqueItems = new Map();
+
+  for (const item of currentMonthItems) {
+    const id = buildPerDiemDocId({ ...item, owner });
+    uniqueItems.set(id, item);
+  }
+
+  const currentMonthRows = [...uniqueItems.values()].map(
+    (item) => itemToSheetRow(item, owner)
   );
 
-  const existingIdByKey = new Map();
-
-  for (const row of dataRows) {
-    if (String(row[15] || "").trim() !== owner) continue;
-
-    const existingItem = {
-      Date: row[1] || "",
-      Month: row[11] || "",
-      Year: row[12] || "",
-    };
-
-    if (!isCurrentMonth(existingItem, currentMonthInfo)) continue;
-
-    const key = buildPerDiemSheetKey({
-      Date: row[1] || "",
-      Activity: row[2] || "",
-      From: row[3] || "",
-      Destination: row[4] || "",
-      RI: row[5] || "",
-      RO: row[6] || "",
-    });
-
-    if (!existingIdByKey.has(key) && row[0]) {
-      existingIdByKey.set(key, row[0]);
-    }
-  }
-
-  // 이번 달 대상이 아닌 기존 행은 보존한다.
-  const preservedRows = dataRows.filter(row => {
-    if (String(row[15] || "").trim() !== owner) return true;
-
-    return !isCurrentMonth({
-      Date: row[1] || "",
-      Month: row[11] || "",
-      Year: row[12] || "",
-    }, currentMonthInfo);
-  });
-
-  const seenKeys = new Set();
-  const syncedRows = [];
-
-  for (const item of perdiemList) {
-    if (!isCurrentMonth(item, currentMonthInfo)) continue;
-
-    const key = buildPerDiemSheetKey(item);
-
-    if (seenKeys.has(key)) continue;
-    seenKeys.add(key);
-
-    const id = existingIdByKey.get(key) || uniqueSheetId(usedIds);
-
-    syncedRows.push(buildPerDiemSheetRow(item, id, owner));
-  }
-
-  const outputRows = [
-    PERDIEM_SHEET_HEADER,
-    ...preservedRows,
-    ...syncedRows,
+  const outputValues = [
+    header,
+    ...rowsToPreserve,
+    ...currentMonthRows,
   ];
 
   await sheetsApi.spreadsheets.values.update({
     spreadsheetId,
     range: `${sheetName}!A1`,
-    valueInputOption: "RAW",
-    requestBody: { values: outputRows },
+    valueInputOption: "USER_ENTERED",
+    requestBody: {
+      values: outputValues,
+    },
   });
 
-  // 이전 결과보다 짧아진 경우 남은 꼬리 행만 정리
-  if (existingRows.length > outputRows.length) {
+  // 이전 출력보다 기존 데이터가 길었다면 남은 셀을 비웁니다.
+  const previousRowCount = existingValues.length;
+  const newRowCount = outputValues.length;
+
+  if (previousRowCount > newRowCount) {
     await sheetsApi.spreadsheets.values.clear({
       spreadsheetId,
-      range: `${sheetName}!A${outputRows.length + 1}:P${existingRows.length}`,
+      range: `${sheetName}!A${newRowCount + 1}:P${previousRowCount}`,
     });
   }
 
   console.log(
-    `✅ Google Sheets ${sheetName}: ` +
-    `보존 ${preservedRows.length}건, 이번 달 반영 ${syncedRows.length}건`
+    `✅ Google Sheet ${sheetName} 업데이트 완료: ` +
+    `owner=${owner}, 이번 달 입력=${currentMonthItems.length}, ` +
+    `이번 달 저장=${currentMonthRows.length}, ` +
+    `보존 행=${rowsToPreserve.length}`
   );
 }
