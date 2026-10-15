@@ -1,4 +1,4 @@
-// ========================= perdiem.js (from PilotLog) 2026.10.15=========================
+// ========================= perdiem.js (from PilotLog) 2026.10.16=========================
 
 import fs from "fs";
 import path from "path";
@@ -265,21 +265,24 @@ function parseUTCClock(value, baseDate) {
 
   if (!text) return null;
 
-  const match = text.match(/^(\d{1,2})(\d{2})(?:([+-])(\d+))?$/);
+  // HHMM 형식: 1746, 645, 225, 6 등을 지원합니다.
+  // +1/-1은 기준 날짜에서 하루 이동을 의미합니다.
+  const match = text.match(/^(\d{1,4})(?:([+-])(\d+))?$/);
 
   if (!match) {
     return null;
   }
 
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
+  const digits = match[1].padStart(4, "0");
+  const hour = Number(digits.slice(0, 2));
+  const minute = Number(digits.slice(2, 4));
 
   if (hour > 23 || minute > 59) {
     return null;
   }
 
-  const sign = match[3] || "";
-  const offsetDays = Number(match[4] || 0);
+  const sign = match[2] || "";
+  const offsetDays = Number(match[3] || 0);
 
   const result = new Date(Date.UTC(
     date.getUTCFullYear(),
@@ -443,7 +446,7 @@ export function calculatePerDiemList(records, ownerOverride) {
 
   for (const flight of records) {
     const {
-      Date,
+      Date: flightDate,
       Activity,
       From,
       Destination,
@@ -469,7 +472,7 @@ export function calculatePerDiemList(records, ownerOverride) {
       // ICN 출발편의 해외 도착 시각을 귀국편 계산용으로 보관합니다.
       pendingOutboundByDestination.set(destination, {
         RI: ArrivalUTC,
-        outboundDate: Date,
+        outboundDate: flightDate,
         outboundMonth: Month,
         outboundYear: Year,
         outboundFlight: Activity,
@@ -485,7 +488,7 @@ export function calculatePerDiemList(records, ownerOverride) {
 
       const outbound = pendingOutboundByDestination.get(from);
 
-      if (outbound && outbound.RI instanceof Date) {
+      if (outbound && toValidDate(outbound.RI)) {
         RI = formatISODateTime(outbound.RI);
 
         const hours = calculateStayHours(
@@ -506,7 +509,7 @@ export function calculatePerDiemList(records, ownerOverride) {
           console.log(
             `✈️ PerDiem 연결: ` +
             `${outbound.outboundFlight} (${outbound.outboundDate}) → ` +
-            `${Activity} (${Date}), 공항=${from}, ` +
+            `${Activity} (${flightDate}), 공항=${from}, ` +
             `체류=${StayHours}, Rate=${Rate}, Total=${Total}`
           );
         } else {
@@ -520,7 +523,7 @@ export function calculatePerDiemList(records, ownerOverride) {
       } else {
         console.warn(
           `⚠️ 연결할 ICN 출발편을 찾지 못했습니다: ` +
-          `${Activity}, ${from} → ICN, Date=${Date}`
+          `${Activity}, ${from} → ICN, Date=${flightDate}`
         );
       }
     } else {
@@ -530,7 +533,7 @@ export function calculatePerDiemList(records, ownerOverride) {
       Total = 0;
     }
 
-    const dateParts = getDateParts(Date);
+    const dateParts = getDateParts(flightDate);
     const monthNum =
       monthNumber(Month) ||
       dateParts?.month ||
@@ -541,7 +544,7 @@ export function calculatePerDiemList(records, ownerOverride) {
       String(dateParts?.year || "");
 
     results.push({
-      Date,
+      Date: flightDate,
       Activity,
       From: from,
       Destination: destination,
