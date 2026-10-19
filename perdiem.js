@@ -365,14 +365,16 @@ export async function loadPilotlogFromFirestore(ownerOverride) {
       continue;
     }
 
-   
+
 const departureUTC = parseUTCClock(data.STDz, dateObject);
 let arrivalUTC = parseUTCClock(data.STAz, dateObject);
 
-// 도착 시각이 출발 시각보다 앞이면 다음 날 도착으로 보정
-// 단, STAz에 +1 등 날짜 이동 정보가 이미 있어도
-// 실제 시각을 비교한 뒤 필요한 경우에만 보정합니다.
+// 명시적인 +/- 날짜 이동이 없는 경우에만 자동 보정
+const arrivalText = String(data.STAz ?? "").trim();
+const hasExplicitArrivalOffset = /^\d{1,4}[+-]\d+$/.test(arrivalText);
+
 if (
+  !hasExplicitArrivalOffset &&
   departureUTC &&
   arrivalUTC &&
   arrivalUTC.getTime() < departureUTC.getTime()
