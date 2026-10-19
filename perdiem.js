@@ -356,8 +356,12 @@ export async function loadPilotlogFromFirestore(ownerOverride) {
     if (!FLIGHT_ACTIVITY_RE.test(activity)) continue;
     if (!from || !destination || from === destination) continue;
 
-    const dateObject = toValidDate(data.Date);
-
+  
+  // DateString을 우선 기준 날짜로 사용하고,
+// DateString이 없거나 유효하지 않을 때만 Date 사용
+const dateObject =
+  toValidDate(data.DateString) ||
+  toValidDate(data.Date);
     if (!dateObject) {
       console.warn(
         `⚠️ Pilotlog Date가 유효하지 않아 제외합니다: ${doc.id}`
@@ -365,18 +369,19 @@ export async function loadPilotlogFromFirestore(ownerOverride) {
       continue;
     }
 
-
 const departureUTC = parseUTCClock(data.STDz, dateObject);
 let arrivalUTC = parseUTCClock(data.STAz, dateObject);
 
-// 명시적인 +/- 날짜 이동이 없는 경우에만 자동 보정
+// STAz에 -1 또는 +1 등 명시적인 날짜 오프셋이 없을 때만
+// 도착 시각이 출발 시각보다 빠르면 다음 날로 보정
 const arrivalText = String(data.STAz ?? "").trim();
-const hasExplicitArrivalOffset = /^\d{1,4}[+-]\d+$/.test(arrivalText);
+const arrivalHasExplicitDayOffset =
+  /^\d{1,4}[+-]\d+$/.test(arrivalText);
 
 if (
-  !hasExplicitArrivalOffset &&
   departureUTC &&
   arrivalUTC &&
+  !arrivalHasExplicitDayOffset &&
   arrivalUTC.getTime() < departureUTC.getTime()
 ) {
   arrivalUTC.setUTCDate(arrivalUTC.getUTCDate() + 1);
