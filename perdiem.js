@@ -1,4 +1,4 @@
-// ========================= perdiem.js (from PilotLog) 2026.10.16=========================
+// ========================= perdiem.js (from PilotLog) 2026.10.19=========================
 
 import fs from "fs";
 import path from "path";
@@ -729,15 +729,17 @@ async function commitPerDiemRewrite(db, collectionName, writes) {
   return written;
 }
 
-// ============================================================
-// 10. PerdiemEvents 및 Perdiem/{owner}/events 저장
-//
-// 정책:
-// - 현재 서울 기준 월의 데이터만 삭제 후 다시 작성합니다.
-// - 이전 달 데이터는 삭제하지 않습니다.
-// - 이전 달 출국편은 계산에만 사용하며, 현재 월의 귀국편
-//   결과에 반영됩니다.
-// ============================================================
+
+ // ============================================================
+ // 10. PerdiemEvents 및 Perdiem/{owner}/events 저장
+ //
+ // 정책:
+ // 1. 현재 월: 데이터가 1건 이상일 때만 해당 월 Rewrite
+ // 2. 과거 월: 데이터가 없는 월만 최초 생성
+ // 3. 과거 데이터가 이미 있는 경로는 절대 삭제/덮어쓰기하지 않음
+ // 4. 두 저장 경로를 각각 확인하여 누락된 경로만 보충
+ // 5. 과거 출국편은 계산에 사용하되, 저장 월은 각 기록의 월 기준
+ // ============================================================
 
 export async function uploadPerDiemFirestore(
   perdiemList,
@@ -747,60 +749,68 @@ export async function uploadPerDiemFirestore(
   const owner = resolvePerDiemOwner(ownerOverride);
   const now = admin.firestore.FieldValue.serverTimestamp();
 
-  const currentMonthInfo = getCurrentSeoulMonthYear();
+  const current = getCurrentSeoulMonthYear();
+  const currentKey = current.year * 12 + current.month;
 
-  const currentMonthItems = (perdiemList || [])
-    .filter((item) => {
-      const itemOwner = String(item.owner || item.uid || "").trim();
-
-      return (
-        itemOwner === owner &&
-        isCurrentMonthFirestoreDoc(item, currentMonthInfo)
-      );
-    });
-
-  // 같은 ID의 중복 입력을 제거합니다.
-  const uniqueById = new Map();
-
-  for (const item of currentMonthItems) {
-    const id = buildPerDiemDocId({ ...item, owner });
-    uniqueById.set(id, { ...item, owner, uid: owner });
-  }
-
-  const uniqueCurrentMonthItems = [...uniqueById.values()];
+  const mirrorCollectionRef = db.collection(
+    PERDIEM_FLAT_MIRROR_COLLECTION
+  );
 
   const nestedEventsRef = db
     .collection(PERDIEM_COLLECTION)
     .doc(owner)
     .collection("events");
 
-  const nestedSnapshot = await nestedEventsRef.get();
+  // 해당 Owner의 기존 데이터 조회
+  const [nestedSnapshot, mirrorSnapshot] = await Promise.all([
+    nestedEventsRef.get(),
+    mirrorCollectionRef.where("owner", "==", owner).get(),
+  ]);
 
-  const nestedRefsToDelete = nestedSnapshot.docs
-    .filter((doc) =>
-      isCurrentMonthFirestoreDoc(doc.data(), currentMonthInfo)
-    )
-    .map((doc) => doc.ref);
+  const nestedDocs = nestedSnapshot.docs;
+  const mirrorDocs = mirrorSnapshot.docs;
 
-  const mirrorCollectionRef = db.collection(
-    PERDIEM_FLAT_MIRROR_COLLECTION
+  // 기존 데이터가 어느 월에 존재하는지 기록
+  const nestedMonthKeys = new Set();
+  const mirrorMonthKeys = new Set();
+
+  for (const doc of nestedDocs) {
+    const { month, year } = monthYearFromRecord(doc.data());
+    if (month >= 1 && month <= 12 && year > 0) {
+      nestedMonthKeys.add(year * 12 + month);
+    }
+  }
+
+  for (const doc of mirrorDocs) {
+    const { month, year } = monthYearFromRecord(doc.data());
+    if (month >= 1 && month <= 12 && year > 0) {
+      mirrorMonthKeys.add(year * 12 + month);
+    }
+  }
+
+  // Owner 확인 및 고유 ID 기준 중복 제거
+  const ownerItems = (perdiemList || []).filter((item) => {
+    return String(item.owner || item.uid || "").trim() === owner;
+  });
+
+  const uniqueById = new Map();
+
+  for (const item of ownerItems) {
+    const normalized = { ...item, owner, uid: owner };
+    const id = buildPerDiemDocId(normalized);
+    uniqueById.set(id, normalized);
+  }
+
+  const uniqueItems = [...uniqueById.values()];
+
+  const currentItems = uniqueItems.filter((item) =>
+    isRecordInMonth(item, current)
   );
 
-  const mirrorSnapshot = await mirrorCollectionRef
-    .where("owner", "==", owner)
-    .get();
-
-  const mirrorRefsToDelete = mirrorSnapshot.docs
-    .filter((doc) =>
-      isCurrentMonthFirestoreDoc(doc.data(), currentMonthInfo)
-    )
-    .map((doc) => doc.ref);
-
-  const nestedWrites = uniqueCurrentMonthItems.map((item) => {
-    const id = buildPerDiemDocId(item);
-
-    return {
-      id,
+  // 공통 저장 데이터 생성
+  const makeWrites = (items) =>
+    items.map((item) => ({
+      id: buildPerDiemDocId({ ...item, owner }),
       data: {
         ...item,
         owner,
@@ -808,43 +818,147 @@ export async function uploadPerDiemFirestore(
         updatedAt: now,
         importedAt: now,
       },
-    };
-  });
+    }));
 
-  const mirrorWrites = nestedWrites.map((item) => ({
-    id: `${safeDocIdPart(owner)}_${item.id}`,
-    data: {
-      ...item.data,
-      owner,
-      uid: owner,
-      updatedAt: now,
-      importedAt: now,
-    },
-  }));
+  // ----------------------------------------------------------
+  // A. 이번 달: 결과가 있을 때만 삭제 후 Rewrite
+  // ----------------------------------------------------------
+  let deletedNested = 0;
+  let deletedMirror = 0;
+  let savedNested = 0;
+  let savedMirror = 0;
 
-  const deletedNested = await commitDeleteRefs(
-    db,
-    nestedRefsToDelete
-  );
+  if (currentItems.length > 0) {
+    const nestedRefsToDelete = nestedDocs
+      .filter((doc) => isRecordInMonth(doc.data(), current))
+      .map((doc) => doc.ref);
 
-  const deletedMirror = await commitDeleteRefs(
-    db,
-    mirrorRefsToDelete
-  );
+    const mirrorRefsToDelete = mirrorDocs
+      .filter((doc) => isRecordInMonth(doc.data(), current))
+      .map((doc) => doc.ref);
 
-  const savedNested = await commitPerDiemRewrite(
-    db,
-    `Perdiem/${owner}/events`,
-    nestedWrites
-  );
+    deletedNested = await commitDeleteRefs(
+      db,
+      nestedRefsToDelete
+    );
 
-  const savedMirror = await commitPerDiemRewrite(
-    db,
-    PERDIEM_FLAT_MIRROR_COLLECTION,
-    mirrorWrites
-  );
+    deletedMirror = await commitDeleteRefs(
+      db,
+      mirrorRefsToDelete
+    );
 
-  // 소유자별 메타데이터는 병합하여 보관합니다.
+    const currentWrites = makeWrites(currentItems);
+
+    const nestedCurrentWrites = currentWrites;
+
+    const mirrorCurrentWrites = currentWrites.map((item) => ({
+      id: `${safeDocIdPart(owner)}_${item.id}`,
+      data: item.data,
+    }));
+
+    savedNested = await commitPerDiemRewrite(
+      db,
+      `Perdiem/${owner}/events`,
+      nestedCurrentWrites
+    );
+
+    savedMirror = await commitPerDiemRewrite(
+      db,
+      PERDIEM_FLAT_MIRROR_COLLECTION,
+      mirrorCurrentWrites
+    );
+  } else {
+    console.warn(
+      `⚠️ 이번 달 PerDiem 계산 결과가 0건입니다. ` +
+      `기존 데이터를 삭제하지 않습니다: ${current.year}-${current.month}`
+    );
+  }
+
+  // ----------------------------------------------------------
+  // B. 과거 월: 없는 월만 최초 생성
+  //    두 저장 경로를 독립적으로 확인합니다.
+  // ----------------------------------------------------------
+  const historicalGroups = new Map();
+
+  for (const item of uniqueItems) {
+    const { month, year } = monthYearFromRecord(item);
+
+    if (month < 1 || month > 12 || year < 1) continue;
+
+    const key = year * 12 + month;
+
+    // 현재 월은 위에서 처리, 미래 월은 초기 생성 대상에서 제외
+    if (key >= currentKey) continue;
+
+    if (!historicalGroups.has(key)) {
+      historicalGroups.set(key, {
+        month,
+        year,
+        items: [],
+      });
+    }
+
+    historicalGroups.get(key).items.push(item);
+  }
+
+  let historicalNestedSaved = 0;
+  let historicalMirrorSaved = 0;
+
+  const sortedHistoricalGroups = [...historicalGroups.entries()]
+    .sort((a, b) => a[0] - b[0]);
+
+  for (const [key, group] of sortedHistoricalGroups) {
+    const items = group.items;
+
+    if (!items.length) continue;
+
+    // 해당 월이 Perdiem/{owner}/events에 없으면 최초 생성
+    if (!nestedMonthKeys.has(key)) {
+      const writes = makeWrites(items);
+
+      const count = await commitPerDiemRewrite(
+        db,
+        `Perdiem/${owner}/events`,
+        writes
+      );
+
+      historicalNestedSaved += count;
+      nestedMonthKeys.add(key);
+
+      console.log(
+        `🆕 과거 월 최초 생성: Perdiem/${owner}/events, ` +
+        `${group.year}-${String(group.month).padStart(2, "0")}, ` +
+        `${count}건`
+      );
+    }
+
+    // 해당 월이 PerdiemEvents에 없으면 최초 생성
+    if (!mirrorMonthKeys.has(key)) {
+      const writes = makeWrites(items).map((item) => ({
+        id: `${safeDocIdPart(owner)}_${item.id}`,
+        data: item.data,
+      }));
+
+      const count = await commitPerDiemRewrite(
+        db,
+        PERDIEM_FLAT_MIRROR_COLLECTION,
+        writes
+      );
+
+      historicalMirrorSaved += count;
+      mirrorMonthKeys.add(key);
+
+      console.log(
+        `🆕 과거 월 최초 생성: ${PERDIEM_FLAT_MIRROR_COLLECTION}, ` +
+        `${group.year}-${String(group.month).padStart(2, "0")}, ` +
+        `${count}건`
+      );
+    }
+  }
+
+  // ----------------------------------------------------------
+  // C. Owner 메타데이터 갱신
+  // ----------------------------------------------------------
   await db
     .collection(PERDIEM_COLLECTION)
     .doc(owner)
@@ -853,42 +967,45 @@ export async function uploadPerDiemFirestore(
       uid: owner,
       source: "Pilotlog",
 
-      currentMonth: formatMonthName(currentMonthInfo.month),
-      currentMonthNumber: currentMonthInfo.month,
-      currentMonthYear: currentMonthInfo.year,
+      currentMonth: formatMonthName(current.month),
+      currentMonthNumber: current.month,
+      currentMonthYear: current.year,
 
-      currentMonthInputRows: currentMonthItems.length,
+      currentMonthInputRows: currentItems.length,
       currentMonthSavedRows: savedNested,
       currentMonthMirrorRows: savedMirror,
 
-      currentMonthRewrittenAt: now,
+      historicalNestedSavedRows: historicalNestedSaved,
+      historicalMirrorSavedRows: historicalMirrorSaved,
+
+      currentMonthRewrittenAt:
+        currentItems.length > 0 ? now : null,
+
       storagePath: `Perdiem/${owner}/events`,
       flatMirror: PERDIEM_FLAT_MIRROR_COLLECTION,
-
       updatedAt: now,
     }, { merge: true });
 
   console.log(
-    `✅ Firestore PerDiem 저장 완료: ` +
-    `${currentMonthInfo.year}-${String(currentMonthInfo.month).padStart(2, "0")}, ` +
-    `입력=${currentMonthItems.length}, ` +
-    `고유=${uniqueCurrentMonthItems.length}, ` +
-    `events 삭제=${deletedNested}, ` +
-    `events 저장=${savedNested}, ` +
-    `PerdiemEvents 삭제=${deletedMirror}, ` +
-    `PerdiemEvents 저장=${savedMirror}`
+    `✅ PerDiem 저장 완료: owner=${owner}, ` +
+    `이번 달 입력=${currentItems.length}, ` +
+    `이번 달 events 저장=${savedNested}, ` +
+    `이번 달 PerdiemEvents 저장=${savedMirror}, ` +
+    `과거 events 신규=${historicalNestedSaved}, ` +
+    `과거 PerdiemEvents 신규=${historicalMirrorSaved}`
   );
 
   return {
     owner,
-    month: currentMonthInfo.month,
-    year: currentMonthInfo.year,
-    inputRows: currentMonthItems.length,
-    uniqueRows: uniqueCurrentMonthItems.length,
+    month: current.month,
+    year: current.year,
+    currentMonthInputRows: currentItems.length,
     deletedNested,
     savedNested,
     deletedMirror,
     savedMirror,
+    historicalNestedSaved,
+    historicalMirrorSaved,
   };
 }
 
