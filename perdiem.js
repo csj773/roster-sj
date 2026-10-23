@@ -247,11 +247,11 @@ function resolvePerDiemOwner(ownerOverride) {
 // 4. Pilotlog UTC 시각 처리
 //
 // 예시:
-// Date  = 2024-07-01 (UTC 기준 날짜)
+// DateString  = 2024-07-01 (UTC 기준 날짜)
 // STDz  = "1746-1" -> 2024-06-30 17:46 UTC
 // STAz  = "645"    -> 2024-07-01 06:45 UTC
 //
-// +/- 숫자는 기준 날짜로부터의 날짜 이동으로 처리합니다.
+// +/- 숫자는 DateString 기준 날짜로부터의 날짜 이동으로 처리합니다.
 // ============================================================
 
 function parseUTCClock(value, baseDate) {
