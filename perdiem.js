@@ -12,6 +12,8 @@ import { hourToTimeStr } from "./flightTimeUtils.js";
 
 export const PERDIEM_RATE = {
   EWR: 3.44,
+  ADD: 3.44,
+  JUB: 3.44,
   LAX: 3.42,
   SFO: 3.42,
   LAS: 3.42,
